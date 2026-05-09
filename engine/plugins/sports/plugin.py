@@ -6,7 +6,7 @@ import httpx
 from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
-from plugin_base import DisplayPlugin
+from plugin_base import DisplayApp
 from plugins._helpers import blit, load_font
 
 
@@ -18,9 +18,11 @@ _SPORT_MAP: dict[str, str] = {
 }
 
 
-class SportsPlugin(DisplayPlugin):
+class SportsApp(DisplayApp):
     id: ClassVar[str] = "sports"
     name: ClassVar[str] = "Sports Scores"
+    description: ClassVar[str] = "Live scores from the ESPN API — NFL, NBA, MLB, and NHL, rotating through active games"
+    icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a5 5 0 0010 0V3H7z"/><path d="M7 6H5a1.5 1.5 0 000 3h2"/><path d="M17 6h2a1.5 1.5 0 010 3h-2"/><line x1="12" y1="16" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>'
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Sports Scores",

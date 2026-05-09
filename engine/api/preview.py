@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from canvas.simulator import SimulatorCanvas
-from plugin_base import DisplayPlugin
+from plugin_base import DisplayApp
 
 logger = logging.getLogger(__name__)
 
@@ -73,14 +73,14 @@ class PreviewManager:
 
     async def start(
         self,
-        plugin_id: str,
+        app_id: str,
         config: dict[str, Any],
-        registry: dict[str, type[DisplayPlugin]],
+        registry: dict[str, type[DisplayApp]],
     ) -> None:
         await self.stop()
-        cls = registry.get(plugin_id)
+        cls = registry.get(app_id)
         if cls is None:
-            raise ValueError(f"Unknown plugin id: {plugin_id!r}")
+            raise ValueError(f"Unknown plugin id: {app_id!r}")
         plugin = cls(config, self._canvas)
         await plugin.on_activate()
         # Kick off a single fetch in the background so data arrives quickly
@@ -98,13 +98,13 @@ class PreviewManager:
         self._render_task = None
         self._fetch_task = None
 
-    async def _fetch_once(self, plugin: DisplayPlugin) -> None:
+    async def _fetch_once(self, plugin: DisplayApp) -> None:
         try:
             await plugin.fetch_data()
         except Exception as exc:
             logger.debug("Preview fetch_data error: %s", exc)
 
-    async def _render_loop(self, plugin: DisplayPlugin) -> None:
+    async def _render_loop(self, plugin: DisplayApp) -> None:
         interval = 1.0 / self._fps
         while True:
             self._canvas.clear()

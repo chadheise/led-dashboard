@@ -4,9 +4,9 @@ import DisplayPreview from '../components/DisplayPreview'
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface PlaylistItem {
-  run_id: string
-  run_name: string
-  plugin_id: string | null
+  module_id: string
+  module_name: string
+  app_id: string | null
   duration: number
 }
 
@@ -17,9 +17,9 @@ interface Playlist {
   is_active: boolean
 }
 
-interface Run { id: string; name: string; plugin_id: string; config: Record<string, unknown> }
+interface Module { id: string; name: string; app_id: string; config: Record<string, unknown> }
 
-interface EditItem { run_id: string; duration: number }
+interface EditItem { module_id: string; duration: number }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -51,16 +51,10 @@ const fieldStyle: React.CSSProperties = {
 function EditPreviewBar({ label }: { label: string }) {
   return (
     <div style={{
-      position: 'sticky',
-      top: NAV_H,
-      zIndex: 10,
-      background: '#0a0a0a',
-      borderBottom: '1px solid #1a1a1a',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      padding: '10px 0 8px',
-      gap: 6,
+      position: 'sticky', top: NAV_H, zIndex: 10,
+      background: '#0a0a0a', borderBottom: '1px solid #1a1a1a',
+      display: 'flex', flexDirection: 'column', alignItems: 'center',
+      padding: '10px 0 8px', gap: 6,
     }}>
       <span style={{ fontSize: '0.6rem', letterSpacing: '0.15em', color: '#333' }}>
         PREVIEW · {label.toUpperCase()}
@@ -78,35 +72,30 @@ function stopPreview() {
 
 export default function Playlists() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
-  const [runs, setRuns] = useState<Run[]>([])
+  const [modules, setModules] = useState<Module[]>([])
   const [editing, setEditing] = useState<string | null>(null)
 
   const [fName, setFName] = useState('')
   const [fItems, setFItems] = useState<EditItem[]>([])
-  // Which run_id the user wants to preview (null = auto first)
-  const [previewRunId, setPreviewRunId] = useState<string | null>(null)
+  const [previewModuleId, setPreviewModuleId] = useState<string | null>(null)
 
   useEffect(() => {
     refresh()
-    fetch('/api/runs').then(r => r.json()).then(setRuns)
+    fetch('/api/modules').then(r => r.json()).then(setModules)
   }, [])
 
-  // Stop preview when editing closes or page unmounts
-  useEffect(() => {
-    if (!editing) stopPreview()
-  }, [editing])
+  useEffect(() => { if (!editing) stopPreview() }, [editing])
   useEffect(() => () => { stopPreview() }, [])
 
-  // Fire preview when the target run changes
-  const resolvedPreviewId = previewRunId ?? fItems[0]?.run_id ?? null
+  const resolvedPreviewId = previewModuleId ?? fItems[0]?.module_id ?? null
   useEffect(() => {
     if (!editing || !resolvedPreviewId) return
-    const run = runs.find(r => r.id === resolvedPreviewId)
-    if (!run) return
+    const module = modules.find(m => m.id === resolvedPreviewId)
+    if (!module) return
     fetch('/api/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ plugin_id: run.plugin_id, config: run.config }),
+      body: JSON.stringify({ app_id: module.app_id, config: module.config }),
     }).catch(() => {})
   }, [editing, resolvedPreviewId])
 
@@ -116,14 +105,14 @@ export default function Playlists() {
   const openNew = () => {
     setFName('')
     setFItems([])
-    setPreviewRunId(null)
+    setPreviewModuleId(null)
     setEditing('new')
   }
 
   const openEdit = (pl: Playlist) => {
     setFName(pl.name)
-    setFItems(pl.items.map(it => ({ run_id: it.run_id, duration: it.duration })))
-    setPreviewRunId(null)
+    setFItems(pl.items.map(it => ({ module_id: it.module_id, duration: it.duration })))
+    setPreviewModuleId(null)
     setEditing(pl.id)
   }
 
@@ -158,23 +147,22 @@ export default function Playlists() {
   const next = () => fetch('/api/playlist/next', { method: 'POST' })
 
   const addItem = () => {
-    if (!runs.length) return
-    const newItem = { run_id: runs[0].id, duration: 30 }
-    setFItems(prev => [...prev, newItem])
+    if (!modules.length) return
+    setFItems(prev => [...prev, { module_id: modules[0].id, duration: 30 }])
   }
 
   const updateItem = (idx: number, patch: Partial<EditItem>) =>
     setFItems(prev => prev.map((it, i) => i === idx ? { ...it, ...patch } : it))
 
   const removeItem = (idx: number) => {
-    if (previewRunId === fItems[idx]?.run_id) setPreviewRunId(null)
+    if (previewModuleId === fItems[idx]?.module_id) setPreviewModuleId(null)
     setFItems(prev => prev.filter((_, i) => i !== idx))
   }
 
-  const runName = (id: string) => runs.find(r => r.id === id)?.name ?? id
+  const moduleName = (id: string) => modules.find(m => m.id === id)?.name ?? id
 
   const editLabel = fName || (editing === 'new' ? 'New playlist' : 'Editing')
-  const previewLabel = resolvedPreviewId ? runName(resolvedPreviewId) : editLabel
+  const previewLabel = resolvedPreviewId ? moduleName(resolvedPreviewId) : editLabel
 
   return (
     <>
@@ -193,11 +181,11 @@ export default function Playlists() {
           <div style={{ ...card, border: '1px solid #333' }}>
             <PlaylistForm
               name={fName} onNameChange={setFName}
-              items={fItems} runs={runs}
-              previewRunId={resolvedPreviewId}
-              onPreview={id => setPreviewRunId(id)}
+              items={fItems} modules={modules}
+              previewModuleId={resolvedPreviewId}
+              onPreview={id => setPreviewModuleId(id)}
               onAddItem={addItem} onUpdateItem={updateItem} onRemoveItem={removeItem}
-              runName={runName} onSave={save} onCancel={cancel} isNew
+              moduleName={moduleName} onSave={save} onCancel={cancel} isNew
             />
           </div>
         )}
@@ -207,11 +195,11 @@ export default function Playlists() {
             {editing === pl.id ? (
               <PlaylistForm
                 name={fName} onNameChange={setFName}
-                items={fItems} runs={runs}
-                previewRunId={resolvedPreviewId}
-                onPreview={id => setPreviewRunId(id)}
+                items={fItems} modules={modules}
+                previewModuleId={resolvedPreviewId}
+                onPreview={id => setPreviewModuleId(id)}
                 onAddItem={addItem} onUpdateItem={updateItem} onRemoveItem={removeItem}
-                runName={runName} onSave={save} onCancel={cancel}
+                moduleName={moduleName} onSave={save} onCancel={cancel}
               />
             ) : (
               <>
@@ -237,7 +225,7 @@ export default function Playlists() {
                   <ol style={{ margin: '10px 0 0 20px', padding: 0, color: '#444', fontSize: '0.72rem', lineHeight: '1.8' }}>
                     {pl.items.map((it, i) => (
                       <li key={i}>
-                        <span style={{ color: '#666' }}>{it.run_name}</span>
+                        <span style={{ color: '#666' }}>{it.module_name}</span>
                         <span style={{ color: '#333' }}> · {it.duration}s</span>
                       </li>
                     ))}
@@ -258,16 +246,16 @@ export default function Playlists() {
 
 interface PlaylistFormProps {
   name: string; onNameChange: (v: string) => void
-  items: EditItem[]; runs: Run[]
-  previewRunId: string | null; onPreview: (id: string) => void
+  items: EditItem[]; modules: Module[]
+  previewModuleId: string | null; onPreview: (id: string) => void
   onAddItem: () => void
   onUpdateItem: (idx: number, patch: Partial<EditItem>) => void
   onRemoveItem: (idx: number) => void
-  runName: (id: string) => string
+  moduleName: (id: string) => string
   onSave: () => void; onCancel: () => void; isNew?: boolean
 }
 
-function PlaylistForm({ name, onNameChange, items, runs, previewRunId, onPreview, onAddItem, onUpdateItem, onRemoveItem, onSave, onCancel, isNew }: PlaylistFormProps) {
+function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onPreview, onAddItem, onUpdateItem, onRemoveItem, onSave, onCancel, isNew }: PlaylistFormProps) {
   const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.75rem', color: '#888' }
 
   return (
@@ -282,31 +270,30 @@ function PlaylistForm({ name, onNameChange, items, runs, previewRunId, onPreview
       </label>
 
       <div>
-        <div style={{ fontSize: '0.75rem', color: '#555', marginBottom: 6 }}>RUNS IN PLAYLIST</div>
+        <div style={{ fontSize: '0.75rem', color: '#555', marginBottom: 6 }}>MODULES IN PLAYLIST</div>
         {items.length === 0 && (
-          <div style={{ color: '#333', fontSize: '0.75rem', marginBottom: 8 }}>No runs yet — add one below.</div>
+          <div style={{ color: '#333', fontSize: '0.75rem', marginBottom: 8 }}>No modules yet — add one below.</div>
         )}
         {items.map((item, idx) => (
           <div key={idx} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-            {/* Preview toggle */}
             <button
-              onClick={() => onPreview(item.run_id)}
-              title="Preview this run"
+              onClick={() => onPreview(item.module_id)}
+              title="Preview this module"
               style={{
                 ...btn('eye'),
                 padding: '5px 8px',
-                color: previewRunId === item.run_id ? '#88f' : '#333',
-                border: `1px solid ${previewRunId === item.run_id ? '#446' : '#252525'}`,
+                color: previewModuleId === item.module_id ? '#88f' : '#333',
+                border: `1px solid ${previewModuleId === item.module_id ? '#446' : '#252525'}`,
               }}
             >
               ▶
             </button>
             <select
-              value={item.run_id}
-              onChange={e => onUpdateItem(idx, { run_id: e.target.value })}
+              value={item.module_id}
+              onChange={e => onUpdateItem(idx, { module_id: e.target.value })}
               style={{ ...fieldStyle, flex: 1 }}
             >
-              {runs.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+              {modules.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
             <input
               type="number" value={item.duration} min={1}
@@ -318,8 +305,8 @@ function PlaylistForm({ name, onNameChange, items, runs, previewRunId, onPreview
             <button onClick={() => onRemoveItem(idx)} style={btn('danger')}>✕</button>
           </div>
         ))}
-        <button onClick={onAddItem} disabled={!runs.length} style={{ ...btn(), marginTop: 2 }}>
-          + ADD RUN
+        <button onClick={onAddItem} disabled={!modules.length} style={{ ...btn(), marginTop: 2 }}>
+          + ADD MODULE
         </button>
       </div>
 

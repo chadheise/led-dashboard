@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import AppForm from '../components/AppForm'
 import DisplayPreview from '../components/DisplayPreview'
-import PluginForm from '../components/PluginForm'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Run {
+interface Module {
   id: string
   name: string
-  plugin_id: string
+  app_id: string
   config: Record<string, unknown>
 }
 
@@ -20,7 +20,7 @@ interface Schema {
   required?: string[]
 }
 
-interface PluginInfo {
+interface AppInfo {
   id: string
   name: string
   description: string
@@ -31,11 +31,11 @@ interface PluginInfo {
 
 const NAV_H = 35
 
-// ── Plugin icons (React SVG — explicit dimensions so they size correctly) ──────
+// ── App icons (React SVG — explicit dimensions so they size correctly) ─────────
 
 const S = { width: 28, height: 28, display: 'block' as const }
 
-const PLUGIN_ICONS: Record<string, React.ReactElement> = {
+const APP_ICONS: Record<string, React.ReactElement> = {
   text: (
     <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
       <line x1={3} y1={6} x2={21} y2={6} />
@@ -127,12 +127,12 @@ function EditPreviewBar({ label }: { label: string }) {
   )
 }
 
-// ── Plugin card grid ──────────────────────────────────────────────────────────
+// ── App card grid ─────────────────────────────────────────────────────────────
 
-function PluginCardGrid({
-  plugins, selected, onSelect,
+function AppCardGrid({
+  apps, selected, onSelect,
 }: {
-  plugins: PluginInfo[]
+  apps: AppInfo[]
   selected: string
   onSelect: (id: string) => void
 }) {
@@ -141,18 +141,18 @@ function PluginCardGrid({
   return (
     <div>
       <div style={{ fontSize: '0.65rem', letterSpacing: '0.12em', color: '#555', marginBottom: 10 }}>
-        PLUGIN TYPE
+        APP TYPE
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-        {plugins.map(plugin => {
-          const sel = plugin.id === selected
-          const hov = hovered === plugin.id && !sel
+        {apps.map(app => {
+          const sel = app.id === selected
+          const hov = hovered === app.id && !sel
           return (
             <button
-              key={plugin.id}
+              key={app.id}
               type="button"
-              onClick={() => onSelect(plugin.id)}
-              onMouseEnter={() => setHovered(plugin.id)}
+              onClick={() => onSelect(app.id)}
+              onMouseEnter={() => setHovered(app.id)}
               onMouseLeave={() => setHovered(null)}
               style={{
                 background: sel ? '#161616' : hov ? '#0e0e0e' : 'transparent',
@@ -167,26 +167,20 @@ function PluginCardGrid({
                 transition: 'background 0.1s',
               }}
             >
-              {/* Icon */}
               <div style={{ color: sel ? '#bbb' : '#666', flexShrink: 0 }}>
-                {PLUGIN_ICONS[plugin.id] ?? (
+                {APP_ICONS[app.id] ?? (
                   <div style={{ width: 28, height: 28, background: '#222', borderRadius: 4 }} />
                 )}
               </div>
-              {/* Name */}
               <div style={{
                 fontSize: '0.82rem', fontFamily: 'monospace',
                 color: sel ? '#ddd' : '#555', letterSpacing: '0.03em',
               }}>
-                {plugin.name}
+                {app.name}
               </div>
-              {/* Description */}
-              {plugin.description && (
-                <div style={{
-                  fontSize: '0.68rem', color: sel ? '#4a4a4a' : '#333',
-                  lineHeight: 1.5,
-                }}>
-                  {plugin.description}
+              {app.description && (
+                <div style={{ fontSize: '0.68rem', color: sel ? '#4a4a4a' : '#333', lineHeight: 1.5 }}>
+                  {app.description}
                 </div>
               )}
             </button>
@@ -199,137 +193,137 @@ function PluginCardGrid({
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function Runs() {
-  const [runs, setRuns] = useState<Run[]>([])
-  const [plugins, setPlugins] = useState<PluginInfo[]>([])
+export default function Modules() {
+  const [modules, setModules] = useState<Module[]>([])
+  const [apps, setApps] = useState<AppInfo[]>([])
   const [editing, setEditing] = useState<string | null>(null)
 
   const [fName, setFName] = useState('')
-  const [fPluginId, setFPluginId] = useState('')
+  const [fAppId, setFAppId] = useState('')
   const [fConfig, setFConfig] = useState<Record<string, unknown>>({})
 
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/runs').then(r => r.json()),
-      fetch('/api/plugins').then(r => r.json()),
-    ]).then(([r, p]) => { setRuns(r); setPlugins(p) })
+      fetch('/api/modules').then(r => r.json()),
+      fetch('/api/apps').then(r => r.json()),
+    ]).then(([m, a]) => { setModules(m); setApps(a) })
   }, [])
 
   // Stop preview when editing closes or page unmounts
   useEffect(() => { if (!editing) stopPreview() }, [editing])
   useEffect(() => () => { stopPreview() }, [])
 
-  // Debounced preview update whenever plugin or config changes
+  // Debounced preview update whenever app type or config changes
   useEffect(() => {
-    if (!editing || !fPluginId) return
+    if (!editing || !fAppId) return
     if (previewTimer.current) clearTimeout(previewTimer.current)
     previewTimer.current = setTimeout(() => {
       fetch('/api/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plugin_id: fPluginId, config: fConfig }),
+        body: JSON.stringify({ app_id: fAppId, config: fConfig }),
       })
     }, 300)
     return () => { if (previewTimer.current) clearTimeout(previewTimer.current) }
-  }, [editing, fPluginId, fConfig])
+  }, [editing, fAppId, fConfig])
 
-  const currentSchema = plugins.find(p => p.id === fPluginId)?.schema
+  const currentSchema = apps.find(a => a.id === fAppId)?.schema
 
   const openNew = () => {
     setFName('')
-    setFPluginId('')   // no pre-selection — user picks in step 1
+    setFAppId('')
     setFConfig({})
     setEditing('new')
   }
 
-  const openEdit = (run: Run) => {
-    setFName(run.name)
-    setFPluginId(run.plugin_id)
-    setFConfig(run.config)
-    setEditing(run.id)
+  const openEdit = (module: Module) => {
+    setFName(module.name)
+    setFAppId(module.app_id)
+    setFConfig(module.config)
+    setEditing(module.id)
   }
 
-  const handlePluginSelect = (id: string) => {
-    if (id === fPluginId) return   // same type — keep existing config
-    setFPluginId(id)
-    const schema = plugins.find(p => p.id === id)?.schema
+  const handleAppSelect = (id: string) => {
+    if (id === fAppId) return   // same type — keep existing config
+    setFAppId(id)
+    const schema = apps.find(a => a.id === id)?.schema
     if (schema) setFConfig(defaultsFromSchema(schema))
   }
 
   const save = async () => {
-    const body = { name: fName, plugin_id: fPluginId, config: fConfig }
+    const body = { name: fName, app_id: fAppId, config: fConfig }
     if (editing === 'new') {
-      const run: Run = await fetch('/api/runs', {
+      const module: Module = await fetch('/api/modules', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       }).then(r => r.json())
-      setRuns(prev => [...prev, run])
+      setModules(prev => [...prev, module])
     } else {
-      await fetch(`/api/runs/${editing}`, {
+      await fetch(`/api/modules/${editing}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
       })
-      setRuns(prev => prev.map(r => r.id === editing ? { ...r, ...body } : r))
+      setModules(prev => prev.map(m => m.id === editing ? { ...m, ...body } : m))
     }
     setEditing(null)
   }
 
   const remove = async (id: string) => {
-    await fetch(`/api/runs/${id}`, { method: 'DELETE' })
-    setRuns(prev => prev.filter(r => r.id !== id))
+    await fetch(`/api/modules/${id}`, { method: 'DELETE' })
+    setModules(prev => prev.filter(m => m.id !== id))
     if (editing === id) setEditing(null)
   }
 
-  const selectedPlugin = plugins.find(p => p.id === fPluginId)
+  const selectedApp = apps.find(a => a.id === fAppId)
   const editLabel = editing === 'new'
-    ? (selectedPlugin?.name ?? 'New run')
+    ? (selectedApp?.name ?? 'New module')
     : (fName || 'Editing')
 
   return (
     <>
-      {editing && fPluginId && <EditPreviewBar label={editLabel} />}
+      {editing && fAppId && <EditPreviewBar label={editLabel} />}
 
       <div style={page}>
         <div style={hdr}>
-          <h2 style={heading}>RUNS</h2>
-          {editing !== 'new' && <button onClick={openNew} style={mkBtn('primary')}>+ NEW RUN</button>}
+          <h2 style={heading}>MODULES</h2>
+          {editing !== 'new' && <button onClick={openNew} style={mkBtn('primary')}>+ NEW MODULE</button>}
         </div>
 
         {editing === 'new' && (
           <div style={{ ...card, border: '1px solid #2a2a2a' }}>
-            <RunForm
+            <ModuleForm
               name={fName} onNameChange={setFName}
-              pluginId={fPluginId} plugins={plugins} onPluginSelect={handlePluginSelect}
+              appId={fAppId} apps={apps} onAppSelect={handleAppSelect}
               schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
               onSave={save} onCancel={() => setEditing(null)} isNew
             />
           </div>
         )}
 
-        {editing !== 'new' && runs.map(run => {
-          const pluginName = plugins.find(p => p.id === run.plugin_id)?.name ?? run.plugin_id
+        {editing !== 'new' && modules.map(module => {
+          const appName = apps.find(a => a.id === module.app_id)?.name ?? module.app_id
           return (
-            <div key={run.id} style={card}>
-              {editing === run.id ? (
-                <RunForm
+            <div key={module.id} style={card}>
+              {editing === module.id ? (
+                <ModuleForm
                   name={fName} onNameChange={setFName}
-                  pluginId={fPluginId} plugins={plugins} onPluginSelect={handlePluginSelect}
+                  appId={fAppId} apps={apps} onAppSelect={handleAppSelect}
                   schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
                   onSave={save} onCancel={() => setEditing(null)}
                 />
               ) : (
                 <div style={rowStyle}>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ color: '#ccc', marginBottom: 3 }}>{run.name}</div>
+                    <div style={{ color: '#ccc', marginBottom: 3 }}>{module.name}</div>
                     <div style={{ color: '#444', fontSize: '0.7rem' }}>
-                      <span style={{ color: '#666' }}>{pluginName}</span>
+                      <span style={{ color: '#666' }}>{appName}</span>
                       {' · '}
-                      {configSummary(run.config)}
+                      {configSummary(module.config)}
                     </div>
                   </div>
                   <div style={btnRowStyle}>
-                    <button onClick={() => openEdit(run)} style={mkBtn()}>EDIT</button>
-                    <button onClick={() => remove(run.id)} style={mkBtn('danger')}>✕</button>
+                    <button onClick={() => openEdit(module)} style={mkBtn()}>EDIT</button>
+                    <button onClick={() => remove(module.id)} style={mkBtn('danger')}>✕</button>
                   </div>
                 </div>
               )}
@@ -341,35 +335,34 @@ export default function Runs() {
   )
 }
 
-// ── RunForm ───────────────────────────────────────────────────────────────────
+// ── ModuleForm ────────────────────────────────────────────────────────────────
 
-interface RunFormProps {
+interface ModuleFormProps {
   name: string; onNameChange: (v: string) => void
-  pluginId: string; plugins: PluginInfo[]; onPluginSelect: (id: string) => void
+  appId: string; apps: AppInfo[]; onAppSelect: (id: string) => void
   schema?: Schema; config: Record<string, unknown>; onConfigChange: (v: Record<string, unknown>) => void
   onSave: () => void; onCancel: () => void; isNew?: boolean
 }
 
-function RunForm({
-  name, onNameChange, pluginId, plugins, onPluginSelect,
+function ModuleForm({
+  name, onNameChange, appId, apps, onAppSelect,
   schema, config, onConfigChange, onSave, onCancel, isNew,
-}: RunFormProps) {
-  // New runs start on step 1 (type selection); edits go straight to step 2.
+}: ModuleFormProps) {
   const [step, setStep] = useState<1 | 2>(isNew ? 1 : 2)
 
-  const selectedPlugin = plugins.find(p => p.id === pluginId)
+  const selectedApp = apps.find(a => a.id === appId)
 
   const handleCardSelect = (id: string) => {
-    onPluginSelect(id)
+    onAppSelect(id)
     setStep(2)
   }
 
-  // ── Step 1: pick plugin type ──────────────────────────────────────────────
+  // ── Step 1: pick app type ─────────────────────────────────────────────────
 
   if (step === 1) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 4 }}>
-        <PluginCardGrid plugins={plugins} selected={pluginId} onSelect={handleCardSelect} />
+        <AppCardGrid apps={apps} selected={appId} onSelect={handleCardSelect} />
         <div>
           <button onClick={onCancel} style={mkBtn()}>CANCEL</button>
         </div>
@@ -386,7 +379,6 @@ function RunForm({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, paddingTop: 4 }}>
 
-      {/* Back nav — only shown when creating a new run */}
       {isNew && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 12, borderBottom: '1px solid #1a1a1a' }}>
           <button
@@ -403,33 +395,30 @@ function RunForm({
           </button>
           <span style={{ color: '#2a2a2a' }}>·</span>
           <span style={{ color: '#666', fontFamily: 'monospace', fontSize: '0.72rem' }}>
-            {selectedPlugin?.name ?? ''}
+            {selectedApp?.name ?? ''}
           </span>
         </div>
       )}
 
-      {/* Plugin config */}
       {schema && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <PluginForm schema={schema} value={config} onChange={onConfigChange} />
+          <AppForm schema={schema} value={config} onChange={onConfigChange} />
         </div>
       )}
 
-      {/* Run name */}
       <div style={{ borderTop: '1px solid #1a1a1a', paddingTop: 16 }}>
         <label style={labelStyle}>
-          Run name
+          Module name
           <input
             type="text"
             value={name}
             onChange={e => onNameChange(e.target.value)}
-            placeholder={`e.g. ${selectedPlugin?.name ?? 'My run'}`}
+            placeholder={`e.g. ${selectedApp?.name ?? 'My module'}`}
             style={fieldStyle}
           />
         </label>
       </div>
 
-      {/* Actions */}
       <div style={{ display: 'flex', gap: 8 }}>
         <button
           onClick={onSave}
@@ -441,7 +430,7 @@ function RunForm({
             opacity: name.trim() ? 1 : 0.4,
           }}
         >
-          {isNew ? 'CREATE RUN' : 'SAVE CHANGES'}
+          {isNew ? 'CREATE MODULE' : 'SAVE CHANGES'}
         </button>
         <button onClick={onCancel} style={mkBtn()}>CANCEL</button>
       </div>

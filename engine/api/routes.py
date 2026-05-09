@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from scene_manager import PlaylistEntry as SMEntry
-from state import Playlist, PlaylistItem, Run
+from state import Module, Playlist, PlaylistItem
 
 router = APIRouter(prefix="/api")
 
@@ -16,18 +16,18 @@ router = APIRouter(prefix="/api")
 
 
 class PreviewBody(BaseModel):
-    plugin_id: str
+    app_id: str
     config: dict[str, Any] = {}
 
 
-class RunBody(BaseModel):
+class ModuleBody(BaseModel):
     name: str
-    plugin_id: str
+    app_id: str
     config: dict[str, Any] = {}
 
 
 class PlaylistItemBody(BaseModel):
-    run_id: str
+    module_id: str
     duration: float = 30.0
 
 
@@ -41,10 +41,10 @@ class PlaylistBody(BaseModel):
 
 @router.post("/preview")
 async def start_preview(request: Request, body: PreviewBody) -> dict[str, Any]:
-    from plugins import REGISTRY
+    from plugins import APP_REGISTRY
 
-    _require_plugin(body.plugin_id)
-    await request.app.state.preview_manager.start(body.plugin_id, body.config, REGISTRY)
+    _require_app(body.app_id)
+    await request.app.state.preview_manager.start(body.app_id, body.config, APP_REGISTRY)
     return {"ok": True}
 
 
@@ -53,55 +53,64 @@ async def stop_preview(request: Request) -> None:
     await request.app.state.preview_manager.stop()
 
 
-# ── Plugin type catalog ────────────────────────────────────────────────────────
+# ── App type catalog ───────────────────────────────────────────────────────────
 
 
-@router.get("/plugins")
-def list_plugins() -> list[dict[str, Any]]:
-    from plugins import REGISTRY
+@router.get("/apps")
+def list_apps() -> list[dict[str, Any]]:
+    from plugins import APP_REGISTRY
 
     return [
-        {"id": cls.id, "name": cls.name, "schema": cls.config_schema}
-        for cls in REGISTRY.values()
+        {
+            "id": cls.id,
+            "name": cls.name,
+            "description": cls.description,
+            "icon": cls.icon,
+            "schema": cls.config_schema,
+        }
+        for cls in APP_REGISTRY.values()
     ]
 
 
-# ── Runs CRUD ──────────────────────────────────────────────────────────────────
+# ── Modules CRUD ───────────────────────────────────────────────────────────────
 
 
-@router.get("/runs")
-def list_runs(request: Request) -> list[dict[str, Any]]:
+@router.get("/modules")
+def list_modules(request: Request) -> list[dict[str, Any]]:
     store = request.app.state.store
-    return [r.model_dump() for r in store.state.runs.values()]
+    return [m.model_dump() for m in store.state.modules.values()]
 
 
-@router.post("/runs", status_code=201)
-def create_run(request: Request, body: RunBody) -> dict[str, Any]:
+@router.post("/modules", status_code=201)
+def create_module(request: Request, body: ModuleBody) -> dict[str, Any]:
     store = request.app.state.store
-    _require_plugin(body.plugin_id)
-    run = store.save_run(Run(name=body.name, plugin_id=body.plugin_id, config=body.config))
-    return run.model_dump()
+    _require_app(body.app_id)
+    module = store.save_module(
+        Module(name=body.name, app_id=body.app_id, config=body.config)
+    )
+    return module.model_dump()
 
 
-@router.put("/runs/{run_id}")
-async def update_run(request: Request, run_id: str, body: RunBody) -> dict[str, Any]:
+@router.put("/modules/{module_id}")
+async def update_module(
+    request: Request, module_id: str, body: ModuleBody
+) -> dict[str, Any]:
     store = request.app.state.store
-    if run_id not in store.state.runs:
-        raise HTTPException(404, "Run not found")
-    _require_plugin(body.plugin_id)
-    updated = Run(id=run_id, name=body.name, plugin_id=body.plugin_id, config=body.config)
-    store.save_run(updated)
-    # If this run is in the active playlist, reload the scene manager.
+    if module_id not in store.state.modules:
+        raise HTTPException(404, "Module not found")
+    _require_app(body.app_id)
+    updated = Module(id=module_id, name=body.name, app_id=body.app_id, config=body.config)
+    store.save_module(updated)
     await _maybe_reload(request)
     return updated.model_dump()
 
 
-@router.delete("/runs/{run_id}", status_code=204)
-async def delete_run(request: Request, run_id: str) -> None:
+@router.delete("/modules/{module_id}", status_code=204)
+async def delete_module(request: Request, module_id: str) -> None:
     store = request.app.state.store
-    if run_id not in store.state.runs:
-        raise HTTPException(404, "Run not found")
-    store.delete_run(run_id)
+    if module_id not in store.state.modules:
+        raise HTTPException(404, "Module not found")
+    store.delete_module(module_id)
     await _maybe_reload(request)
 
 
@@ -109,15 +118,15 @@ async def delete_run(request: Request, run_id: str) -> None:
 
 
 def _playlist_view(store: Any, pl: Playlist) -> dict[str, Any]:
-    """Serialise a playlist with run names resolved for display."""
+    """Serialise a playlist with module names resolved for display."""
     items = []
     for it in pl.items:
-        run = store.state.runs.get(it.run_id)
+        module = store.state.modules.get(it.module_id)
         items.append(
             {
-                "run_id": it.run_id,
-                "run_name": run.name if run else "(deleted)",
-                "plugin_id": run.plugin_id if run else None,
+                "module_id": it.module_id,
+                "module_name": module.name if module else "(deleted)",
+                "app_id": module.app_id if module else None,
                 "duration": it.duration,
             }
         )
@@ -141,7 +150,10 @@ def create_playlist(request: Request, body: PlaylistBody) -> dict[str, Any]:
     pl = store.save_playlist(
         Playlist(
             name=body.name,
-            items=[PlaylistItem(run_id=it.run_id, duration=it.duration) for it in body.items],
+            items=[
+                PlaylistItem(module_id=it.module_id, duration=it.duration)
+                for it in body.items
+            ],
         )
     )
     return _playlist_view(store, pl)
@@ -157,7 +169,10 @@ async def update_playlist(
     updated = Playlist(
         id=playlist_id,
         name=body.name,
-        items=[PlaylistItem(run_id=it.run_id, duration=it.duration) for it in body.items],
+        items=[
+            PlaylistItem(module_id=it.module_id, duration=it.duration)
+            for it in body.items
+        ],
     )
     store.save_playlist(updated)
     await _maybe_reload(request)
@@ -210,26 +225,27 @@ def get_status(request: Request) -> dict[str, Any]:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _require_plugin(plugin_id: str) -> None:
-    from plugins import REGISTRY
+def _require_app(app_id: str) -> None:
+    from plugins import APP_REGISTRY
 
-    if plugin_id not in REGISTRY:
-        raise HTTPException(422, f"Unknown plugin id: {plugin_id!r}")
+    if app_id not in APP_REGISTRY:
+        raise HTTPException(422, f"Unknown app id: {app_id!r}")
 
 
-async def _reload_scene_manager(request: Request, playlist_id: str | None = None) -> None:
+async def _reload_scene_manager(
+    request: Request, playlist_id: str | None = None
+) -> None:
     store = request.app.state.store
     sm = request.app.state.scene_manager
     resolved = store.resolve(playlist_id)
     entries = [
-        SMEntry(plugin_id=e["plugin_id"], config=e["config"], duration=e["duration"])
+        SMEntry(app_id=e["app_id"], config=e["config"], duration=e["duration"])
         for e in resolved
     ]
     await sm.set_playlist(entries)
 
 
 async def _maybe_reload(request: Request) -> None:
-    """Reload scene manager only if the active playlist is affected."""
     store = request.app.state.store
     if store.state.active_playlist_id:
         await _reload_scene_manager(request)

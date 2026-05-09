@@ -5,13 +5,15 @@ from typing import Any, ClassVar
 from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
-from plugin_base import DisplayPlugin
+from plugin_base import DisplayApp
 from plugins._helpers import blit, load_font, parse_color
 
 
-class TextPlugin(DisplayPlugin):
+class TextApp(DisplayApp):
     id: ClassVar[str] = "text"
     name: ClassVar[str] = "Text Display"
+    description: ClassVar[str] = "Show a static or scrolling message in any color and font size"
+    icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="10" x2="16" y2="10"/><line x1="3" y1="14" x2="21" y2="14"/><line x1="3" y1="18" x2="12" y2="18"/></svg>'
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Text Display",

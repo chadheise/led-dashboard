@@ -1,4 +1,4 @@
-"""Persistent application state: named run configurations and playlists.
+"""Persistent application state: named module configurations and playlists.
 
 Stored in data/state.json.  Writes are atomic (tmp + rename) so a crash
 during a save cannot corrupt the file.
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 _DEFAULT_PATH = Path("data/state.json")
 
@@ -17,24 +17,24 @@ _DEFAULT_PATH = Path("data/state.json")
 # ── Data models ────────────────────────────────────────────────────────────────
 
 
-class Run(BaseModel):
-    """A named, reusable plugin configuration."""
+class Module(BaseModel):
+    """A named, reusable app configuration."""
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: str
-    plugin_id: str
+    app_id: str = Field(validation_alias=AliasChoices("app_id", "plugin_id"))
     config: dict[str, Any] = {}
 
 
 class PlaylistItem(BaseModel):
-    """One slot in a saved playlist — a run reference plus a display duration."""
+    """One slot in a saved playlist — a module reference plus a display duration."""
 
-    run_id: str
+    module_id: str = Field(validation_alias=AliasChoices("module_id", "run_id"))
     duration: float = 30.0
 
 
 class Playlist(BaseModel):
-    """An ordered, named collection of run references."""
+    """An ordered, named collection of module references."""
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     name: str
@@ -42,7 +42,9 @@ class Playlist(BaseModel):
 
 
 class AppState(BaseModel):
-    runs: dict[str, Run] = {}
+    modules: dict[str, Module] = Field(
+        default={}, validation_alias=AliasChoices("modules", "runs")
+    )
     playlists: dict[str, Playlist] = {}
     active_playlist_id: str | None = None
 
@@ -72,17 +74,17 @@ class StateStore:
         tmp.write_text(self._state.model_dump_json(indent=2))
         tmp.rename(self._path)
 
-    # ── Runs ───────────────────────────────────────────────────────────────
+    # ── Modules ────────────────────────────────────────────────────────────
 
-    def save_run(self, run: Run) -> Run:
-        self._state.runs[run.id] = run
+    def save_module(self, module: Module) -> Module:
+        self._state.modules[module.id] = module
         self._save()
-        return run
+        return module
 
-    def delete_run(self, run_id: str) -> None:
-        self._state.runs.pop(run_id, None)
+    def delete_module(self, module_id: str) -> None:
+        self._state.modules.pop(module_id, None)
         for pl in self._state.playlists.values():
-            pl.items = [it for it in pl.items if it.run_id != run_id]
+            pl.items = [it for it in pl.items if it.module_id != module_id]
         self._save()
 
     # ── Playlists ──────────────────────────────────────────────────────────
@@ -108,23 +110,23 @@ class StateStore:
     def resolve(self, playlist_id: str | None = None) -> list[dict[str, Any]]:
         """Expand a playlist into concrete entries consumable by SceneManager.
 
-        Returns [{plugin_id, config, duration, run_id, run_name}, ...].
-        Dangling run references (deleted runs) are silently skipped.
+        Returns [{app_id, config, duration, module_id, module_name}, ...].
+        Dangling module references (deleted modules) are silently skipped.
         """
         pid = playlist_id or self._state.active_playlist_id
         if not pid or pid not in self._state.playlists:
             return []
         result = []
         for item in self._state.playlists[pid].items:
-            run = self._state.runs.get(item.run_id)
-            if run:
+            module = self._state.modules.get(item.module_id)
+            if module:
                 result.append(
                     {
-                        "plugin_id": run.plugin_id,
-                        "config": run.config,
+                        "app_id": module.app_id,
+                        "config": module.config,
                         "duration": item.duration,
-                        "run_id": run.id,
-                        "run_name": run.name,
+                        "module_id": module.id,
+                        "module_name": module.name,
                     }
                 )
         return result

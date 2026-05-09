@@ -1,11 +1,11 @@
-from plugins.flights.plugin import FlightsPlugin
-from plugins.sports.plugin import SportsPlugin
-from plugins.stocks.plugin import StocksPlugin
-from plugins.text.plugin import TextPlugin
+from plugins.flights.plugin import FlightsApp
+from plugins.sports.plugin import SportsApp
+from plugins.stocks.plugin import StocksApp
+from plugins.text.plugin import TextApp
 
-REGISTRY: dict[str, type] = {
-    TextPlugin.id: TextPlugin,
-    StocksPlugin.id: StocksPlugin,
-    SportsPlugin.id: SportsPlugin,
-    FlightsPlugin.id: FlightsPlugin,
+APP_REGISTRY: dict[str, type] = {
+    TextApp.id: TextApp,
+    StocksApp.id: StocksApp,
+    SportsApp.id: SportsApp,
+    FlightsApp.id: FlightsApp,
 }

@@ -1,7 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
+import Modules from './pages/Modules'
 import Playlists from './pages/Playlists'
 import Preview from './pages/Preview'
-import Runs from './pages/Runs'
 
 const DARK = '#111'
 const BORDER = '#222'
@@ -23,12 +23,12 @@ export default function App() {
     <div style={{ background: DARK, minHeight: '100vh', color: '#ccc', fontFamily: 'monospace' }}>
       <nav style={{ borderBottom: `1px solid ${BORDER}`, display: 'flex', paddingLeft: 8 }}>
         <NavLink to="/" end style={navLinkStyle}>PREVIEW</NavLink>
-        <NavLink to="/runs" style={navLinkStyle}>RUNS</NavLink>
+        <NavLink to="/modules" style={navLinkStyle}>MODULES</NavLink>
         <NavLink to="/playlists" style={navLinkStyle}>PLAYLISTS</NavLink>
       </nav>
       <Routes>
         <Route path="/" element={<Preview />} />
-        <Route path="/runs" element={<Runs />} />
+        <Route path="/modules" element={<Modules />} />
         <Route path="/playlists" element={<Playlists />} />
       </Routes>
     </div>

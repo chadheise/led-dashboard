@@ -6,9 +6,11 @@ from typing import Any, ClassVar
 from canvas.base import Canvas
 
 
-class DisplayPlugin(ABC):
+class DisplayApp(ABC):
     id: ClassVar[str]
     name: ClassVar[str]
+    description: ClassVar[str] = ""
+    icon: ClassVar[str] = ""  # inline SVG string; uses currentColor
     config_schema: ClassVar[dict[str, Any]]
 
     def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
