@@ -187,7 +187,7 @@ export default function Modules() {
   const canSave = fName.trim() !== ''
 
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={previewPaneStyle}>
         <span style={previewLabelStyle}>{pLabel}</span>
         <DisplayPreview
@@ -197,6 +197,8 @@ export default function Modules() {
         />
       </div>
 
+      {/* Scrollable content — preview above stays fixed */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
       <div style={pageStyle}>
         {isEditing && (
           <button onClick={goBack} style={backBtnStyle}>
@@ -272,6 +274,7 @@ export default function Modules() {
           </div>
         )}
       </div>
-    </>
+      </div>
+    </div>
   )
 }

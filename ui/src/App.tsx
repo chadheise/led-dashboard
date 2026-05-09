@@ -18,15 +18,28 @@ function navLinkStyle({ isActive }: { isActive: boolean }) {
 
 export default function App() {
   return (
-    <div style={{ background: C.bg, minHeight: '100vh', color: C.textPrimary, fontFamily: F.family }}>
-      <nav style={{ borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'center' }}>
+    <div style={{
+      background: C.bg,
+      color: C.textPrimary,
+      fontFamily: F.family,
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      overflow: 'hidden',
+    }}>
+      {/* Nav — fixed height, never scrolls */}
+      <nav style={{ borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
         <NavLink to="/" end style={navLinkStyle}>PLAYLISTS</NavLink>
         <NavLink to="/modules" style={navLinkStyle}>MODULES</NavLink>
       </nav>
-      <Routes>
-        <Route path="/" element={<Playlists />} />
-        <Route path="/modules" element={<Modules />} />
-      </Routes>
+
+      {/* Route area — fills remaining height, page components manage their own scroll */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <Routes>
+          <Route path="/" element={<Playlists />} />
+          <Route path="/modules" element={<Modules />} />
+        </Routes>
+      </div>
     </div>
   )
 }
