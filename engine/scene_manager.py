@@ -31,6 +31,7 @@ class SceneManager:
         self._last_switch = time.monotonic()
         self._fetch_tasks: list[asyncio.Task[None]] = []
         self._running = False
+        self._paused = False
 
     # ── Playlist management ────────────────────────────────────────────────
 
@@ -76,6 +77,24 @@ class SceneManager:
     def current_idx(self) -> int:
         return self._current_idx
 
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def set_paused(self, paused: bool) -> None:
+        self._paused = paused
+        if not paused:
+            self._last_switch = time.monotonic()  # reset timer on resume
+
+    async def prev_scene(self) -> None:
+        if not self._apps:
+            return
+        await self._apps[self._current_idx].on_deactivate()
+        self._current_idx = (self._current_idx - 1) % len(self._apps)
+        await self._apps[self._current_idx].on_activate()
+        self._last_switch = time.monotonic()
+        self._paused = False  # navigation always resumes so the new scene is visible
+
     async def next_scene(self) -> None:
         if not self._apps:
             return
@@ -83,9 +102,10 @@ class SceneManager:
         self._current_idx = (self._current_idx + 1) % len(self._apps)
         await self._apps[self._current_idx].on_activate()
         self._last_switch = time.monotonic()
+        self._paused = False  # navigation always resumes so the new scene is visible
 
     async def _maybe_rotate(self) -> None:
-        if len(self._apps) <= 1 or not self._entries:
+        if self._paused or len(self._apps) <= 1 or not self._entries:
             return
         entry = self._entries[self._current_idx]
         if time.monotonic() - self._last_switch >= entry.duration:
@@ -95,6 +115,8 @@ class SceneManager:
 
     async def render_frame(self) -> None:
         await self._maybe_rotate()
+        if self._paused:
+            return  # keep last broadcast frame frozen in the browser
         self._canvas.clear()
         app = self.current
         if app is not None:
@@ -146,4 +168,5 @@ class SceneManager:
             "current_app": current.id if current else None,
             "current_idx": self._current_idx,
             "scene_count": len(self._apps),
+            "paused": self._paused,
         }

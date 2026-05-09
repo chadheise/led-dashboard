@@ -201,11 +201,25 @@ async def activate_playlist(request: Request, playlist_id: str) -> dict[str, Any
 # ── Session controls ───────────────────────────────────────────────────────────
 
 
+@router.post("/playlist/prev")
+async def prev_scene(request: Request) -> dict[str, Any]:
+    sm = request.app.state.scene_manager
+    await sm.prev_scene()
+    return {"current_idx": sm.current_idx}
+
+
 @router.post("/playlist/next")
 async def next_scene(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     await sm.next_scene()
     return {"current_idx": sm.current_idx}
+
+
+@router.post("/playlist/playpause")
+def toggle_playpause(request: Request) -> dict[str, Any]:
+    sm = request.app.state.scene_manager
+    sm.set_paused(not sm.paused)
+    return {"paused": sm.paused}
 
 
 @router.get("/status")

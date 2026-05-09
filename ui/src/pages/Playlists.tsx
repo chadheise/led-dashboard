@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import DisplayPreview from '../components/DisplayPreview'
+import TransportControls from '../components/TransportControls'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -21,18 +22,30 @@ interface Module { id: string; name: string; app_id: string; config: Record<stri
 
 interface EditItem { module_id: string; duration: number }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const NAV_H = 35
-
 // ── Styles ────────────────────────────────────────────────────────────────────
 
-const page: React.CSSProperties = { padding: '24px 32px', maxWidth: 720 }
+const page: React.CSSProperties = { padding: '24px 32px', maxWidth: 720, margin: '0 auto' }
 const hdr: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }
 const heading: React.CSSProperties = { fontSize: '0.75rem', letterSpacing: '0.12em', color: '#555', margin: 0 }
 const card: React.CSSProperties = { border: '1px solid #222', borderRadius: 4, padding: '14px 16px', marginBottom: 10 }
 const activeCard: React.CSSProperties = { ...card, border: '1px solid #335' }
 const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }
+const previewPane: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', alignItems: 'center',
+  padding: '12px 0 16px', background: '#0d0d0d',
+  borderBottom: '1px solid #1a1a1a', gap: 8,
+}
+const previewLabelStyle: React.CSSProperties = { fontSize: '0.6rem', letterSpacing: '0.15em', color: '#444' }
+const backBtnStyle: React.CSSProperties = {
+  background: 'none', border: 'none', color: '#555', cursor: 'pointer',
+  padding: 0, fontFamily: 'monospace', fontSize: '0.72rem', letterSpacing: '0.08em',
+  display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20,
+}
+const fieldStyle: React.CSSProperties = {
+  background: '#1a1a1a', border: '1px solid #333', color: '#ccc',
+  padding: '5px 8px', borderRadius: 3, fontSize: '0.8rem', fontFamily: 'monospace',
+}
+
 const btn = (variant: 'default' | 'primary' | 'danger' | 'active' | 'eye' = 'default'): React.CSSProperties => ({
   background: variant === 'active' ? '#223' : 'none',
   border: `1px solid ${
@@ -41,28 +54,8 @@ const btn = (variant: 'default' | 'primary' | 'danger' | 'active' | 'eye' = 'def
   color: variant === 'primary' ? '#ccc' : variant === 'danger' ? '#a55' : variant === 'active' ? '#88f' : variant === 'eye' ? '#444' : '#555',
   padding: '5px 12px', fontSize: '0.7rem', letterSpacing: '0.08em', cursor: 'pointer', borderRadius: 3,
 })
-const fieldStyle: React.CSSProperties = {
-  background: '#1a1a1a', border: '1px solid #333', color: '#ccc',
-  padding: '5px 8px', borderRadius: 3, fontSize: '0.8rem', fontFamily: 'monospace',
-}
 
-// ── Preview bar ───────────────────────────────────────────────────────────────
-
-function EditPreviewBar({ label }: { label: string }) {
-  return (
-    <div style={{
-      position: 'sticky', top: NAV_H, zIndex: 10,
-      background: '#0a0a0a', borderBottom: '1px solid #1a1a1a',
-      display: 'flex', flexDirection: 'column', alignItems: 'center',
-      padding: '10px 0 8px', gap: 6,
-    }}>
-      <span style={{ fontSize: '0.6rem', letterSpacing: '0.15em', color: '#333' }}>
-        PREVIEW · {label.toUpperCase()}
-      </span>
-      <DisplayPreview wsUrl="/ws/preview/edit" scale={2} />
-    </div>
-  )
-}
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function stopPreview() {
   fetch('/api/preview', { method: 'DELETE' }).catch(() => {})
@@ -74,6 +67,7 @@ export default function Playlists() {
   const [playlists, setPlaylists] = useState<Playlist[]>([])
   const [modules, setModules] = useState<Module[]>([])
   const [editing, setEditing] = useState<string | null>(null)
+  const [paused, setPaused] = useState(false)
 
   const [fName, setFName] = useState('')
   const [fItems, setFItems] = useState<EditItem[]>([])
@@ -82,6 +76,9 @@ export default function Playlists() {
   useEffect(() => {
     refresh()
     fetch('/api/modules').then(r => r.json()).then(setModules)
+    fetch('/api/status').then(r => r.json()).then(s => {
+      if (typeof s.paused === 'boolean') setPaused(s.paused)
+    })
   }, [])
 
   useEffect(() => { if (!editing) stopPreview() }, [editing])
@@ -99,13 +96,12 @@ export default function Playlists() {
     }).catch(() => {})
   }, [editing, resolvedPreviewId])
 
-  const refresh = () =>
-    fetch('/api/playlists').then(r => r.json()).then(setPlaylists)
+  const refresh = () => fetch('/api/playlists').then(r => r.json()).then(setPlaylists)
+
+  // ── Navigation ──────────────────────────────────────────────────────────────
 
   const openNew = () => {
-    setFName('')
-    setFItems([])
-    setPreviewModuleId(null)
+    setFName(''); setFItems([]); setPreviewModuleId(null)
     setEditing('new')
   }
 
@@ -116,7 +112,9 @@ export default function Playlists() {
     setEditing(pl.id)
   }
 
-  const cancel = () => setEditing(null)
+  const goBack = () => setEditing(null)
+
+  // ── CRUD ────────────────────────────────────────────────────────────────────
 
   const save = async () => {
     const body = { name: fName, items: fItems }
@@ -144,7 +142,15 @@ export default function Playlists() {
     setPlaylists(prev => prev.map(p => ({ ...p, is_active: p.id === id })))
   }
 
-  const next = () => fetch('/api/playlist/next', { method: 'POST' })
+  // ── Transport ───────────────────────────────────────────────────────────────
+
+  const prev = () => fetch('/api/playlist/prev', { method: 'POST' }).then(() => setPaused(false))
+  const next = () => fetch('/api/playlist/next', { method: 'POST' }).then(() => setPaused(false))
+  const togglePlayPause = () =>
+    fetch('/api/playlist/playpause', { method: 'POST' })
+      .then(r => r.json()).then(d => setPaused(d.paused))
+
+  // ── Playlist form helpers ───────────────────────────────────────────────────
 
   const addItem = () => {
     if (!modules.length) return
@@ -161,48 +167,56 @@ export default function Playlists() {
 
   const moduleName = (id: string) => modules.find(m => m.id === id)?.name ?? id
 
-  const editLabel = fName || (editing === 'new' ? 'New playlist' : 'Editing')
-  const previewLabel = resolvedPreviewId ? moduleName(resolvedPreviewId) : editLabel
+  // ── Derived ─────────────────────────────────────────────────────────────────
+
+  const isEditing = editing !== null
+  const sortedPlaylists = [...playlists].sort((a, b) => {
+    if (a.is_active === b.is_active) return 0
+    return a.is_active ? -1 : 1
+  })
+
+  let pLabel = 'LIVE DISPLAY'
+  if (editing === 'new') {
+    pLabel = resolvedPreviewId
+      ? `NEW PLAYLIST · ${moduleName(resolvedPreviewId)}`
+      : 'NEW PLAYLIST'
+  } else if (editing) {
+    pLabel = resolvedPreviewId
+      ? `EDITING · ${moduleName(resolvedPreviewId)}`
+      : `EDITING · ${fName || '…'}`
+  }
 
   return (
     <>
-      {editing && <EditPreviewBar label={previewLabel} />}
+      {/* Preview pane */}
+      <div style={previewPane}>
+        <span style={previewLabelStyle}>{pLabel}</span>
+        <DisplayPreview
+          wsUrl={isEditing ? '/ws/preview/edit' : '/ws/preview'}
+          scale={3}
+          actions={<TransportControls paused={paused} onPrev={prev} onPlayPause={togglePlayPause} onNext={next} />}
+        />
+      </div>
 
       <div style={page}>
-        <div style={hdr}>
-          <h2 style={heading}>PLAYLISTS</h2>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={next} style={btn()}>NEXT →</button>
-            {editing !== 'new' && <button onClick={openNew} style={btn('primary')}>+ NEW PLAYLIST</button>}
-          </div>
-        </div>
 
-        {editing === 'new' && (
-          <div style={{ ...card, border: '1px solid #333' }}>
-            <PlaylistForm
-              name={fName} onNameChange={setFName}
-              items={fItems} modules={modules}
-              previewModuleId={resolvedPreviewId}
-              onPreview={id => setPreviewModuleId(id)}
-              onAddItem={addItem} onUpdateItem={updateItem} onRemoveItem={removeItem}
-              moduleName={moduleName} onSave={save} onCancel={cancel} isNew
-            />
-          </div>
+        {/* Back button — shown on all sub-pages */}
+        {isEditing && (
+          <button onClick={goBack} style={backBtnStyle}>
+            <span style={{ fontSize: '1rem', lineHeight: 1 }}>←</span>
+            <span>← PLAYLISTS</span>
+          </button>
         )}
 
-        {playlists.map(pl => (
-          <div key={pl.id} style={pl.is_active ? activeCard : card}>
-            {editing === pl.id ? (
-              <PlaylistForm
-                name={fName} onNameChange={setFName}
-                items={fItems} modules={modules}
-                previewModuleId={resolvedPreviewId}
-                onPreview={id => setPreviewModuleId(id)}
-                onAddItem={addItem} onUpdateItem={updateItem} onRemoveItem={removeItem}
-                moduleName={moduleName} onSave={save} onCancel={cancel}
-              />
-            ) : (
-              <>
+        {/* ── Playlist list ── */}
+        {!isEditing && (
+          <>
+            <div style={hdr}>
+              <h2 style={heading}>PLAYLISTS</h2>
+              <button onClick={openNew} style={btn('primary')}>+ NEW PLAYLIST</button>
+            </div>
+            {sortedPlaylists.map(pl => (
+              <div key={pl.id} style={pl.is_active ? activeCard : card}>
                 <div style={rowStyle}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <span style={{ color: pl.is_active ? '#88f' : '#555', fontSize: '0.8rem' }}>
@@ -233,10 +247,22 @@ export default function Playlists() {
                 ) : (
                   <div style={{ marginTop: 8, color: '#333', fontSize: '0.72rem' }}>Empty playlist</div>
                 )}
-              </>
-            )}
-          </div>
-        ))}
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* ── New / edit playlist form ── */}
+        {isEditing && (
+          <PlaylistForm
+            name={fName} onNameChange={setFName}
+            items={fItems} modules={modules}
+            previewModuleId={resolvedPreviewId}
+            onPreview={id => setPreviewModuleId(id)}
+            onAddItem={addItem} onUpdateItem={updateItem} onRemoveItem={removeItem}
+            moduleName={moduleName} onSave={save} isNew={editing === 'new'}
+          />
+        )}
       </div>
     </>
   )
@@ -252,14 +278,14 @@ interface PlaylistFormProps {
   onUpdateItem: (idx: number, patch: Partial<EditItem>) => void
   onRemoveItem: (idx: number) => void
   moduleName: (id: string) => string
-  onSave: () => void; onCancel: () => void; isNew?: boolean
+  onSave: () => void; isNew?: boolean
 }
 
-function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onPreview, onAddItem, onUpdateItem, onRemoveItem, onSave, onCancel, isNew }: PlaylistFormProps) {
+function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onPreview, onAddItem, onUpdateItem, onRemoveItem, moduleName, onSave, isNew }: PlaylistFormProps) {
   const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: '0.75rem', color: '#888' }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <label style={labelStyle}>
         Playlist name
         <input
@@ -270,7 +296,7 @@ function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onP
       </label>
 
       <div>
-        <div style={{ fontSize: '0.75rem', color: '#555', marginBottom: 6 }}>MODULES IN PLAYLIST</div>
+        <div style={{ fontSize: '0.75rem', color: '#555', marginBottom: 8 }}>MODULES IN PLAYLIST</div>
         {items.length === 0 && (
           <div style={{ color: '#333', fontSize: '0.75rem', marginBottom: 8 }}>No modules yet — add one below.</div>
         )}
@@ -280,14 +306,11 @@ function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onP
               onClick={() => onPreview(item.module_id)}
               title="Preview this module"
               style={{
-                ...btn('eye'),
-                padding: '5px 8px',
+                ...btn('eye'), padding: '5px 8px',
                 color: previewModuleId === item.module_id ? '#88f' : '#333',
                 border: `1px solid ${previewModuleId === item.module_id ? '#446' : '#252525'}`,
               }}
-            >
-              ▶
-            </button>
+            >▶</button>
             <select
               value={item.module_id}
               onChange={e => onUpdateItem(idx, { module_id: e.target.value })}
@@ -298,8 +321,7 @@ function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onP
             <input
               type="number" value={item.duration} min={1}
               onChange={e => onUpdateItem(idx, { duration: Number(e.target.value) })}
-              style={{ ...fieldStyle, width: 64 }}
-              title="Duration (s)"
+              style={{ ...fieldStyle, width: 64 }} title="Duration (s)"
             />
             <span style={{ color: '#444', fontSize: '0.7rem' }}>s</span>
             <button onClick={() => onRemoveItem(idx)} style={btn('danger')}>✕</button>
@@ -310,15 +332,18 @@ function PlaylistForm({ name, onNameChange, items, modules, previewModuleId, onP
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, paddingTop: 4 }}>
+      <div>
         <button
-          onClick={onSave}
-          disabled={!name.trim()}
-          style={{ background: 'none', border: '1px solid #555', color: '#ccc', padding: '5px 12px', fontSize: '0.7rem', letterSpacing: '0.08em', cursor: name.trim() ? 'pointer' : 'default', borderRadius: 3, opacity: name.trim() ? 1 : 0.4 }}
+          onClick={onSave} disabled={!name.trim()}
+          style={{
+            background: 'none', border: '1px solid #555', color: '#ccc',
+            padding: '5px 14px', fontSize: '0.7rem', letterSpacing: '0.08em',
+            cursor: name.trim() ? 'pointer' : 'default', borderRadius: 3,
+            opacity: name.trim() ? 1 : 0.4,
+          }}
         >
           {isNew ? 'CREATE PLAYLIST' : 'SAVE CHANGES'}
         </button>
-        <button onClick={onCancel} style={{ background: 'none', border: '1px solid #2a2a2a', color: '#555', padding: '5px 12px', fontSize: '0.7rem', letterSpacing: '0.08em', cursor: 'pointer', borderRadius: 3 }}>CANCEL</button>
       </div>
     </div>
   )

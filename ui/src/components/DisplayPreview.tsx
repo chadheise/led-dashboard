@@ -3,11 +3,12 @@ import { useEffect, useRef, useState } from 'react'
 interface Props {
   wsUrl: string
   scale?: number
+  actions?: React.ReactNode
 }
 
 type Status = 'connecting' | 'connected' | 'disconnected'
 
-export default function DisplayPreview({ wsUrl, scale = 3 }: Props) {
+export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const offscreenRef = useRef<OffscreenCanvas | null>(null)
   const [status, setStatus] = useState<Status>('connecting')
@@ -68,13 +69,16 @@ export default function DisplayPreview({ wsUrl, scale = 3 }: Props) {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.75rem', color: '#666' }}>
-        <span style={{
-          width: 8, height: 8, borderRadius: '50%',
-          background: dot[status], display: 'inline-block',
-        }} />
-        {status}{dims ? ` · ${dims.w}×${dims.h}` : ''}
+    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: '#666' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{
+            width: 8, height: 8, borderRadius: '50%',
+            background: dot[status], display: 'inline-block',
+          }} />
+          {status}{dims ? ` · ${dims.w}×${dims.h}` : ''}
+        </div>
+        {actions}
       </div>
       <canvas
         ref={canvasRef}
