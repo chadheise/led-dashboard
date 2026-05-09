@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, ClassVar
 
 import httpx
@@ -27,11 +28,12 @@ class SportsApp(DisplayApp):
         "type": "object",
         "title": "Sports Scores",
         "properties": {
-            "league": {
-                "type": "string",
-                "title": "League",
-                "enum": ["nfl", "nba", "mlb", "nhl"],
-                "default": "nfl",
+            "leagues": {
+                "type": "array",
+                "title": "Leagues",
+                "x-input-type": "multi-select",
+                "items": {"type": "string", "enum": ["nfl", "nba", "mlb", "nhl"]},
+                "default": ["nfl"],
             },
             "frames_per_game": {
                 "type": "integer",
@@ -51,7 +53,7 @@ class SportsApp(DisplayApp):
                 "default": 60,
             },
         },
-        "required": ["league"],
+        "required": ["leagues"],
     }
 
     def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
@@ -60,49 +62,60 @@ class SportsApp(DisplayApp):
         self._game_idx = 0
         self._frame_count = 0
 
+    def _get_leagues(self) -> list[str]:
+        raw = self.config.get("leagues", self.config.get("league", "nfl"))
+        if isinstance(raw, str):
+            return [raw]
+        return list(raw) if raw else ["nfl"]
+
     async def fetch_data(self) -> None:
-        league = self.config.get("league", "nfl")
+        leagues = self._get_leagues()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            results = await asyncio.gather(
+                *[self._fetch_league(client, lg) for lg in leagues],
+                return_exceptions=True,
+            )
+        all_games: list[dict[str, Any]] = []
+        for result in results:
+            if isinstance(result, list):
+                all_games.extend(result)
+        if all_games:
+            self._games = all_games
+
+    async def _fetch_league(
+        self, client: httpx.AsyncClient, league: str
+    ) -> list[dict[str, Any]]:
         sport = _SPORT_MAP.get(league, "football")
         url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url)
+            resp = await client.get(url)
             data = resp.json()
         except Exception:
-            return
-
+            return []
         games: list[dict[str, Any]] = []
         for event in data.get("events", []):
             comp = event.get("competitions", [{}])[0]
             competitors = comp.get("competitors", [])
             if len(competitors) < 2:
                 continue
-
             home = next(
                 (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
             )
             away = next(
                 (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
             )
-
             status_type = event.get("status", {}).get("type", {})
-            state: str = status_type.get("state", "pre")
-            status_detail: str = status_type.get("shortDetail", "Scheduled")
-
             games.append(
                 {
                     "home_abbr": home.get("team", {}).get("abbreviation", "???"),
                     "away_abbr": away.get("team", {}).get("abbreviation", "???"),
                     "home_score": home.get("score", "-"),
                     "away_score": away.get("score", "-"),
-                    "status": status_detail,
-                    "state": state,
+                    "status": status_type.get("shortDetail", "Scheduled"),
+                    "state": status_type.get("state", "pre"),
                 }
             )
-
-        if games:
-            self._games = games
+        return games
 
     async def on_activate(self) -> None:
         self._game_idx = 0
@@ -153,9 +166,9 @@ class SportsApp(DisplayApp):
         blit(self.canvas, img)
 
     def _draw_no_games(self) -> None:
-        league = str(self.config.get("league", "nfl")).upper()
+        label = "/".join(lg.upper() for lg in self._get_leagues())
         font = load_font(14)
-        msg = f"No {league} games"
+        msg = f"No {label} games"
         dummy = Image.new("RGB", (1, 1))
         bbox = ImageDraw.Draw(dummy).textbbox((0, 0), msg, font=font)
         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]

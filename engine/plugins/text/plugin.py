@@ -19,7 +19,7 @@ class TextApp(DisplayApp):
         "title": "Text Display",
         "properties": {
             "message": {"type": "string", "title": "Message"},
-            "color": {"type": "string", "title": "Color (hex)", "default": "#FFFFFF"},
+            "color": {"type": "string", "title": "Color", "x-input-type": "color", "default": "#FFFFFF"},
             "scroll": {"type": "boolean", "title": "Scroll text", "default": True},
             "font_size": {
                 "type": "integer",

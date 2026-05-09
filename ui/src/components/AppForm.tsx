@@ -1,5 +1,7 @@
 import { C, F, fieldStyle, labelStyle } from '../theme'
 
+// ── Schema types ───────────────────────────────────────────────────────────────
+
 interface SchemaProperty {
   type: string
   title?: string
@@ -7,7 +9,23 @@ interface SchemaProperty {
   enum?: string[]
   minimum?: number
   maximum?: number
-  items?: { type: string }
+  /** For arrays: item type + optional enum for multi-select */
+  items?: { type: string; enum?: string[] }
+  /** For compound object types (e.g. location) */
+  properties?: Record<string, { type: string; default?: unknown }>
+  /**
+   * Custom input type — overrides default rendering.
+   *
+   * Built-in values:
+   *   'text'         Plain text input (default for type:string)
+   *   'integer'      Integer number input
+   *   'float'        Decimal number input
+   *   'boolean'      Checkbox toggle (default for type:boolean)
+   *   'color'        Native color picker + hex field
+   *   'location'     Paired latitude / longitude fields (value: {latitude,longitude})
+   *   'multi-select' Checkbox group built from items.enum
+   */
+  'x-input-type'?: string
 }
 
 interface Schema {
@@ -23,17 +41,108 @@ interface Props {
   onChange: (v: Record<string, unknown>) => void
 }
 
+// ── Shared sub-styles ──────────────────────────────────────────────────────────
+
 const checkRow: React.CSSProperties = {
-  ...labelStyle,
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: 8,
+  ...labelStyle, flexDirection: 'row', alignItems: 'center', gap: 8,
+}
+const selectStyle: React.CSSProperties = { ...fieldStyle, appearance: 'none' }
+const row2: React.CSSProperties = { display: 'flex', gap: 10 }
+
+// ── Specialised input renderers ────────────────────────────────────────────────
+
+function ColorInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: string) => void }) {
+  const hex = String(value || '#000000')
+  const safeHex = /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : '#000000'
+  return (
+    <label style={labelStyle}>
+      {title}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input
+          type="color"
+          value={safeHex}
+          onChange={e => onChange(e.target.value)}
+          style={{
+            width: 36, height: 34, padding: 2, cursor: 'pointer',
+            border: `1px solid ${C.border}`, borderRadius: 3, background: 'none',
+          }}
+        />
+        <input
+          type="text"
+          value={hex}
+          onChange={e => onChange(e.target.value)}
+          placeholder="#FFFFFF"
+          style={{ ...fieldStyle, flex: 1 }}
+        />
+      </div>
+    </label>
+  )
 }
 
-const selectStyle: React.CSSProperties = {
-  ...fieldStyle,
-  appearance: 'none',
+function LocationInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: unknown) => void }) {
+  const loc = (typeof value === 'object' && value !== null ? value : {}) as { latitude?: number; longitude?: number }
+  const set = (field: 'latitude' | 'longitude', n: number) => onChange({ ...loc, [field]: n })
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span style={{ ...labelStyle, display: 'block' }}>{title}</span>
+      <div style={row2}>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Latitude
+          <input
+            type="number" step="any"
+            value={loc.latitude ?? 0}
+            onChange={e => set('latitude', Number(e.target.value))}
+            style={fieldStyle}
+          />
+        </label>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Longitude
+          <input
+            type="number" step="any"
+            value={loc.longitude ?? 0}
+            onChange={e => set('longitude', Number(e.target.value))}
+            style={fieldStyle}
+          />
+        </label>
+      </div>
+    </div>
+  )
 }
+
+function MultiSelectInput({ title, options, value, onChange }: {
+  title: string
+  options: string[]
+  value: unknown
+  onChange: (v: string[]) => void
+}) {
+  const selected = Array.isArray(value) ? (value as string[]) : []
+  const toggle = (opt: string, checked: boolean) =>
+    onChange(checked ? [...selected, opt] : selected.filter(x => x !== opt))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ ...labelStyle, display: 'block' }}>{title}</span>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+        {options.map(opt => (
+          <label
+            key={opt}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: F.size.sm, color: C.textSecondary, cursor: 'pointer', fontFamily: F.family }}
+          >
+            <input
+              type="checkbox"
+              checked={selected.includes(opt)}
+              onChange={e => toggle(opt, e.target.checked)}
+              style={{ accentColor: C.positive }}
+            />
+            {opt.toUpperCase()}
+          </label>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── Main form ──────────────────────────────────────────────────────────────────
 
 export default function AppForm({ schema, value, onChange }: Props) {
   const props = schema.properties ?? {}
@@ -42,8 +151,49 @@ export default function AppForm({ schema, value, onChange }: Props) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {Object.entries(props).map(([key, prop]) => {
         const v = key in value ? value[key] : (prop.default ?? '')
+        const title = prop.title ?? key
+        const xType = prop['x-input-type']
 
-        if (prop.type === 'boolean') {
+        // ── Custom input types (x-input-type overrides schema type) ─────────
+
+        if (xType === 'color') {
+          return (
+            <ColorInput
+              key={key}
+              title={title}
+              value={v}
+              onChange={hex => onChange({ ...value, [key]: hex })}
+            />
+          )
+        }
+
+        if (xType === 'location') {
+          return (
+            <LocationInput
+              key={key}
+              title={title}
+              value={v}
+              onChange={loc => onChange({ ...value, [key]: loc })}
+            />
+          )
+        }
+
+        if (xType === 'multi-select') {
+          const options = prop.items?.enum ?? []
+          return (
+            <MultiSelectInput
+              key={key}
+              title={title}
+              options={options}
+              value={v}
+              onChange={sel => onChange({ ...value, [key]: sel })}
+            />
+          )
+        }
+
+        // ── Default type-based rendering ────────────────────────────────────
+
+        if (prop.type === 'boolean' || xType === 'boolean') {
           return (
             <label key={key} style={checkRow}>
               <input
@@ -53,7 +203,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
                 style={{ accentColor: C.positive }}
               />
               <span style={{ color: C.textSecondary, fontFamily: F.family, fontSize: F.size.label }}>
-                {prop.title ?? key}
+                {title}
               </span>
             </label>
           )
@@ -62,7 +212,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
         if (prop.enum) {
           return (
             <label key={key} style={labelStyle}>
-              {prop.title ?? key}
+              {title}
               <select
                 value={String(v)}
                 onChange={e => onChange({ ...value, [key]: e.target.value })}
@@ -77,7 +227,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
         if (prop.type === 'array') {
           return (
             <label key={key} style={labelStyle}>
-              {prop.title ?? key}
+              {title}
               <span style={{ color: C.textDim, fontSize: F.size.xs }}>(comma-separated)</span>
               <input
                 type="text"
@@ -91,15 +241,18 @@ export default function AppForm({ schema, value, onChange }: Props) {
           )
         }
 
-        const isNumeric = prop.type === 'number' || prop.type === 'integer'
+        const isFloat  = prop.type === 'number'  || xType === 'float'
+        const isInt    = prop.type === 'integer'  || xType === 'integer'
+        const isNumeric = isFloat || isInt
         return (
           <label key={key} style={labelStyle}>
-            {prop.title ?? key}
+            {title}
             <input
               type={isNumeric ? 'number' : 'text'}
               value={String(v)}
               min={prop.minimum}
               max={prop.maximum}
+              step={isInt ? 1 : isFloat ? 'any' : undefined}
               onChange={e =>
                 onChange({ ...value, [key]: isNumeric ? Number(e.target.value) : e.target.value })
               }

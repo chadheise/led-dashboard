@@ -39,7 +39,9 @@ interface Schema {
       enum?: string[];
       minimum?: number;
       maximum?: number;
-      items?: { type: string };
+      items?: { type: string; enum?: string[] };
+      properties?: Record<string, { type: string; default?: unknown }>;
+      "x-input-type"?: string;
     }
   >;
   required?: string[];

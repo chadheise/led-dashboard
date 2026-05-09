@@ -24,8 +24,16 @@ class FlightsApp(DisplayApp):
         "type": "object",
         "title": "Nearby Flights",
         "properties": {
-            "latitude": {"type": "number", "title": "Latitude"},
-            "longitude": {"type": "number", "title": "Longitude"},
+            "location": {
+                "type": "object",
+                "title": "Location",
+                "x-input-type": "location",
+                "default": {"latitude": 0.0, "longitude": 0.0},
+                "properties": {
+                    "latitude": {"type": "number", "default": 0.0},
+                    "longitude": {"type": "number", "default": 0.0},
+                },
+            },
             "radius_km": {
                 "type": "number",
                 "title": "Search radius (km)",
@@ -52,7 +60,7 @@ class FlightsApp(DisplayApp):
                 "default": 45,
             },
         },
-        "required": ["latitude", "longitude"],
+        "required": ["location"],
     }
 
     def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
@@ -60,8 +68,13 @@ class FlightsApp(DisplayApp):
         self._flights: list[dict[str, Any]] = []
 
     async def fetch_data(self) -> None:
-        lat = float(self.config.get("latitude", 0.0))
-        lon = float(self.config.get("longitude", 0.0))
+        loc = self.config.get("location", {})
+        if isinstance(loc, dict):
+            lat = float(loc.get("latitude", self.config.get("latitude", 0.0)))
+            lon = float(loc.get("longitude", self.config.get("longitude", 0.0)))
+        else:
+            lat = float(self.config.get("latitude", 0.0))
+            lon = float(self.config.get("longitude", 0.0))
         radius_km = float(self.config.get("radius_km", 50.0))
         d = _km_to_deg(radius_km)
 
