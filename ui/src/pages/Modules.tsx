@@ -98,14 +98,14 @@ function AppCardGrid({ apps, selected, onSelect }: { apps: AppInfo[]; selected: 
               onMouseLeave={() => setHovered(null)}
               style={appCardStyle(sel, hov)}
             >
-              <div style={{ color: sel ? C.textPrimary : C.textMuted, flexShrink: 0 }}>
+              <div style={{ color: sel ? C.sage : C.textMuted, flexShrink: 0 }}>
                 {APP_ICONS[app.id] ?? <div style={{ width: 28, height: 28, background: C.surface, borderRadius: 4 }} />}
               </div>
-              <div style={{ fontSize: F.size.md, fontFamily: F.family, color: sel ? C.textPrimary : C.textSecondary }}>
+              <div style={{ fontSize: F.size.md, fontFamily: F.family, color: sel ? C.sage : C.textSecondary }}>
                 {app.name}
               </div>
               {app.description && (
-                <div style={{ fontSize: F.size.sm, color: sel ? C.textMuted : C.textDim, lineHeight: 1.5 }}>
+                <div style={{ fontSize: F.size.sm, color: sel ? C.textSecondary : C.textMuted, lineHeight: 1.5 }}>
                   {app.description}
                 </div>
               )}

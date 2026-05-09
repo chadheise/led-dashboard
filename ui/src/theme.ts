@@ -77,7 +77,7 @@ export const headingStyle: CSSProperties = {
 export const sectionLabelStyle: CSSProperties = {
   fontSize: F.size.xs,
   letterSpacing: F.tracking.wider,
-  color: C.textMuted,
+  color: C.sage,
   fontFamily: F.family,
   marginBottom: 8,
 };
@@ -106,7 +106,7 @@ export const fieldStyle: CSSProperties = {
 export const backBtnStyle: CSSProperties = {
   background: "none",
   border: "none",
-  color: C.textSecondary,
+  color: C.sage,
   cursor: "pointer",
   padding: 0,
   fontFamily: F.family,
@@ -124,6 +124,7 @@ export const previewPaneStyle: CSSProperties = {
   alignItems: "center",
   padding: "12px 0 16px",
   background: C.bg,
+  borderTop: `2px solid rgba(201,207,155,0.35)`,
   borderBottom: `1px solid ${C.border}`,
   gap: 8,
 };
@@ -131,7 +132,7 @@ export const previewPaneStyle: CSSProperties = {
 export const previewLabelStyle: CSSProperties = {
   fontSize: F.size.xs,
   letterSpacing: F.tracking.wider,
-  color: C.textMuted,
+  color: C.sage,
   fontFamily: F.family,
 };
 
@@ -153,8 +154,8 @@ export type BtnVariant = "primary" | "success" | "danger" | "ghost" | "active" |
 
 export function btn(variant: BtnVariant = "ghost"): CSSProperties {
   const v: Record<BtnVariant, Partial<CSSProperties>> = {
-    primary: { borderColor: C.primary,  color: C.textPrimary },
-    success: { borderColor: C.positive, color: C.positive },
+    primary: { borderColor: C.sage, color: C.bg, background: C.sage },
+    success: { borderColor: C.positive, color: C.positive, background: "rgba(106,171,114,0.12)" },
     danger:  { borderColor: C.negative, color: C.negative },
     ghost:   { borderColor: C.border,   color: C.textSecondary },
     active:  { borderColor: C.positive, color: C.positive, background: "rgba(106,171,114,0.15)" },
@@ -179,15 +180,19 @@ export function cardStyle(active = false): CSSProperties {
     borderRadius: R.md,
     padding: "14px 16px",
     marginBottom: 10,
-    background: active ? "rgba(106,171,114,0.08)" : "transparent",
+    background: active ? "rgba(106,171,114,0.12)" : C.surface,
+    boxShadow: active
+      ? `inset 3px 0 0 ${C.positive}`
+      : `inset 3px 0 0 rgba(201,207,155,0.45)`,
   };
 }
 
 export function appCardStyle(selected: boolean, hovered: boolean): CSSProperties {
   return {
     background: selected ? C.olive : hovered ? C.surfaceHover : C.surface,
-    border: `1px solid ${selected ? C.borderAccent : C.border}`,
+    border: `1px solid ${selected ? C.sage : C.border}`,
     borderRadius: R.lg,
+    boxShadow: selected ? `inset 3px 0 0 ${C.sage}` : "none",
     padding: "16px 14px",
     cursor: "pointer",
     textAlign: "left",
