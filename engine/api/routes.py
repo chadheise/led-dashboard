@@ -15,6 +15,11 @@ router = APIRouter(prefix="/api")
 # ── Request bodies ─────────────────────────────────────────────────────────────
 
 
+class PreviewBody(BaseModel):
+    plugin_id: str
+    config: dict[str, Any] = {}
+
+
 class RunBody(BaseModel):
     name: str
     plugin_id: str
@@ -29,6 +34,23 @@ class PlaylistItemBody(BaseModel):
 class PlaylistBody(BaseModel):
     name: str
     items: list[PlaylistItemBody] = []
+
+
+# ── Edit preview ──────────────────────────────────────────────────────────────
+
+
+@router.post("/preview")
+async def start_preview(request: Request, body: PreviewBody) -> dict[str, Any]:
+    from plugins import REGISTRY
+
+    _require_plugin(body.plugin_id)
+    await request.app.state.preview_manager.start(body.plugin_id, body.config, REGISTRY)
+    return {"ok": True}
+
+
+@router.delete("/preview", status_code=204)
+async def stop_preview(request: Request) -> None:
+    await request.app.state.preview_manager.stop()
 
 
 # ── Plugin type catalog ────────────────────────────────────────────────────────

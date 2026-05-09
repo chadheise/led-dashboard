@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import DisplayPreview from '../components/DisplayPreview'
 import PluginForm from '../components/PluginForm'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -22,6 +23,8 @@ interface Schema {
 interface PluginInfo { id: string; name: string; schema: Schema }
 
 // ── Styles ────────────────────────────────────────────────────────────────────
+
+const NAV_H = 35
 
 const page: React.CSSProperties = { padding: '24px 32px', maxWidth: 720 }
 const hdr: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }
@@ -51,11 +54,35 @@ function defaultsFromSchema(schema: Schema): Record<string, unknown> {
   return out
 }
 
-function configSummary(pluginId: string, config: Record<string, unknown>): string {
+function configSummary(config: Record<string, unknown>): string {
   const parts = Object.entries(config).slice(0, 3).map(([k, v]) =>
     `${k}: ${Array.isArray(v) ? (v as unknown[]).join(', ') : String(v)}`
   )
   return parts.join(' · ') || '(no config)'
+}
+
+// ── Preview bar ───────────────────────────────────────────────────────────────
+
+function EditPreviewBar({ label }: { label: string }) {
+  return (
+    <div style={{
+      position: 'sticky',
+      top: NAV_H,
+      zIndex: 10,
+      background: '#0a0a0a',
+      borderBottom: '1px solid #1a1a1a',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      padding: '10px 0 8px',
+      gap: 6,
+    }}>
+      <span style={{ fontSize: '0.6rem', letterSpacing: '0.15em', color: '#333' }}>
+        PREVIEW · {label.toUpperCase()}
+      </span>
+      <DisplayPreview wsUrl="/ws/preview/edit" scale={2} />
+    </div>
+  )
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -63,12 +90,14 @@ function configSummary(pluginId: string, config: Record<string, unknown>): strin
 export default function Runs() {
   const [runs, setRuns] = useState<Run[]>([])
   const [plugins, setPlugins] = useState<PluginInfo[]>([])
-  const [editing, setEditing] = useState<string | null>(null) // run id or 'new'
+  const [editing, setEditing] = useState<string | null>(null)
 
-  // form state
   const [fName, setFName] = useState('')
   const [fPluginId, setFPluginId] = useState('')
   const [fConfig, setFConfig] = useState<Record<string, unknown>>({})
+
+  // Stable ref for debounce timer
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     Promise.all([
@@ -76,6 +105,28 @@ export default function Runs() {
       fetch('/api/plugins').then(r => r.json()),
     ]).then(([r, p]) => { setRuns(r); setPlugins(p) })
   }, [])
+
+  // Stop preview when editing closes or page unmounts
+  useEffect(() => {
+    if (!editing) stopPreview()
+  }, [editing])
+  useEffect(() => () => { stopPreview() }, [])
+
+  // Start/update preview (debounced) whenever plugin or config changes
+  useEffect(() => {
+    if (!editing || !fPluginId) return
+    if (previewTimer.current) clearTimeout(previewTimer.current)
+    previewTimer.current = setTimeout(() => {
+      fetch('/api/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plugin_id: fPluginId, config: fConfig }),
+      })
+    }, 300)
+    return () => {
+      if (previewTimer.current) clearTimeout(previewTimer.current)
+    }
+  }, [editing, fPluginId, fConfig])
 
   const currentSchema = plugins.find(p => p.id === fPluginId)?.schema
 
@@ -122,61 +173,71 @@ export default function Runs() {
     if (editing === id) setEditing(null)
   }
 
-  const cancel = () => setEditing(null)
+  const editLabel = editing === 'new'
+    ? (fPluginId ? (plugins.find(p => p.id === fPluginId)?.name ?? fPluginId) : 'New run')
+    : (fName || 'Editing')
 
   return (
-    <div style={page}>
-      <div style={hdr}>
-        <h2 style={heading}>RUNS</h2>
-        {editing !== 'new' && <button onClick={openNew} style={btn('primary')}>+ NEW RUN</button>}
-      </div>
+    <>
+      {editing && <EditPreviewBar label={editLabel} />}
 
-      {editing === 'new' && (
-        <div style={{ ...card, border: '1px solid #333' }}>
-          <RunForm
-            name={fName} onNameChange={setFName}
-            pluginId={fPluginId} plugins={plugins} onPluginChange={handlePluginChange}
-            schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
-            onSave={save} onCancel={cancel} isNew
-          />
+      <div style={page}>
+        <div style={hdr}>
+          <h2 style={heading}>RUNS</h2>
+          {editing !== 'new' && <button onClick={openNew} style={btn('primary')}>+ NEW RUN</button>}
         </div>
-      )}
 
-      {runs.map(run => {
-        const pluginName = plugins.find(p => p.id === run.plugin_id)?.name ?? run.plugin_id
-        return (
-          <div key={run.id} style={card}>
-            {editing === run.id ? (
-              <RunForm
-                name={fName} onNameChange={setFName}
-                pluginId={fPluginId} plugins={plugins} onPluginChange={handlePluginChange}
-                schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
-                onSave={save} onCancel={cancel}
-              />
-            ) : (
-              <div style={row}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ color: '#ccc', marginBottom: 3 }}>{run.name}</div>
-                  <div style={{ color: '#444', fontSize: '0.7rem' }}>
-                    <span style={{ color: '#666' }}>{pluginName}</span>
-                    {' · '}
-                    {configSummary(run.plugin_id, run.config)}
+        {editing === 'new' && (
+          <div style={{ ...card, border: '1px solid #333' }}>
+            <RunForm
+              name={fName} onNameChange={setFName}
+              pluginId={fPluginId} plugins={plugins} onPluginChange={handlePluginChange}
+              schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
+              onSave={save} onCancel={() => setEditing(null)} isNew
+            />
+          </div>
+        )}
+
+        {runs.map(run => {
+          const pluginName = plugins.find(p => p.id === run.plugin_id)?.name ?? run.plugin_id
+          return (
+            <div key={run.id} style={card}>
+              {editing === run.id ? (
+                <RunForm
+                  name={fName} onNameChange={setFName}
+                  pluginId={fPluginId} plugins={plugins} onPluginChange={handlePluginChange}
+                  schema={currentSchema} config={fConfig} onConfigChange={setFConfig}
+                  onSave={save} onCancel={() => setEditing(null)}
+                />
+              ) : (
+                <div style={row}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ color: '#ccc', marginBottom: 3 }}>{run.name}</div>
+                    <div style={{ color: '#444', fontSize: '0.7rem' }}>
+                      <span style={{ color: '#666' }}>{pluginName}</span>
+                      {' · '}
+                      {configSummary(run.config)}
+                    </div>
+                  </div>
+                  <div style={btnRow}>
+                    <button onClick={() => openEdit(run)} style={btn()}>EDIT</button>
+                    <button onClick={() => remove(run.id)} style={btn('danger')}>✕</button>
                   </div>
                 </div>
-                <div style={btnRow}>
-                  <button onClick={() => openEdit(run)} style={btn()}>EDIT</button>
-                  <button onClick={() => remove(run.id)} style={btn('danger')}>✕</button>
-                </div>
-              </div>
-            )}
-          </div>
-        )
-      })}
-    </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </>
   )
 }
 
-// ── RunForm sub-component ─────────────────────────────────────────────────────
+function stopPreview() {
+  fetch('/api/preview', { method: 'DELETE' }).catch(() => {})
+}
+
+// ── RunForm ───────────────────────────────────────────────────────────────────
 
 interface RunFormProps {
   name: string; onNameChange: (v: string) => void
@@ -205,10 +266,14 @@ function RunForm({ name, onNameChange, pluginId, plugins, onPluginChange, schema
         </div>
       )}
       <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-        <button onClick={onSave} disabled={!name.trim()} style={btn('primary')}>
+        <button
+          onClick={onSave}
+          disabled={!name.trim()}
+          style={{ background: 'none', border: '1px solid #555', color: '#ccc', padding: '5px 12px', fontSize: '0.7rem', letterSpacing: '0.08em', cursor: name.trim() ? 'pointer' : 'default', borderRadius: 3, opacity: name.trim() ? 1 : 0.4 }}
+        >
           {isNew ? 'CREATE RUN' : 'SAVE CHANGES'}
         </button>
-        <button onClick={onCancel} style={btn()}>CANCEL</button>
+        <button onClick={onCancel} style={{ background: 'none', border: '1px solid #2a2a2a', color: '#555', padding: '5px 12px', fontSize: '0.7rem', letterSpacing: '0.08em', cursor: 'pointer', borderRadius: 3 }}>CANCEL</button>
       </div>
     </div>
   )

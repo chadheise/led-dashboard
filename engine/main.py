@@ -8,6 +8,7 @@ import uvicorn
 import yaml
 from fastapi import FastAPI
 
+from api.preview import PreviewManager
 from api.server import create_app
 from api.websocket import manager
 from canvas.simulator import SimulatorCanvas
@@ -79,6 +80,9 @@ def main() -> None:
     )
     store = StateStore()
     scene_manager = SceneManager(canvas, REGISTRY)
+    preview_manager = PreviewManager(
+        display_cfg["width"], display_cfg["height"], display_cfg["fps"]
+    )
 
     # Seed persisted state on first run
     if not store.state.runs:
@@ -99,7 +103,12 @@ def main() -> None:
             task.cancel()
             await scene_manager.stop()
 
-    app = create_app(lifespan=lifespan, store=store, scene_manager=scene_manager)
+    app = create_app(
+        lifespan=lifespan,
+        store=store,
+        scene_manager=scene_manager,
+        preview_manager=preview_manager,
+    )
     uvicorn.run(app, host=server_cfg["host"], port=server_cfg["port"])
 
 
