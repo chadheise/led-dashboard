@@ -70,6 +70,15 @@ class PreviewManager:
         self._fps = fps
         self._render_task: asyncio.Task[None] | None = None
         self._fetch_task: asyncio.Task[None] | None = None
+        self._paused: bool = False
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def toggle_pause(self) -> bool:
+        self._paused = not self._paused
+        return self._paused
 
     async def start(
         self,
@@ -78,6 +87,7 @@ class PreviewManager:
         registry: dict[str, type[DisplayApp]],
     ) -> None:
         await self.stop()
+        self._paused = False  # always start playing
         cls = registry.get(app_id)
         if cls is None:
             raise ValueError(f"Unknown plugin id: {app_id!r}")
@@ -107,10 +117,11 @@ class PreviewManager:
     async def _render_loop(self, plugin: DisplayApp) -> None:
         interval = 1.0 / self._fps
         while True:
-            self._canvas.clear()
-            try:
-                await plugin.render_frame()
-            except Exception as exc:
-                logger.debug("Preview render_frame error: %s", exc)
-            await self._canvas.render()
+            if not self._paused:
+                self._canvas.clear()
+                try:
+                    await plugin.render_frame()
+                except Exception as exc:
+                    logger.debug("Preview render_frame error: %s", exc)
+                await self._canvas.render()
             await asyncio.sleep(interval)

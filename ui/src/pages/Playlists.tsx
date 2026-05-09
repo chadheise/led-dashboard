@@ -89,6 +89,7 @@ export default function Playlists() {
   const [modules, setModules] = useState<Module[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
+  const [editPaused, setEditPaused] = useState(false);
   const [fName, setFName] = useState("");
   const [fItems, setFItems] = useState<EditItem[]>([]);
   const [previewModuleId, setPreviewModuleId] = useState<string | null>(null);
@@ -204,17 +205,22 @@ export default function Playlists() {
 
   // ── Transport ──────────────────────────────────────────────────────────────
   const prev = () =>
-    fetch("/api/playlist/prev", { method: "POST" }).then(() =>
-      setPaused(false),
-    );
+    fetch("/api/playlist/prev", { method: "POST" }).then(() => setPaused(false));
   const next = () =>
-    fetch("/api/playlist/next", { method: "POST" }).then(() =>
-      setPaused(false),
-    );
+    fetch("/api/playlist/next", { method: "POST" }).then(() => setPaused(false));
   const togglePlayPause = () =>
     fetch("/api/playlist/playpause", { method: "POST" })
       .then((r) => r.json())
       .then((d) => setPaused(d.paused));
+
+  // When editing, play/pause freezes the edit preview, not the live display.
+  const toggleEditPlayPause = () =>
+    fetch("/api/preview/playpause", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => setEditPaused(d.paused));
+
+  // Reset edit-preview paused state whenever editing opens or closes.
+  useEffect(() => { setEditPaused(false); }, [editing]);
 
   // ── Playlist form helpers ──────────────────────────────────────────────────
   const addItem = () => {
@@ -273,9 +279,9 @@ export default function Playlists() {
           scale={3}
           actions={
             <TransportControls
-              paused={paused}
+              paused={isEditing ? editPaused : paused}
               onPrev={prev}
-              onPlayPause={togglePlayPause}
+              onPlayPause={isEditing ? toggleEditPlayPause : togglePlayPause}
               onNext={next}
             />
           }

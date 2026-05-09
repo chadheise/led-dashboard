@@ -48,16 +48,21 @@ interface Props {
   onPrev: () => void
   onPlayPause: () => void
   onNext: () => void
+  showPrev?: boolean
+  showNext?: boolean
 }
 
-export default function TransportControls({ paused, onPrev, onPlayPause, onNext }: Props) {
+export default function TransportControls({
+  paused, onPrev, onPlayPause, onNext,
+  showPrev = true, showNext = true,
+}: Props) {
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-      <IconButton onClick={onPrev} title="Previous"><PrevIcon /></IconButton>
+      {showPrev && <IconButton onClick={onPrev} title="Previous"><PrevIcon /></IconButton>}
       <IconButton onClick={onPlayPause} title={paused ? 'Play' : 'Pause'}>
         {paused ? <PlayIcon /> : <PauseIcon />}
       </IconButton>
-      <IconButton onClick={onNext} title="Next"><NextIcon /></IconButton>
+      {showNext && <IconButton onClick={onNext} title="Next"><NextIcon /></IconButton>}
     </div>
   )
 }

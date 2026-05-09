@@ -53,6 +53,13 @@ async def stop_preview(request: Request) -> None:
     await request.app.state.preview_manager.stop()
 
 
+@router.post("/preview/playpause")
+async def toggle_preview_pause(request: Request) -> dict[str, Any]:
+    pm = request.app.state.preview_manager
+    paused = pm.toggle_pause()
+    return {"paused": paused}
+
+
 # ── App type catalog ───────────────────────────────────────────────────────────
 
 
@@ -216,7 +223,7 @@ async def next_scene(request: Request) -> dict[str, Any]:
 
 
 @router.post("/playlist/playpause")
-def toggle_playpause(request: Request) -> dict[str, Any]:
+async def toggle_playpause(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     sm.set_paused(not sm.paused)
     return {"paused": sm.paused}

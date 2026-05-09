@@ -177,6 +177,7 @@ export default function Modules() {
   const [fAppId, setFAppId] = useState("");
   const [fConfig, setFConfig] = useState<Record<string, unknown>>({});
   const [paused, setPaused] = useState(false);
+  const [editPaused, setEditPaused] = useState(false);
   const [origName, setOrigName] = useState("");
   const [origAppId, setOrigAppId] = useState("");
   const [origConfig, setOrigConfig] = useState<Record<string, unknown>>({});
@@ -225,17 +226,22 @@ export default function Modules() {
 
   // ── Transport ──────────────────────────────────────────────────────────────
   const prev = () =>
-    fetch("/api/playlist/prev", { method: "POST" }).then(() =>
-      setPaused(false),
-    );
+    fetch("/api/playlist/prev", { method: "POST" }).then(() => setPaused(false));
   const next = () =>
-    fetch("/api/playlist/next", { method: "POST" }).then(() =>
-      setPaused(false),
-    );
+    fetch("/api/playlist/next", { method: "POST" }).then(() => setPaused(false));
   const togglePlayPause = () =>
     fetch("/api/playlist/playpause", { method: "POST" })
       .then((r) => r.json())
       .then((d) => setPaused(d.paused));
+
+  // When editing, play/pause freezes the edit preview, not the live display
+  const toggleEditPlayPause = () =>
+    fetch("/api/preview/playpause", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => setEditPaused(d.paused));
+
+  // Reset edit-preview paused state when editing opens or closes
+  useEffect(() => { setEditPaused(false); }, [editing]);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   const openNew = () => {
@@ -337,10 +343,12 @@ export default function Modules() {
           scale={3}
           actions={
             <TransportControls
-              paused={paused}
+              paused={isEditing ? editPaused : paused}
               onPrev={prev}
-              onPlayPause={togglePlayPause}
+              onPlayPause={isEditing ? toggleEditPlayPause : togglePlayPause}
               onNext={next}
+              showPrev={!isEditing}
+              showNext={!isEditing}
             />
           }
         />
