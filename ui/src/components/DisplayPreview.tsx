@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { C, F } from '../theme'
 
 interface Props {
   wsUrl: string
@@ -7,6 +8,12 @@ interface Props {
 }
 
 type Status = 'connecting' | 'connected' | 'disconnected'
+
+const DOT_COLOR: Record<Status, string> = {
+  connecting:   C.neutral,
+  connected:    C.positive,
+  disconnected: C.negative,
+}
 
 export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -24,13 +31,12 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
 
     ws.onmessage = (evt: MessageEvent<ArrayBuffer>) => {
       const view = new DataView(evt.data)
-      const w = view.getUint16(0, false) // big-endian
+      const w = view.getUint16(0, false)
       const h = view.getUint16(2, false)
 
       const canvas = canvasRef.current
       if (!canvas) return
 
-      // Resize canvas and offscreen buffer only when dimensions change
       if (canvas.width !== w * scale || canvas.height !== h * scale) {
         canvas.width = w * scale
         canvas.height = h * scale
@@ -42,7 +48,6 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
       const offscreen = offscreenRef.current
       if (!ctx || !offscreen) return
 
-      // Convert packed RGB bytes → RGBA ImageData
       const rgb = new Uint8Array(evt.data, 4)
       const rgba = new Uint8ClampedArray(w * h * 4)
       for (let i = 0; i < w * h; i++) {
@@ -54,7 +59,6 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
 
       const octx = offscreen.getContext('2d')!
       octx.putImageData(new ImageData(rgba, w, h), 0, 0)
-
       ctx.imageSmoothingEnabled = false
       ctx.drawImage(offscreen, 0, 0, w * scale, h * scale)
     }
@@ -62,27 +66,21 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
     return () => ws.close()
   }, [wsUrl, scale])
 
-  const dot: Record<Status, string> = {
-    connecting: '#888',
-    connected: '#4f4',
-    disconnected: '#f44',
-  }
-
   return (
     <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.75rem', color: '#666' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        fontSize: F.size.label, color: C.textMuted, fontFamily: F.family,
+      }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{
-            width: 8, height: 8, borderRadius: '50%',
-            background: dot[status], display: 'inline-block',
-          }} />
+          <span style={{ width: 8, height: 8, borderRadius: '50%', background: DOT_COLOR[status], display: 'inline-block' }} />
           {status}{dims ? ` · ${dims.w}×${dims.h}` : ''}
         </div>
         {actions}
       </div>
       <canvas
         ref={canvasRef}
-        style={{ border: '1px solid #2a2a2a', imageRendering: 'pixelated' }}
+        style={{ border: `1px solid ${C.border}`, imageRendering: 'pixelated' }}
       />
     </div>
   )

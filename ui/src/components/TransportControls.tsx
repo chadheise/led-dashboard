@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import { C, iconBtnStyle } from '../theme'
+
 const IS = { width: 16, height: 16, display: 'block' as const }
 
 const PrevIcon = () => (
@@ -24,16 +27,23 @@ const NextIcon = () => (
   </svg>
 )
 
-const iconBtn: React.CSSProperties = {
-  background: 'none',
-  border: '1px solid #2a2a2a',
-  color: '#666',
-  padding: '4px 7px',
-  cursor: 'pointer',
-  borderRadius: 3,
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
+function IconButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        ...iconBtnStyle,
+        borderColor: hovered ? C.primary : iconBtnStyle.borderColor as string,
+        color: hovered ? C.textPrimary : iconBtnStyle.color as string,
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 
 interface Props {
@@ -46,11 +56,11 @@ interface Props {
 export default function TransportControls({ paused, onPrev, onPlayPause, onNext }: Props) {
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-      <button onClick={onPrev} title="Previous" style={iconBtn}><PrevIcon /></button>
-      <button onClick={onPlayPause} title={paused ? 'Play' : 'Pause'} style={iconBtn}>
+      <IconButton onClick={onPrev} title="Previous"><PrevIcon /></IconButton>
+      <IconButton onClick={onPlayPause} title={paused ? 'Play' : 'Pause'}>
         {paused ? <PlayIcon /> : <PauseIcon />}
-      </button>
-      <button onClick={onNext} title="Next" style={iconBtn}><NextIcon /></button>
+      </IconButton>
+      <IconButton onClick={onNext} title="Next"><NextIcon /></IconButton>
     </div>
   )
 }
