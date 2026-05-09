@@ -29,17 +29,14 @@ const NextIcon = () => (
 
 function IconButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
   const [hovered, setHovered] = useState(false)
+  const color = hovered ? C.textPrimary : C.textSecondary
   return (
     <button
       onClick={onClick}
       title={title}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      style={{
-        ...iconBtnStyle,
-        borderColor: hovered ? C.primary : iconBtnStyle.borderColor as string,
-        color: hovered ? C.textPrimary : iconBtnStyle.color as string,
-      }}
+      style={{ ...iconBtnStyle, borderColor: color, color }}
     >
       {children}
     </button>
