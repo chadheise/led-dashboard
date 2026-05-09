@@ -1,6 +1,6 @@
 # led-dashboard
 
-RGB LED wall display controller — Raspberry Pi 4 driving 10× HUB75 P5 panels (64×320 px).
+RGB LED wall display controller — Raspberry Pi 4 driving 10× HUB75 P5 panels (320×64 px).
 
 ## Quickstart
 
@@ -8,7 +8,8 @@ RGB LED wall display controller — Raspberry Pi 4 driving 10× HUB75 P5 panels 
 
 ```bash
 cd engine
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 python main.py          # starts FastAPI on :8000
 ```

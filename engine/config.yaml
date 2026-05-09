@@ -9,3 +9,12 @@ display:
 server:
   host: "0.0.0.0"
   port: 8000
+
+playlist:
+  - plugin_id: text
+    config:
+      message: "LED Wall Display"
+      scroll: true
+      font_size: 16
+      color: "#00FFAA"
+    duration: 30

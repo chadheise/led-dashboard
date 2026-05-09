@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from .routes import router as api_router
 from .websocket import router as ws_router
 
 
@@ -17,6 +18,7 @@ def create_app(lifespan: Any = None) -> FastAPI:
     )
 
     app.include_router(ws_router)
+    app.include_router(api_router)
 
     @app.get("/health")
     def health() -> dict[str, str]:

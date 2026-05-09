@@ -14,3 +14,6 @@ ui/dist/
 .DS_Store
 .vscode/
 *.swp
+
+# Claude Code
+.claude/

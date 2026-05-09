@@ -1,7 +1,8 @@
 import asyncio
-import colorsys
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
 import uvicorn
 import yaml
@@ -10,32 +11,46 @@ from fastapi import FastAPI
 from api.server import create_app
 from api.websocket import manager
 from canvas.simulator import SimulatorCanvas
+from plugins import REGISTRY
+from scene_manager import PlaylistEntry, SceneManager
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def _load_config(path: str = "config.yaml") -> dict:
+def _load_config(path: str = "config.yaml") -> dict[str, Any]:
     with open(path) as f:
         return yaml.safe_load(f)
 
 
-def _draw_test_frame(canvas: SimulatorCanvas, frame: int) -> None:
-    """Rainbow bands that scroll across the display over time."""
-    t = frame * 0.008
-    for x in range(canvas.width):
-        hue = (x / canvas.width + t) % 1.0
-        r_f, g_f, b_f = colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-        r, g, b = int(r_f * 255), int(g_f * 255), int(b_f * 255)
-        for y in range(canvas.height):
-            canvas.set_pixel(x, y, r, g, b)
+def _entries_from_config(playlist_cfg: list[dict[str, Any]]) -> list[PlaylistEntry]:
+    return [
+        PlaylistEntry(
+            plugin_id=e["plugin_id"],
+            config=e.get("config", {}),
+            duration=float(e.get("duration", 30.0)),
+        )
+        for e in playlist_cfg
+    ]
 
 
-async def _render_loop(canvas: SimulatorCanvas, fps: int) -> None:
+def _default_entries() -> list[PlaylistEntry]:
+    return [
+        PlaylistEntry(
+            plugin_id="text",
+            config={"message": "LED Wall Display", "scroll": True, "font_size": 16},
+            duration=30.0,
+        )
+    ]
+
+
+async def _render_loop(scene_manager: SceneManager, fps: int) -> None:
     interval = 1.0 / fps
-    frame = 0
     while True:
-        canvas.clear()
-        _draw_test_frame(canvas, frame)
-        await canvas.render()
-        frame += 1
+        try:
+            await scene_manager.render_frame()
+        except Exception as exc:
+            logger.warning("Render loop error: %s", exc)
         await asyncio.sleep(interval)
 
 
@@ -47,18 +62,24 @@ def main() -> None:
     canvas = SimulatorCanvas(
         display_cfg["width"], display_cfg["height"], manager.broadcast
     )
+    scene_manager = SceneManager(canvas, REGISTRY)
+
+    playlist_cfg: list[dict[str, Any]] = cfg.get("playlist", [])
+    entries = _entries_from_config(playlist_cfg) if playlist_cfg else _default_entries()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        task = asyncio.create_task(
-            _render_loop(canvas, display_cfg["fps"])
-        )
+        await scene_manager.set_playlist(entries)
+        await scene_manager.start()
+        task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
         try:
             yield
         finally:
             task.cancel()
+            await scene_manager.stop()
 
     app = create_app(lifespan=lifespan)
+    app.state.scene_manager = scene_manager
     uvicorn.run(app, host=server_cfg["host"], port=server_cfg["port"])
 
 
