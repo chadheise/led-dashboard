@@ -1,0 +1,11 @@
+# 10× HUB75 P5 panels (64×32 each).
+# Arranged in a 1×10 horizontal row → 320 wide, 64 tall.
+display:
+  width: 320
+  height: 64
+  fps: 30
+  brightness: 80
+
+server:
+  host: "0.0.0.0"
+  port: 8000
