@@ -17,3 +17,6 @@ ui/dist/
 
 # Claude Code
 .claude/
+
+# Persisted runtime state (user data, not code)
+engine/data/

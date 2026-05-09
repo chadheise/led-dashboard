@@ -13,6 +13,7 @@ from api.websocket import manager
 from canvas.simulator import SimulatorCanvas
 from plugins import REGISTRY
 from scene_manager import PlaylistEntry, SceneManager
+from state import Playlist, PlaylistItem, Run, StateStore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -23,24 +24,38 @@ def _load_config(path: str = "config.yaml") -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def _entries_from_config(playlist_cfg: list[dict[str, Any]]) -> list[PlaylistEntry]:
-    return [
-        PlaylistEntry(
-            plugin_id=e["plugin_id"],
-            config=e.get("config", {}),
-            duration=float(e.get("duration", 30.0)),
-        )
-        for e in playlist_cfg
-    ]
+def _seed_from_config(store: StateStore, playlist_cfg: list[dict[str, Any]]) -> None:
+    """Bootstrap state.json from config.yaml playlist on first run."""
+    items: list[PlaylistItem] = []
+    for i, entry in enumerate(playlist_cfg):
+        plugin_id = entry.get("plugin_id", "text")
+        config: dict[str, Any] = entry.get("config", {})
+        duration = float(entry.get("duration", 30.0))
+        name = str(config.get("message") or f"{plugin_id.title()} {i + 1}")
+        run = store.save_run(Run(name=name, plugin_id=plugin_id, config=config))
+        items.append(PlaylistItem(run_id=run.id, duration=duration))
+    if items:
+        pl = store.save_playlist(Playlist(name="Default", items=items))
+        store.set_active(pl.id)
 
 
-def _default_entries() -> list[PlaylistEntry]:
-    return [
-        PlaylistEntry(
+def _seed_default(store: StateStore) -> None:
+    """Create a minimal default state when nothing else is available."""
+    run = store.save_run(
+        Run(
+            name="Welcome",
             plugin_id="text",
-            config={"message": "LED Wall Display", "scroll": True, "font_size": 16},
-            duration=30.0,
+            config={"message": "LED Wall Display", "scroll": True, "font_size": 16, "color": "#00FFAA"},
         )
+    )
+    pl = store.save_playlist(Playlist(name="Default", items=[PlaylistItem(run_id=run.id, duration=30.0)]))
+    store.set_active(pl.id)
+
+
+def _sm_entries(store: StateStore) -> list[PlaylistEntry]:
+    return [
+        PlaylistEntry(plugin_id=e["plugin_id"], config=e["config"], duration=e["duration"])
+        for e in store.resolve()
     ]
 
 
@@ -62,14 +77,20 @@ def main() -> None:
     canvas = SimulatorCanvas(
         display_cfg["width"], display_cfg["height"], manager.broadcast
     )
+    store = StateStore()
     scene_manager = SceneManager(canvas, REGISTRY)
 
-    playlist_cfg: list[dict[str, Any]] = cfg.get("playlist", [])
-    entries = _entries_from_config(playlist_cfg) if playlist_cfg else _default_entries()
+    # Seed persisted state on first run
+    if not store.state.runs:
+        playlist_cfg: list[dict[str, Any]] = cfg.get("playlist", [])
+        if playlist_cfg:
+            _seed_from_config(store, playlist_cfg)
+        else:
+            _seed_default(store)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await scene_manager.set_playlist(entries)
+        await scene_manager.set_playlist(_sm_entries(store))
         await scene_manager.start()
         task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
         try:
@@ -78,8 +99,7 @@ def main() -> None:
             task.cancel()
             await scene_manager.stop()
 
-    app = create_app(lifespan=lifespan)
-    app.state.scene_manager = scene_manager
+    app = create_app(lifespan=lifespan, store=store, scene_manager=scene_manager)
     uvicorn.run(app, host=server_cfg["host"], port=server_cfg["port"])
 
 
