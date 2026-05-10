@@ -38,6 +38,10 @@ interface Module {
   app_id: string;
   config: Record<string, unknown>;
 }
+interface AppInfo {
+  id: string;
+  name: string;
+}
 interface EditItem {
   module_id: string;
   duration: number;
@@ -88,7 +92,10 @@ function stopPreview() {
 export default function Playlists() {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
+  const [apps, setApps] = useState<AppInfo[]>([]);
   const [editing, setEditing] = useState<string | null>(null);
+  const [activeSingleModuleId, setActiveSingleModuleId] = useState<string | null>(null);
+  const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [editPaused, setEditPaused] = useState(false);
   const [fName, setFName] = useState("");
@@ -105,11 +112,19 @@ export default function Playlists() {
     refresh();
     fetch("/api/modules")
       .then((r) => r.json())
-      .then(setModules);
+      .then((mods) => setModules(mods));
+    fetch("/api/apps")
+      .then((r) => r.json())
+      .then(setApps);
     fetch("/api/status")
       .then((r) => r.json())
       .then((s) => {
         if (typeof s.paused === "boolean") setPaused(s.paused);
+        if (s.active_single_module_id) {
+          setActiveSingleModuleId(s.active_single_module_id);
+          setSelectedModuleId(s.active_single_module_id);
+          setPlaylists((prev) => prev.map((p) => ({ ...p, is_active: false })));
+        }
       });
   }, []);
 
@@ -117,6 +132,11 @@ export default function Playlists() {
   useEffect(() => {
     if (modules.length > 0) setShowNoModulesWarning(false);
   }, [modules.length]);
+
+  // Default selected module to the first one once modules load
+  useEffect(() => {
+    if (modules.length > 0) setSelectedModuleId((prev) => prev ?? modules[0].id);
+  }, [modules]);
 
   useEffect(() => {
     if (!editing) stopPreview();
@@ -203,6 +223,7 @@ export default function Playlists() {
 
   const activate = async (id: string) => {
     await fetch(`/api/playlists/${id}/activate`, { method: "POST" });
+    setActiveSingleModuleId(null); // clears active indicator; selectedModuleId is preserved
     setPlaylists((prev) => prev.map((p) => ({ ...p, is_active: p.id === id })));
   };
 
@@ -268,9 +289,28 @@ export default function Playlists() {
     setDragOver(null);
   };
 
+  // ── Single-module quick-play ───────────────────────────────────────────────
+  const activateSingleModuleById = async (id: string) => {
+    const res = await fetch(`/api/play/module/${id}`, { method: "POST" });
+    if (res.ok) {
+      setActiveSingleModuleId(id);
+      setPlaylists((prev) => prev.map((p) => ({ ...p, is_active: false })));
+    }
+  };
+
+  const activateSingleModule = () => {
+    if (selectedModuleId) activateSingleModuleById(selectedModuleId);
+  };
+
   // ── Derived ────────────────────────────────────────────────────────────────
   const isEditing = editing !== null;
-  const activePlaylist = playlists.find((p) => p.is_active) ?? null;
+  const activeSingleModule = activeSingleModuleId
+    ? modules.find((m) => m.id === activeSingleModuleId) ?? null
+    : null;
+  const activePlaylist = activeSingleModuleId
+    ? null
+    : playlists.find((p) => p.is_active) ?? null;
+  const previewWsUrl = isEditing ? "/ws/preview/edit" : "/ws/preview";
 
   let pLabel = "LIVE DISPLAY";
   if (editing === "new")
@@ -302,7 +342,7 @@ export default function Playlists() {
       <div style={previewPaneStyle}>
         <span style={previewLabelStyle}>{pLabel}</span>
         <DisplayPreview
-          wsUrl={isEditing ? "/ws/preview/edit" : "/ws/preview"}
+          wsUrl={previewWsUrl}
           scale={3}
           actions={
             <TransportControls
@@ -382,8 +422,8 @@ export default function Playlists() {
                 </div>
               )}
 
-              {/* Featured active playlist */}
-              {activePlaylist && (
+              {/* Featured active item (playlist or single module) */}
+              {(activePlaylist || activeSingleModule) && (
                 <div style={{ marginBottom: 28 }}>
                   <div style={sectionLabelStyle}>ACTIVE</div>
                   <div
@@ -393,83 +433,75 @@ export default function Playlists() {
                       padding: "18px 20px",
                     }}
                   >
-                    <div
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 10,
-                        marginBottom: activePlaylist.items.length > 0 ? 12 : 0,
-                      }}
-                    >
-                      <span style={{ color: C.positive, fontSize: F.size.md }}>
-                        ◉
-                      </span>
-                      <span
-                        style={{
-                          color: C.textPrimary,
-                          fontFamily: F.family,
-                          fontSize: F.size.md,
-                        }}
-                      >
-                        {activePlaylist.name}
-                      </span>
-                    </div>
-                    {activePlaylist.items.length > 0 ? (
-                      <ol
-                        style={{
-                          margin: "4px 0 0 0",
-                          padding: 0,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: 6,
-                          fontFamily: F.family,
-                        }}
-                      >
-                        {activePlaylist.items.map((it, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: 8,
-                            }}
-                          >
-                            <div style={{ color: C.textMuted, flexShrink: 0 }}>
-                              <AppIcon appId={it.app_id ?? ""} size={14} />
-                            </div>
-                            <span
-                              style={{
-                                color: C.textSecondary,
-                                fontSize: F.size.base,
-                              }}
-                            >
-                              {it.module_name}
-                            </span>
-                            <span
-                              style={{
-                                color: C.textMuted,
-                                fontSize: F.size.sm,
-                              }}
-                            >
-                              · {it.duration}s
-                            </span>
-                          </div>
-                        ))}
-                      </ol>
-                    ) : (
-                      <div
-                        style={{
-                          color: C.textDim,
-                          fontSize: F.size.sm,
-                          fontFamily: F.family,
-                        }}
-                      >
-                        Empty playlist
+                    {activeSingleModule ? (
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span style={{ color: C.positive, fontSize: F.size.md }}>◉</span>
+                        <div style={{ color: C.textMuted, flexShrink: 0 }}>
+                          <AppIcon appId={activeSingleModule.app_id} size={14} />
+                        </div>
+                        <span style={{ color: C.textPrimary, fontFamily: F.family, fontSize: F.size.md }}>
+                          {activeSingleModule.name}
+                        </span>
+                        <span style={{ fontSize: F.size.xs, color: C.positive, letterSpacing: F.tracking.wider, fontFamily: F.family }}>
+                          SINGLE MODULE
+                        </span>
                       </div>
-                    )}
+                    ) : activePlaylist ? (
+                      <>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            marginBottom: activePlaylist.items.length > 0 ? 12 : 0,
+                          }}
+                        >
+                          <span style={{ color: C.positive, fontSize: F.size.md }}>◉</span>
+                          <span style={{ color: C.textPrimary, fontFamily: F.family, fontSize: F.size.md }}>
+                            {activePlaylist.name}
+                          </span>
+                        </div>
+                        {activePlaylist.items.length > 0 ? (
+                          <ol style={{ margin: "4px 0 0 0", padding: 0, display: "flex", flexDirection: "column", gap: 6, fontFamily: F.family }}>
+                            {activePlaylist.items.map((it, i) => (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                <div style={{ color: C.textMuted, flexShrink: 0 }}>
+                                  <AppIcon appId={it.app_id ?? ""} size={14} />
+                                </div>
+                                <span style={{ color: C.textSecondary, fontSize: F.size.base }}>{it.module_name}</span>
+                                <span style={{ color: C.textMuted, fontSize: F.size.sm }}>· {it.duration}s</span>
+                              </div>
+                            ))}
+                          </ol>
+                        ) : (
+                          <div style={{ color: C.textDim, fontSize: F.size.sm, fontFamily: F.family }}>Empty playlist</div>
+                        )}
+                      </>
+                    ) : null}
                   </div>
                 </div>
               )}
+
+              {/* Single module quick-play */}
+              <div style={{ marginBottom: 28 }}>
+                <div style={sectionLabelStyle}>SINGLE MODULE</div>
+                <div
+                  style={{ ...cardStyle(!!activeSingleModuleId), cursor: "pointer" }}
+                  onClick={activateSingleModule}
+                >
+                  <div onClick={(e) => e.stopPropagation()}>
+                    <ModuleSelect
+                      value={selectedModuleId ?? ""}
+                      options={modules}
+                      apps={apps}
+                      onChange={(id) => {
+                        setSelectedModuleId(id);
+                        if (activeSingleModuleId) activateSingleModuleById(id);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
 
               {/* Full playlist list */}
               <div style={sectionLabelStyle}>ALL PLAYLISTS</div>
@@ -725,6 +757,7 @@ export default function Playlists() {
                     <ModuleSelect
                       value={item.module_id}
                       options={modules}
+                      apps={apps}
                       onChange={(id) => updateItem(idx, { module_id: id })}
                     />
                     <input

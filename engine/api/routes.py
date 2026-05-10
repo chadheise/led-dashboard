@@ -263,11 +263,30 @@ async def delete_playlist(request: Request, playlist_id: str) -> None:
     await _maybe_reload(request)
 
 
+@router.post("/play/module/{module_id}")
+async def play_single_module(request: Request, module_id: str) -> dict[str, Any]:
+    store = request.app.state.store
+    module = store.state.modules.get(module_id)
+    if not module:
+        raise HTTPException(404, "Module not found")
+    request.app.state.active_single_module_id = module_id
+    entry = SMEntry(
+        app_id=module.app_id,
+        config=module.config,
+        duration=86400,
+        global_config=store.get_app_config(module.app_id),
+        library_configs=dict(store.state.library_configs),
+    )
+    await request.app.state.scene_manager.set_playlist([entry])
+    return {"ok": True, "active_single_module_id": module_id}
+
+
 @router.post("/playlists/{playlist_id}/activate")
 async def activate_playlist(request: Request, playlist_id: str) -> dict[str, Any]:
     store = request.app.state.store
     if playlist_id not in store.state.playlists:
         raise HTTPException(404, "Playlist not found")
+    request.app.state.active_single_module_id = None
     store.set_active(playlist_id)
     await _reload_scene_manager(request, playlist_id)
     return {"ok": True, "active_playlist_id": playlist_id}
@@ -303,11 +322,15 @@ def get_status(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     active_pid = store.state.active_playlist_id
     active_pl = store.state.playlists.get(active_pid) if active_pid else None
+    single_id = getattr(request.app.state, "active_single_module_id", None)
+    single_module = store.state.modules.get(single_id) if single_id else None
     return {
         **sm.get_status(),
         "active_playlist": {"id": active_pl.id, "name": active_pl.name}
         if active_pl
         else None,
+        "active_single_module_id": single_id,
+        "active_single_module_name": single_module.name if single_module else None,
     }
 
 

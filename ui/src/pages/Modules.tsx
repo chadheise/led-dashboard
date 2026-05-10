@@ -305,6 +305,10 @@ export default function Modules() {
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
+  const moduleGroups = apps
+    .map((app) => ({ app, items: modules.filter((m) => m.app_id === app.id) }))
+    .filter((g) => g.items.length > 0);
+
   const currentSchema = apps.find((a) => a.id === fAppId)?.schema;
   const selectedApp = apps.find((a) => a.id === fAppId);
   const isEditing = editing !== null;
@@ -410,69 +414,74 @@ export default function Modules() {
                 A configuration for a specific app that can be re-used when
                 creating playlists.
               </p>
-              {modules.map((m) => {
-                const appName =
-                  apps.find((a) => a.id === m.app_id)?.name ?? m.app_id;
-                return (
-                  <div key={m.id} style={cardStyle()}>
-                    <div style={row}>
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 14,
-                          minWidth: 0,
-                          flex: 1,
-                        }}
-                      >
-                        <div style={{ color: C.textSecondary, flexShrink: 0 }}>
-                          <AppIcon appId={m.app_id} size={22} />
-                        </div>
-                        <div style={{ minWidth: 0 }}>
-                          <div
-                            style={{
-                              color: C.textPrimary,
-                              marginBottom: 3,
-                              fontFamily: F.family,
-                            }}
-                          >
-                            {m.name}
-                          </div>
-                          <div
-                            style={{
-                              color: C.textMuted,
-                              fontSize: F.size.sm,
-                              fontFamily: F.family,
-                            }}
-                          >
-                            <span style={{ color: C.textSecondary }}>
-                              {appName}
-                            </span>
-                            {" · "}
-                            {configSummary(m.config)}
-                          </div>
-                        </div>
-                      </div>
-                      <div style={btnRow}>
-                        <button
-                          onClick={() => openEdit(m)}
-                          style={iconBtn("ghost")}
-                          title="Edit"
+              {moduleGroups.map(({ app, items }) => (
+                <div key={app.id} style={{ marginBottom: 24 }}>
+                  <div
+                    style={{
+                      ...sectionLabelStyle,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      marginBottom: 8,
+                    }}
+                  >
+                    <AppIcon appId={app.id} size={14} />
+                    {app.name.toUpperCase()}
+                  </div>
+                  {items.map((m) => (
+                    <div key={m.id} style={cardStyle()}>
+                      <div style={row}>
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 14,
+                            minWidth: 0,
+                            flex: 1,
+                          }}
                         >
-                          <PencilIcon />
-                        </button>
-                        <button
-                          onClick={() => remove(m.id)}
-                          style={iconBtn("danger")}
-                          title="Delete"
-                        >
-                          <TrashIcon />
-                        </button>
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                color: C.textPrimary,
+                                marginBottom: 3,
+                                fontFamily: F.family,
+                              }}
+                            >
+                              {m.name}
+                            </div>
+                            <div
+                              style={{
+                                color: C.textMuted,
+                                fontSize: F.size.sm,
+                                fontFamily: F.family,
+                              }}
+                            >
+                              {configSummary(m.config)}
+                            </div>
+                          </div>
+                        </div>
+                        <div style={btnRow}>
+                          <button
+                            onClick={() => openEdit(m)}
+                            style={iconBtn("ghost")}
+                            title="Edit"
+                          >
+                            <PencilIcon />
+                          </button>
+                          <button
+                            onClick={() => remove(m.id)}
+                            style={iconBtn("danger")}
+                            title="Delete"
+                          >
+                            <TrashIcon />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  ))}
+                </div>
+              ))}
             </>
           )}
 

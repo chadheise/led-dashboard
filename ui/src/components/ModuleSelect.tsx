@@ -8,16 +8,28 @@ interface ModuleOption {
   app_id: string;
 }
 
+interface AppInfo {
+  id: string;
+  name: string;
+}
+
 interface Props {
   value: string;
   options: ModuleOption[];
+  apps?: AppInfo[];
   onChange: (id: string) => void;
 }
 
-export default function ModuleSelect({ value, options, onChange }: Props) {
+export default function ModuleSelect({ value, options, apps, onChange }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.id === value);
+
+  const groups = apps
+    ? apps
+        .map((app) => ({ app, items: options.filter((o) => o.app_id === app.id) }))
+        .filter((g) => g.items.length > 0)
+    : null;
 
   useEffect(() => {
     if (!open) return;
@@ -74,41 +86,61 @@ export default function ModuleSelect({ value, options, onChange }: Props) {
             overflowY: "auto",
           }}
         >
-          {options.map((opt) => {
-            const isSelected = opt.id === value;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                onClick={() => { onChange(opt.id); setOpen(false); }}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  width: "100%",
-                  padding: "7px 10px",
-                  background: isSelected ? C.surfaceHover : "none",
-                  border: "none",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  color: isSelected ? C.textPrimary : C.textSecondary,
-                  fontFamily: F.family,
-                  fontSize: F.size.base,
-                }}
-                onMouseEnter={(e) => {
-                  if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = C.surfaceHover;
-                }}
-                onMouseLeave={(e) => {
-                  if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = "none";
-                }}
-              >
-                <span style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}>
-                  <AppIcon appId={opt.app_id} size={15} />
-                </span>
-                {opt.name}
-              </button>
-            );
-          })}
+          {(groups ?? [{ app: null, items: options }]).map(({ app, items }) => (
+            <div key={app?.id ?? "__all"}>
+              {app && (
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "5px 10px 3px",
+                    color: C.textDim,
+                    fontFamily: F.family,
+                    fontSize: F.size.xs,
+                    letterSpacing: "0.08em",
+                    borderTop: `1px solid ${C.border}`,
+                    marginTop: 2,
+                  }}
+                >
+                  <AppIcon appId={app.id} size={11} />
+                  {app.name.toUpperCase()}
+                </div>
+              )}
+              {items.map((opt) => {
+                const isSelected = opt.id === value;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => { onChange(opt.id); setOpen(false); }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "7px 10px",
+                      background: isSelected ? C.surfaceHover : "none",
+                      border: "none",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      color: isSelected ? C.textPrimary : C.textSecondary,
+                      fontFamily: F.family,
+                      fontSize: F.size.base,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = C.surfaceHover;
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isSelected) (e.currentTarget as HTMLButtonElement).style.background = "none";
+                    }}
+                  >
+                    {opt.name}
+                  </button>
+                );
+              })}
+            </div>
+          ))}
         </div>
       )}
     </div>
