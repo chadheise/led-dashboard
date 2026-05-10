@@ -117,7 +117,7 @@ export default function LocationMapInput({
       if (showRadius) {
         const circle = L.circle([lat, lng], {
           radius: radius * 1000,
-          color: C.sage, fillColor: C.sage, fillOpacity: 0.08, weight: 1.5,
+          color: '#4a90d9', fillColor: '#4a90d9', fillOpacity: 0.2, weight: 2,
         }).addTo(map)
         circleRef.current = circle
         map.fitBounds(circle.getBounds(), { padding: [20, 20] })
@@ -160,7 +160,7 @@ export default function LocationMapInput({
       } else {
         circleRef.current = L.circle([lat, lng], {
           radius: radius * 1000,
-          color: C.sage, fillColor: C.sage, fillOpacity: 0.08, weight: 1.5,
+          color: '#4a90d9', fillColor: '#4a90d9', fillOpacity: 0.2, weight: 2,
         }).addTo(map)
       }
       map.fitBounds(circleRef.current.getBounds(), { padding: [20, 20] })
@@ -290,7 +290,7 @@ export default function LocationMapInput({
       {showRadius && (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: F.size.sm, color: C.textMuted, fontFamily: F.family }}>
           <span>
-            Search radius:{' '}
+            Radius:{' '}
             <span style={{ color: C.textSecondary }}>{radius} km</span>
           </span>
           <input
