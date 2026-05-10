@@ -12,15 +12,14 @@ logger = logging.getLogger(__name__)
 from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import load_font
+from libraries.text_renderer.library import render_lores
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
 
 
-def _clip_text(draw: ImageDraw.ImageDraw, text: str, font: Any, max_w: int) -> str:
+def _clip_text(text: str, size: int, max_w: int) -> str:
     while text:
-        bbox = draw.textbbox((0, 0), text, font=font)
-        if bbox[2] - bbox[0] <= max_w:
+        if render_lores(text, (255, 255, 255), size).width <= max_w:
             return text
         text = text[:-1]
     return ""
@@ -211,18 +210,15 @@ class FlightsApp(DisplayApp):
             text_w = inner_w
 
         font_size = max(8, inner_h // 3 - 1)
-        font = load_font(font_size)
-
-        dummy_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        row_bbox = dummy_draw.textbbox((0, 0), "A", font=font)
-        row_h = row_bbox[3] - row_bbox[1] + 1
+        glyph_h = render_lores("A", (255, 255, 255), font_size).height
+        row_h = glyph_h + 1
 
         block_h = row_h * 3
-        y0 = pad + max(0, (inner_h - block_h) // 2) - row_bbox[1]
+        y0 = pad + max(0, (inner_h - block_h) // 2)
 
         airline = enriched.get("airline", "")
         line1 = f"{flight['callsign']} {airline}" if airline else flight["callsign"]
-        line1 = _clip_text(draw, line1, font, text_w)
+        line1 = _clip_text(line1, font_size, text_w)
 
         origin = enriched.get("origin", "")
         dest = enriched.get("dest", "")
@@ -242,42 +238,37 @@ class FlightsApp(DisplayApp):
             line3 = "---"
 
         for i, line in enumerate((line1, line2, line3)):
-            draw.text((text_x, y0 + i * row_h), line, font=font, fill=text_color)
+            line_img = render_lores(line, text_color, font_size)
+            img.paste(line_img, (text_x, y0 + i * row_h))
 
         blit(self.canvas, img)
 
     def _draw_table(self) -> None:
         max_flights = int(self.config.get("max_flights", 10))
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
-        font = load_font(12)
+        font_size = 12
 
-        dummy_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        bbox = dummy_draw.textbbox((0, 0), "A", font=font)
-        row_h = bbox[3] - bbox[1] + 2
+        glyph_h = render_lores("A", (255, 255, 255), font_size).height
+        row_h = glyph_h + 2
 
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-        draw = ImageDraw.Draw(img)
 
         for i, flight in enumerate(self._flights[:max_flights]):
-            y = i * row_h + 2 - bbox[1]
             alt = f"{flight['alt_ft']:,}ft" if flight["alt_ft"] is not None else "   ---"
             spd = f"{flight['spd_kt']}kt" if flight["spd_kt"] is not None else "---"
             row = f"{flight['callsign']:<8}  {alt:>8}  {spd:>5}"
-            draw.text((2, y), row, font=font, fill=text_color)
+            row_img = render_lores(row, text_color, font_size)
+            y = i * row_h + 1
+            if y + row_img.height <= img.height:
+                img.paste(row_img, (2, y))
 
         blit(self.canvas, img)
 
     def _draw_no_flights(self) -> None:
-        font = load_font(14)
         msg = "Loading..." if not self._fetched_once else "No flights nearby"
-
-        dummy_draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        bbox = dummy_draw.textbbox((0, 0), msg, font=font)
-        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-
+        msg_img = render_lores(msg, (80, 80, 80), 14)
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-        draw = ImageDraw.Draw(img)
-        x = (self.canvas.width - tw) // 2
-        y = (self.canvas.height - th) // 2 - bbox[1]
-        draw.text((x, y), msg, font=font, fill=(80, 80, 80))
+        x = (self.canvas.width - msg_img.width) // 2
+        y = (self.canvas.height - msg_img.height) // 2
+        img.paste(msg_img, (x, y))
         blit(self.canvas, img)

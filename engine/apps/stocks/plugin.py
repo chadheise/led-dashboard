@@ -9,7 +9,9 @@ from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit
 from libraries.yahoo_finance.library import YahooFinanceLibrary, PRESET_GROUPS, INDEX_SYMBOLS, TICKER_DOMAIN
-from libraries.text_renderer.library import TextRendererLibrary
+from libraries.text_renderer.library import TextRendererLibrary, FONTS_DIR
+
+_STOCKS_FONT = FONTS_DIR / "LoRes" / "LoRes12OT-Regular.ttf"
 
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -136,6 +138,9 @@ class StocksApp(DisplayApp):
         self._page: int = 0
         self._page_counter: int = 0
 
+    def _rt(self, text: str, color: tuple[int, int, int], size: int, **kwargs) -> Image.Image:
+        return self._renderer.render_lores(text, color, size, font_path=_STOCKS_FONT, **kwargs)
+
     async def on_activate(self) -> None:
         self._show_pct = True
         self._alt_counter = 0
@@ -260,7 +265,7 @@ class StocksApp(DisplayApp):
         gap = max(2, text_h // 5)
         spacer = max(10, text_h * 2)
 
-        cap_h = self._renderer.bitmap_text_img("A$%", _COLOR_SYM, text_h).height
+        cap_h = self._rt("A$%", _COLOR_SYM, text_h).height
 
         def vc(item_h: int) -> int:
             return max(0, (h - item_h) // 2)
@@ -271,12 +276,12 @@ class StocksApp(DisplayApp):
             up = q["change_pct"] >= 0
             color = _quote_color(q["change_pct"])
 
-            sym_img = self._renderer.bitmap_text_img(q["symbol"] + " ", _COLOR_SYM, text_h, fixed_h=cap_h)
-            prc_img = self._renderer.bitmap_text_img(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
+            sym_img = self._rt(q["symbol"] + " ", _COLOR_SYM, text_h, fixed_h=cap_h)
+            prc_img = self._rt(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
             arr_img = self._renderer.arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
 
-            chg_pct_img = self._renderer.bitmap_text_img(self._format_change(q, True), color, text_h, fixed_h=cap_h)
-            chg_dol_img = self._renderer.bitmap_text_img(self._format_change(q, False), color, text_h, fixed_h=cap_h)
+            chg_pct_img = self._rt(self._format_change(q, True), color, text_h, fixed_h=cap_h)
+            chg_dol_img = self._rt(self._format_change(q, False), color, text_h, fixed_h=cap_h)
             chg_slot_w = max(chg_pct_img.width, chg_dol_img.width)
 
             logo = self._logos.get(q["symbol"]) if icon_size > 0 else None
@@ -333,10 +338,10 @@ class StocksApp(DisplayApp):
 
             up = q["change_pct"] >= 0
             color = _quote_color(q["change_pct"])
-            cap_h = self._renderer.bitmap_text_img("A$%", _COLOR_SYM, text_h).height
-            sym_img = self._renderer.bitmap_text_img(q["symbol"] + " ", _COLOR_SYM, text_h, fixed_h=cap_h)
-            prc_img = self._renderer.bitmap_text_img(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
-            chg_img = self._renderer.bitmap_text_img(self._format_change(q, show_pct), color, text_h, fixed_h=cap_h)
+            cap_h = self._rt("A$%", _COLOR_SYM, text_h).height
+            sym_img = self._rt(q["symbol"] + " ", _COLOR_SYM, text_h, fixed_h=cap_h)
+            prc_img = self._rt(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
+            chg_img = self._rt(self._format_change(q, show_pct), color, text_h, fixed_h=cap_h)
             arr_img = self._renderer.arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
 
             def vc(item_h: int) -> int:
@@ -439,7 +444,7 @@ class StocksApp(DisplayApp):
         blit(self.canvas, self._page_cache[key])
 
     def _draw_loading(self) -> None:
-        msg_img = self._renderer.bitmap_text_img("Loading...", _COLOR_DIM, 1)
+        msg_img = self._rt("Loading...", _COLOR_DIM, 1)
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
         x = (self.canvas.width - msg_img.width) // 2
         y = (self.canvas.height - msg_img.height) // 2

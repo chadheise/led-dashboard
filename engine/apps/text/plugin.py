@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import load_font
+from libraries.text_renderer.library import render_text
 
 
 class TextApp(DisplayApp):
@@ -50,21 +50,11 @@ class TextApp(DisplayApp):
         msg = str(self.config.get("message", ""))
         size = int(self.config.get("font_size", 16))
         color = parse_color(str(self.config.get("color", "#FFFFFF")))
-        font = load_font(size)
+        aliasing = bool(self.config.get("aliasing", False))
 
-        dummy = Image.new("RGB", (1, 1))
-        draw = ImageDraw.Draw(dummy)
-        bbox = draw.textbbox((0, 0), msg, font=font)
-        text_w = max(bbox[2] - bbox[0], 1)
-        text_h = bbox[3] - bbox[1]
-
-        img = Image.new("RGB", (text_w, self.canvas.height))
-        draw = ImageDraw.Draw(img)
-        y = (self.canvas.height - text_h) // 2 - bbox[1]
-        draw.text((0, y), msg, font=font, fill=color)
-
+        img = render_text(msg, color, size, aliasing=aliasing, fixed_h=self.canvas.height)
         self._rendered = img
-        self._text_w = text_w
+        self._text_w = img.width
 
     async def render_frame(self) -> None:
         if self._rendered is None:

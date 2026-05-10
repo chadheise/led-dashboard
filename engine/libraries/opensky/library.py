@@ -76,6 +76,11 @@ class OpenSkyLibrary(Library):
                     params=params,
                     headers=headers,
                 )
+            if resp.status_code != 200:
+                logger.warning("OpenSky returned HTTP %d", resp.status_code)
+                return []
+            if not resp.content:
+                return []
             data = resp.json()
         except Exception as exc:
             logger.warning("OpenSky fetch failed: %s", exc)
