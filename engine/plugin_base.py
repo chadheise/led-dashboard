@@ -12,10 +12,17 @@ class DisplayApp(ABC):
     description: ClassVar[str] = ""
     icon: ClassVar[str] = ""  # inline SVG string; uses currentColor
     config_schema: ClassVar[dict[str, Any]]
+    global_config_schema: ClassVar[dict[str, Any]] = {}  # app-level params (API keys, defaults)
 
-    def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        canvas: Canvas,
+        global_config: dict[str, Any] | None = None,
+    ) -> None:
         self.config = config
         self.canvas = canvas
+        self.global_config: dict[str, Any] = global_config or {}
 
     @property
     def refresh_interval(self) -> float:

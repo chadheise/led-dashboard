@@ -209,6 +209,17 @@ class StocksApp(DisplayApp):
         'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
         '<polyline points="3,18 8,11 13,14 20,5"/><polyline points="16,5 20,5 20,9"/></svg>'
     )
+    global_config_schema: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "title": "Stock Ticker — Global Settings",
+        "properties": {
+            "finnhub_api_key": {
+                "type": "string",
+                "title": "Finnhub API Key",
+                "default": "",
+            },
+        },
+    }
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Stock Ticker",
@@ -276,8 +287,8 @@ class StocksApp(DisplayApp):
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
-    def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
-        super().__init__(config, canvas)
+    def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None) -> None:
+        super().__init__(config, canvas, global_config)
         self._quotes: list[dict[str, Any]] = []
         self._logos: dict[str, Image.Image | None] = {}
         self._logos_fetched: set[str] = set()

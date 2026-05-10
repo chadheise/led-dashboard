@@ -47,6 +47,7 @@ class AppState(BaseModel):
     )
     playlists: dict[str, Playlist] = {}
     active_playlist_id: str | None = None
+    app_configs: dict[str, dict[str, Any]] = {}  # keyed by app_id
 
 
 # ── Store ──────────────────────────────────────────────────────────────────────
@@ -85,6 +86,15 @@ class StateStore:
         self._state.modules.pop(module_id, None)
         for pl in self._state.playlists.values():
             pl.items = [it for it in pl.items if it.module_id != module_id]
+        self._save()
+
+    # ── App configs ────────────────────────────────────────────────────────
+
+    def get_app_config(self, app_id: str) -> dict[str, Any]:
+        return self._state.app_configs.get(app_id, {})
+
+    def save_app_config(self, app_id: str, config: dict[str, Any]) -> None:
+        self._state.app_configs[app_id] = config
         self._save()
 
     # ── Playlists ──────────────────────────────────────────────────────────
@@ -127,6 +137,7 @@ class StateStore:
                         "duration": item.duration,
                         "module_id": module.id,
                         "module_name": module.name,
+                        "global_config": self._state.app_configs.get(module.app_id, {}),
                     }
                 )
         return result

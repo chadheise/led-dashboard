@@ -57,7 +57,12 @@ def _seed_default(store: StateStore) -> None:
 
 def _sm_entries(store: StateStore) -> list[PlaylistEntry]:
     return [
-        PlaylistEntry(app_id=e["app_id"], config=e["config"], duration=e["duration"])
+        PlaylistEntry(
+            app_id=e["app_id"],
+            config=e["config"],
+            duration=e["duration"],
+            global_config=e.get("global_config", {}),
+        )
         for e in store.resolve()
     ]
 

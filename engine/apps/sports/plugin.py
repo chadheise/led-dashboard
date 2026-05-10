@@ -56,8 +56,8 @@ class SportsApp(DisplayApp):
         "required": ["leagues"],
     }
 
-    def __init__(self, config: dict[str, Any], canvas: Canvas) -> None:
-        super().__init__(config, canvas)
+    def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None) -> None:
+        super().__init__(config, canvas, global_config)
         self._games: list[dict[str, Any]] = []
         self._game_idx = 0
         self._frame_count = 0

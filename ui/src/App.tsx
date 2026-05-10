@@ -1,6 +1,7 @@
 import { NavLink, Route, Routes } from 'react-router-dom'
 import Modules from './pages/Modules'
 import Playlists from './pages/Playlists'
+import Settings from './pages/Settings'
 import { C, F } from './theme'
 
 function navLinkStyle({ isActive }: { isActive: boolean }) {
@@ -31,6 +32,7 @@ export default function App() {
       <nav style={{ borderBottom: `1px solid ${C.border}`, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
         <NavLink to="/" end style={navLinkStyle}>PLAYLISTS</NavLink>
         <NavLink to="/modules" style={navLinkStyle}>MODULES</NavLink>
+        <NavLink to="/settings" style={navLinkStyle}>SETTINGS</NavLink>
       </nav>
 
       {/* Route area — fills remaining height, page components manage their own scroll */}
@@ -38,6 +40,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Playlists />} />
           <Route path="/modules" element={<Modules />} />
+          <Route path="/settings" element={<Settings />} />
         </Routes>
       </div>
     </div>

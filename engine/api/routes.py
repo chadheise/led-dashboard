@@ -64,9 +64,10 @@ async def toggle_preview_pause(request: Request) -> dict[str, Any]:
 
 
 @router.get("/apps")
-def list_apps() -> list[dict[str, Any]]:
+def list_apps(request: Request) -> list[dict[str, Any]]:
     from apps import APP_REGISTRY
 
+    store = request.app.state.store
     return [
         {
             "id": cls.id,
@@ -74,9 +75,31 @@ def list_apps() -> list[dict[str, Any]]:
             "description": cls.description,
             "icon": cls.icon,
             "schema": cls.config_schema,
+            "global_config_schema": cls.global_config_schema,
+            "global_config": store.get_app_config(cls.id),
         }
         for cls in APP_REGISTRY.values()
     ]
+
+
+class AppConfigBody(BaseModel):
+    config: dict[str, Any] = {}
+
+
+@router.get("/apps/{app_id}/config")
+def get_app_config(request: Request, app_id: str) -> dict[str, Any]:
+    _require_app(app_id)
+    return request.app.state.store.get_app_config(app_id)
+
+
+@router.put("/apps/{app_id}/config")
+async def save_app_config(
+    request: Request, app_id: str, body: AppConfigBody
+) -> dict[str, Any]:
+    _require_app(app_id)
+    request.app.state.store.save_app_config(app_id, body.config)
+    await _maybe_reload(request)
+    return body.config
 
 
 # ── Modules CRUD ───────────────────────────────────────────────────────────────
@@ -260,7 +283,12 @@ async def _reload_scene_manager(
     sm = request.app.state.scene_manager
     resolved = store.resolve(playlist_id)
     entries = [
-        SMEntry(app_id=e["app_id"], config=e["config"], duration=e["duration"])
+        SMEntry(
+            app_id=e["app_id"],
+            config=e["config"],
+            duration=e["duration"],
+            global_config=e.get("global_config", {}),
+        )
         for e in resolved
     ]
     await sm.set_playlist(entries)
