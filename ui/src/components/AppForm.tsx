@@ -1,4 +1,5 @@
 import { C, F, fieldStyle, labelStyle } from '../theme'
+import LocationMapInput from './LocationMapInput'
 
 // ── Schema types ───────────────────────────────────────────────────────────────
 
@@ -168,11 +169,16 @@ export default function AppForm({ schema, value, onChange }: Props) {
         }
 
         if (xType === 'location') {
+          const radiusProp = prop.properties?.['radius_km'] as { minimum?: number; maximum?: number } | undefined
+          const showRadius = !!radiusProp
           return (
-            <LocationInput
+            <LocationMapInput
               key={key}
               title={title}
               value={v}
+              showRadius={showRadius}
+              radiusMin={radiusProp?.minimum ?? 1}
+              radiusMax={radiusProp?.maximum ?? 500}
               onChange={loc => onChange({ ...value, [key]: loc })}
             />
           )

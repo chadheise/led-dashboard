@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
+from io import BytesIO
 from typing import Any, ClassVar
 
 import httpx
 from PIL import Image, ImageDraw
+
+logger = logging.getLogger(__name__)
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
@@ -76,18 +80,18 @@ class FlightsApp(DisplayApp):
                 "type": "object",
                 "title": "Location",
                 "x-input-type": "location",
-                "default": {"latitude": 0.0, "longitude": 0.0},
+                "default": {"latitude": 0.0, "longitude": 0.0, "radius_km": 50.0},
                 "properties": {
                     "latitude": {"type": "number", "default": 0.0},
                     "longitude": {"type": "number", "default": 0.0},
+                    "radius_km": {
+                        "type": "number",
+                        "title": "Radius (km)",
+                        "default": 50.0,
+                        "minimum": 1,
+                        "maximum": 500,
+                    },
                 },
-            },
-            "radius_km": {
-                "type": "number",
-                "title": "Search radius (km)",
-                "default": 50,
-                "minimum": 1,
-                "maximum": 500,
             },
             "max_flights": {
                 "type": "integer",
@@ -143,6 +147,8 @@ class FlightsApp(DisplayApp):
         super().__init__(config, canvas, global_config)
         self._flights: list[dict[str, Any]] = []
         self._enriched: dict[str, dict[str, Any]] = {}
+        self._logos: dict[str, Image.Image | None] = {}   # keyed by IATA airline code
+        self._logos_fetched: set[str] = set()
         self._fetched_once: bool = False
         self._card_idx: int = 0
         self._card_last_ts: float = 0.0
@@ -190,12 +196,16 @@ class FlightsApp(DisplayApp):
         self._enriched = {}
         await self._fetch_flights()
         await self._enrich_flights()
+        await self._fetch_logos()
 
     async def _fetch_flights(self) -> None:
         loc = self.config.get("location", {})
         lat = float(loc.get("latitude", 0.0) if isinstance(loc, dict) else 0.0)
         lon = float(loc.get("longitude", 0.0) if isinstance(loc, dict) else 0.0)
-        radius_km = float(self.config.get("radius_km", 50.0))
+        radius_km = float(
+            loc.get("radius_km", self.config.get("radius_km", 50.0))
+            if isinstance(loc, dict) else self.config.get("radius_km", 50.0)
+        )
         max_flights = int(self.config.get("max_flights", 10))
         d = _km_to_deg(radius_km)
 
@@ -217,7 +227,8 @@ class FlightsApp(DisplayApp):
                     headers=headers,
                 )
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            logger.warning("OpenSky fetch failed: %s", exc)
             return
 
         flights: list[dict[str, Any]] = []
@@ -250,12 +261,17 @@ class FlightsApp(DisplayApp):
         self._card_idx = 0
         self._card_last_ts = time.monotonic()
         self._fetched_once = True
+        logger.info("OpenSky: %d flights in range (showing %d)", len(flights), len(self._flights))
 
     async def _enrich_flights(self) -> None:
         api_key = self.global_config.get("flightaware_api_key", "").strip()
-        if not api_key or not self._flights:
+        if not api_key:
+            logger.debug("FlightAware: no API key configured, skipping enrichment")
+            return
+        if not self._flights:
             return
 
+        logger.info("FlightAware: enriching %d flights", len(self._flights))
         async with httpx.AsyncClient(
             timeout=10.0,
             headers={"x-apikey": api_key},
@@ -264,6 +280,7 @@ class FlightsApp(DisplayApp):
                 *[self._fetch_enrichment(client, f["callsign"]) for f in self._flights],
                 return_exceptions=True,
             )
+        logger.info("FlightAware: enriched %d/%d flights", len(self._enriched), len(self._flights))
 
     async def _fetch_enrichment(
         self, client: httpx.AsyncClient, callsign: str
@@ -271,10 +288,15 @@ class FlightsApp(DisplayApp):
         try:
             resp = await client.get(f"{_FLIGHTAWARE_BASE}/flights/{callsign}")
             if resp.status_code != 200:
+                logger.warning(
+                    "FlightAware %s: HTTP %d — %s",
+                    callsign, resp.status_code, resp.text[:300],
+                )
                 return
             data = resp.json()
             flights_list = data.get("flights", [])
             if not flights_list:
+                logger.debug("FlightAware %s: no flights in response", callsign)
                 return
             flight = flights_list[0]
 
@@ -282,17 +304,56 @@ class FlightsApp(DisplayApp):
             dest_obj = flight.get("destination") or {}
             origin = origin_obj.get("code_iata") or origin_obj.get("code", "")
             dest = dest_obj.get("code_iata") or dest_obj.get("code", "")
+            # AeroAPI: operator = ICAO code (e.g. "UAL"), operator_iata = 2-letter (e.g. "UA")
             airline = flight.get("operator") or ""
+            operator_iata = flight.get("operator_iata") or ""
             aircraft_type = flight.get("aircraft_type", "")
 
             self._enriched[callsign] = {
                 "origin": origin.upper() if origin else "",
                 "dest": dest.upper() if dest else "",
                 "airline": airline,
+                "operator_iata": operator_iata.upper(),
                 "aircraft_type": aircraft_type,
             }
-        except Exception:
-            pass
+            logger.info(
+                "FlightAware %s: %s→%s %s(%s) %s",
+                callsign, origin, dest, airline, operator_iata, aircraft_type,
+            )
+        except Exception as exc:
+            logger.warning("FlightAware enrichment failed for %s: %s", callsign, exc)
+
+    # ── Logo fetching ──────────────────────────────────────────────────────────
+
+    async def _fetch_logos(self) -> None:
+        needed = {
+            e["operator_iata"]
+            for e in self._enriched.values()
+            if e.get("operator_iata")
+        } - self._logos_fetched
+        if not needed:
+            return
+        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
+            await asyncio.gather(
+                *[self._fetch_logo(client, code) for code in needed],
+                return_exceptions=True,
+            )
+
+    async def _fetch_logo(self, client: httpx.AsyncClient, iata: str) -> None:
+        self._logos_fetched.add(iata)
+        try:
+            resp = await client.get(
+                f"https://www.gstatic.com/flights/airline_logos/70px/{iata}.png"
+            )
+            if resp.status_code == 200:
+                self._logos[iata] = Image.open(BytesIO(resp.content)).convert("RGBA")
+                logger.info("Logo fetched for %s", iata)
+            else:
+                self._logos[iata] = None
+                logger.debug("No logo for %s: HTTP %d", iata, resp.status_code)
+        except Exception as exc:
+            self._logos[iata] = None
+            logger.debug("Logo fetch failed for %s: %s", iata, exc)
 
     # ── Rendering ──────────────────────────────────────────────────────────────
 
@@ -329,6 +390,24 @@ class FlightsApp(DisplayApp):
         inner_w = w - 2 * pad
         inner_h = h - 2 * pad
 
+        # Logo: square, full inner height; only shown when enough room remains for text
+        operator_iata = enriched.get("operator_iata", "")
+        raw_logo = self._logos.get(operator_iata) if operator_iata else None
+        logo_size = inner_h
+        logo_gap = 3
+        min_text_w = 30
+        show_logo = raw_logo is not None and (inner_w - logo_size - logo_gap) >= min_text_w
+        if show_logo:
+            resized = raw_logo.resize((logo_size, logo_size), Image.LANCZOS)
+            bg = Image.new("RGB", resized.size, (0, 0, 0))
+            bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+            img.paste(bg, (pad, pad))
+            text_x = pad + logo_size + logo_gap
+            text_w = inner_w - logo_size - logo_gap
+        else:
+            text_x = pad
+            text_w = inner_w
+
         font_size = max(8, inner_h // 3 - 1)
         font = load_font(font_size)
 
@@ -341,7 +420,7 @@ class FlightsApp(DisplayApp):
 
         airline = enriched.get("airline", "")
         line1 = f"{flight['callsign']} {airline}" if airline else flight["callsign"]
-        line1 = _clip_text(draw, line1, font, inner_w)
+        line1 = _clip_text(draw, line1, font, text_w)
 
         origin = enriched.get("origin", "")
         dest = enriched.get("dest", "")
@@ -361,7 +440,7 @@ class FlightsApp(DisplayApp):
             line3 = "---"
 
         for i, line in enumerate((line1, line2, line3)):
-            draw.text((pad, y0 + i * row_h), line, font=font, fill=text_color)
+            draw.text((text_x, y0 + i * row_h), line, font=font, fill=text_color)
 
         blit(self.canvas, img)
 
