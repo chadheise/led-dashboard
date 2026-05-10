@@ -13,7 +13,7 @@ interface SchemaProperty {
   /** For arrays: item type + optional enum for multi-select */
   items?: { type: string; enum?: string[] }
   /** For compound object types (e.g. location) */
-  properties?: Record<string, { type: string; default?: unknown }>
+  properties?: Record<string, { type: string; default?: unknown; minimum?: number; maximum?: number }>
   /**
    * Custom input type — overrides default rendering.
    *
@@ -27,6 +27,9 @@ interface SchemaProperty {
    *   'multi-select' Checkbox group built from items.enum
    */
   'x-input-type'?: string
+  /** Restrict the radius slider on location inputs (km). Takes precedence over radius_km.minimum/maximum. */
+  'x-radius-min'?: number
+  'x-radius-max'?: number
 }
 
 interface Schema {
@@ -169,16 +172,18 @@ export default function AppForm({ schema, value, onChange }: Props) {
         }
 
         if (xType === 'location') {
-          const radiusProp = prop.properties?.['radius_km'] as { minimum?: number; maximum?: number } | undefined
+          const radiusProp = prop.properties?.['radius_km']
           const showRadius = !!radiusProp
+          const radiusMin = prop['x-radius-min'] ?? radiusProp?.minimum ?? 1
+          const radiusMax = prop['x-radius-max'] ?? radiusProp?.maximum ?? 500
           return (
             <LocationMapInput
               key={key}
               title={title}
               value={v}
               showRadius={showRadius}
-              radiusMin={radiusProp?.minimum ?? 1}
-              radiusMax={radiusProp?.maximum ?? 500}
+              radiusMin={radiusMin}
+              radiusMax={radiusMax}
               onChange={loc => onChange({ ...value, [key]: loc })}
             />
           )

@@ -97,6 +97,8 @@ class FlightsApp(DisplayApp):
                 "type": "object",
                 "title": "Location",
                 "x-input-type": "location",
+                "x-radius-min": 1,
+                "x-radius-max": 100,
                 "default": {"latitude": 0.0, "longitude": 0.0, "radius_km": 50.0},
                 "properties": {
                     "latitude": {"type": "number", "default": 0.0},
@@ -106,7 +108,7 @@ class FlightsApp(DisplayApp):
                         "title": "Radius (km)",
                         "default": 50.0,
                         "minimum": 1,
-                        "maximum": 500,
+                        "maximum": 100,
                     },
                 },
             },
