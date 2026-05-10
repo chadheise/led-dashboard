@@ -97,11 +97,6 @@ class FlightsApp(DisplayApp):
                 "default": 30,
                 "minimum": 10,
             },
-            "scene_duration": {
-                "type": "number",
-                "title": "Scene duration (s)",
-                "default": 45,
-            },
         },
         "required": ["location"],
     }

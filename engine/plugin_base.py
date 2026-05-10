@@ -31,10 +31,6 @@ class DisplayApp(ABC):
     def refresh_interval(self) -> float:
         return float(self.config.get("refresh_interval", 60.0))
 
-    @property
-    def scene_duration(self) -> float:
-        return float(self.config.get("scene_duration", 30.0))
-
     @abstractmethod
     async def fetch_data(self) -> None: ...
 
