@@ -91,25 +91,23 @@ def _bitmap_text_img(
     text: str,
     color: tuple[int, int, int],
     target_h: int,
+    fixed_h: int | None = None,
 ) -> Image.Image:
     """Render text at *target_h* pixels tall with every pixel fully on or off.
 
-    Two strategies are used depending on height:
+    If *fixed_h* is given the output image is forced to exactly that height:
+    shorter glyphs are embedded centred in a black canvas, taller ones are
+    cropped from the centre.  Pass the cap-height of a representative "A" as
+    fixed_h so that symbols like "$" (which have a taller glyph box) align
+    with letters and every element in a row shares an identical image height.
 
-    **Small (≤ base font height)**
-        Rendered into a 1-bit canvas so Pillow produces no antialiasing
-        regardless of the underlying font engine.  The tiny glyph is the
-        most legible representation at that scale.
-
-    **Larger sizes**
-        FreeType renders the glyph at the exact target height in grayscale,
-        preserving proper letterform shapes (curves, proportional strokes).
-        A threshold then converts every grey value to fully on or fully off.
-        This gives correctly shaped text at any size — not blocky up-scaling —
-        while keeping all pixels binary, as required by a real LED panel.
+    Two rendering strategies based on height:
+    - Small (≤ base): 1-bit canvas → fully binary pixels, no antialiasing.
+    - Larger: FreeType grayscale → threshold → binary with proper letterforms.
     """
     if not text:
-        return Image.new("RGB", (1, max(1, target_h)))
+        h = fixed_h if fixed_h else max(1, target_h)
+        return Image.new("RGB", (1, h))
 
     if target_h <= _BASE_FONT_H:
         # ── 1-bit bitmap rendering ────────────────────────────────────────
@@ -122,37 +120,50 @@ def _bitmap_text_img(
         ImageDraw.Draw(mono).text((-bbox[0], -bbox[1]), text, font=_BASE_FONT, fill=1)
         rgb = Image.new("RGB", (gw, gh), (0, 0, 0))
         rgb.putdata([(color if p else (0, 0, 0)) for p in mono.getdata()])
-        return rgb
+    else:
+        # ── FreeType → grayscale → threshold ─────────────────────────────
+        try:
+            font = ImageFont.load_default(size=target_h)
+        except TypeError:
+            # Pillow < 10.1 fallback: scale base bitmap with NEAREST
+            scale = max(1, round(target_h / _BASE_FONT_H))
+            bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox(
+                (0, 0), text, font=_BASE_FONT
+            )
+            gw = max(1, bbox[2] - bbox[0])
+            gh = max(1, bbox[3] - bbox[1])
+            mono = Image.new("1", (gw, gh), 0)
+            ImageDraw.Draw(mono).text((-bbox[0], -bbox[1]), text, font=_BASE_FONT, fill=1)
+            rgb = Image.new("RGB", (gw, gh), (0, 0, 0))
+            rgb.putdata([(color if p else (0, 0, 0)) for p in mono.getdata()])
+            rgb = rgb.resize((gw * scale, gh * scale), Image.NEAREST)
+        else:
+            bbox = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox(
+                (0, 0), text, font=font
+            )
+            gw = max(1, bbox[2] - bbox[0])
+            gh = max(1, bbox[3] - bbox[1])
+            gray = Image.new("L", (gw, gh), 0)
+            ImageDraw.Draw(gray).text((-bbox[0], -bbox[1]), text, font=font, fill=255)
+            rgb = Image.new("RGB", (gw, gh), (0, 0, 0))
+            rgb.putdata(
+                [(color if p >= _THRESHOLD else (0, 0, 0)) for p in gray.getdata()]
+            )
 
-    # ── FreeType → grayscale → threshold ─────────────────────────────────
-    try:
-        font = ImageFont.load_default(size=target_h)
-    except TypeError:
-        # Pillow < 10.1 fallback: scale the base bitmap font with NEAREST
-        scale = max(1, round(target_h / _BASE_FONT_H))
-        bbox = ImageDraw.Draw(Image.new("1", (1, 1))).textbbox(
-            (0, 0), text, font=_BASE_FONT
-        )
-        gw = max(1, bbox[2] - bbox[0])
-        gh = max(1, bbox[3] - bbox[1])
-        mono = Image.new("1", (gw, gh), 0)
-        ImageDraw.Draw(mono).text((-bbox[0], -bbox[1]), text, font=_BASE_FONT, fill=1)
-        rgb = Image.new("RGB", (gw, gh), (0, 0, 0))
-        rgb.putdata([(color if p else (0, 0, 0)) for p in mono.getdata()])
-        return rgb.resize((gw * scale, gh * scale), Image.NEAREST)
+    # ── Force a fixed output height if requested ──────────────────────────
+    if fixed_h is not None and rgb.height != fixed_h:
+        if rgb.height > fixed_h:
+            # Scale DOWN proportionally. NEAREST resampling samples one source
+            # pixel per destination pixel so binary values are preserved — no
+            # blending, no antialiasing introduced.
+            new_w = max(1, round(rgb.width * fixed_h / rgb.height))
+            rgb = rgb.resize((new_w, fixed_h), Image.NEAREST)
+        else:
+            # Glyph shorter than slot — embed centred in a black canvas.
+            canvas = Image.new("RGB", (rgb.width, fixed_h), (0, 0, 0))
+            canvas.paste(rgb, (0, (fixed_h - rgb.height) // 2))
+            rgb = canvas
 
-    # Render into a grayscale image to capture the full letterform
-    bbox = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
-    gw = max(1, bbox[2] - bbox[0])
-    gh = max(1, bbox[3] - bbox[1])
-    gray = Image.new("L", (gw, gh), 0)
-    ImageDraw.Draw(gray).text((-bbox[0], -bbox[1]), text, font=font, fill=255)
-
-    # Quantize to binary: coverage ≥ threshold → on, otherwise → off
-    rgb = Image.new("RGB", (gw, gh), (0, 0, 0))
-    rgb.putdata(
-        [(color if p >= _THRESHOLD else (0, 0, 0)) for p in gray.getdata()]
-    )
     return rgb
 
 
@@ -403,8 +414,8 @@ class StocksApp(DisplayApp):
         # 1-bit bitmap for small sizes, FreeType-then-threshold for larger ones.
         text_h = max(_BASE_FONT_H, round(row_h * 0.65))
 
-        # Arrow is a filled triangle drawn at the same height as the text.
-        arrow_size = max(4, text_h - 2)
+        # Arrow drawn at the same height as the text so all elements are uniform.
+        arrow_size = text_h
 
         # Icon slot matches text height; suppress for very small rows.
         icon_size = text_h if (show_icons and text_h >= 12) else 0
@@ -424,79 +435,96 @@ class StocksApp(DisplayApp):
         if not self._quotes:
             return
         layout = self._compute_layout()
-        self._marquee_pct    = self._render_marquee(layout, show_pct=True)
-        self._marquee_dollar = self._render_marquee(layout, show_pct=False)
-        self._marquee_w      = self._marquee_pct.width if self._marquee_pct else 0
+        self._marquee_pct, self._marquee_dollar = self._render_both_marquees(layout)
+        self._marquee_w = self._marquee_pct.width if self._marquee_pct else 0
         self._page_cache.clear()
 
-    def _format_entry(
-        self, q: dict[str, Any], show_pct: bool
-    ) -> tuple[str, str, bool]:
-        """Return (symbol_str, change_str, is_up) — no Unicode arrow in the strings."""
-        up   = q["change_pct"] >= 0
-        sign = "+" if up else ""
+    def _format_change(self, q: dict[str, Any], show_pct: bool) -> str:
+        """Return just the change string (no arrow, no +/-) for one mode."""
         if show_pct:
-            change = f"{sign}{q['change_pct']:.1f}%"
-        else:
-            ds     = "+" if q["dollar_change"] >= 0 else ""
-            change = f"${q['price']:.2f} {ds}{q['dollar_change']:.2f}"
-        return q["symbol"], change, up
+            return f"{abs(q['change_pct']):.1f}%"
+        return f"${abs(q['dollar_change']):.2f}"
 
-    def _render_marquee(self, layout: dict, show_pct: bool) -> Image.Image | None:
-        """Build the wide PIL image for horizontal scrolling."""
+    def _render_both_marquees(
+        self, layout: dict
+    ) -> tuple[Image.Image | None, Image.Image | None]:
+        """Build both marquee images (pct mode and dollar mode) in one pass.
+
+        Both images share identical total widths and element positions.
+        Each entry's change-value slot is fixed to max(pct_w, dollar_w) so
+        the images are truly interchangeable at any scroll offset — switching
+        between them shows only the change value updating in place with no
+        jump or jitter.
+        """
         if not self._quotes:
-            return None
+            return None, None
 
-        text_h     = layout["text_h"]
-        arr_sz     = layout["arrow_size"]
-        icon_size  = layout["icon_size"]
-        h          = self.canvas.height
-        gap        = max(2, text_h // 5)  # gap between adjacent elements
-        spacer     = max(10, text_h * 2)  # gap between stock entries
+        text_h    = layout["text_h"]
+        icon_size = layout["icon_size"]
+        h         = self.canvas.height
+        gap       = max(2, text_h // 5)
+        spacer    = max(10, text_h * 2)
 
-        # Pre-render images for every element and sum widths
+        # Use "A$%" so the $ fits at its natural height — shorter glyphs are
+        # centred in padding, taller ones are scaled down, nothing is cropped.
+        cap_h = _bitmap_text_img("A$%", _COLOR_SYM, text_h).height
+
+        def vc(item_h: int) -> int:
+            return (h - item_h) // 2
+
+        # Pre-render every element for both modes, fixing heights to cap_h
         entries: list[dict[str, Any]] = []
         total_w = 0
         for q in self._quotes:
-            sym, chg, up = self._format_entry(q, show_pct)
+            up    = q["change_pct"] >= 0
             color = _quote_color(q["change_pct"])
-            sym_img = _bitmap_text_img(sym + " ", _COLOR_SYM, text_h)
-            chg_img = _bitmap_text_img(chg,       color,      text_h)
-            arr_img = _arrow_img(up, arr_sz, color)
-            logo    = self._logos.get(q["symbol"]) if icon_size > 0 else None
-            icon_w  = icon_size + gap if logo is not None else 0
-            entry_w = icon_w + sym_img.width + arr_img.width + gap + chg_img.width + spacer
+
+            sym_img = _bitmap_text_img(q["symbol"] + " ",             _COLOR_SYM, text_h, fixed_h=cap_h)
+            prc_img = _bitmap_text_img(f"${q['price']:.2f} ",         color,       text_h, fixed_h=cap_h)
+            arr_img = _arrow_img(up, cap_h, color)
+
+            chg_pct_img = _bitmap_text_img(self._format_change(q, True),  color, text_h, fixed_h=cap_h)
+            chg_dol_img = _bitmap_text_img(self._format_change(q, False), color, text_h, fixed_h=cap_h)
+            chg_slot_w  = max(chg_pct_img.width, chg_dol_img.width)  # fixed slot width
+
+            logo   = self._logos.get(q["symbol"]) if icon_size > 0 else None
+            icon_w = icon_size + gap if logo is not None else 0
+            entry_w = icon_w + sym_img.width + prc_img.width + arr_img.width + gap + chg_slot_w + spacer
+
             entries.append({
-                "q": q, "sym_img": sym_img, "chg_img": chg_img,
-                "arr_img": arr_img, "logo": logo, "icon_w": icon_w, "entry_w": entry_w,
+                "q": q, "sym_img": sym_img, "prc_img": prc_img, "arr_img": arr_img,
+                "chg_pct_img": chg_pct_img, "chg_dol_img": chg_dol_img,
+                "chg_slot_w": chg_slot_w, "logo": logo, "icon_w": icon_w,
             })
             total_w += entry_w
 
         if total_w <= 0:
-            return None
+            return None, None
 
-        img = Image.new("RGB", (total_w, h), (0, 0, 0))
-        x   = 0
-
-        def vc(item_h: int) -> int:  # vertically centre in full canvas height
-            return (h - item_h) // 2
+        img_pct = Image.new("RGB", (total_w, h), (0, 0, 0))
+        img_dol = Image.new("RGB", (total_w, h), (0, 0, 0))
+        x = 0
 
         for e in entries:
-            if e["logo"] is not None and icon_size > 0:
-                resized = e["logo"].resize((icon_size, icon_size), Image.LANCZOS)
-                _composite_icon(img, resized, x, vc(icon_size))
-                x += icon_size + gap
+            # Common elements drawn identically into both images
+            for img in (img_pct, img_dol):
+                ex = x
+                if e["logo"] is not None and icon_size > 0:
+                    resized = e["logo"].resize((icon_size, icon_size), Image.LANCZOS)
+                    _composite_icon(img, resized, ex, vc(icon_size))
+                    ex += icon_size + gap
+                img.paste(e["sym_img"], (ex, vc(cap_h))); ex += e["sym_img"].width
+                img.paste(e["prc_img"], (ex, vc(cap_h))); ex += e["prc_img"].width
+                img.paste(e["arr_img"], (ex, vc(cap_h))); ex += e["arr_img"].width + gap
 
-            img.paste(e["sym_img"], (x, vc(text_h)))
-            x += e["sym_img"].width
+            # Change value — left-aligned within the fixed-width slot
+            chg_x = x + e["icon_w"] + e["sym_img"].width + e["prc_img"].width + e["arr_img"].width + gap
+            img_pct.paste(e["chg_pct_img"], (chg_x, vc(cap_h)))
+            img_dol.paste(e["chg_dol_img"], (chg_x, vc(cap_h)))
 
-            img.paste(e["arr_img"], (x, vc(arr_sz)))
-            x += e["arr_img"].width + gap
+            x += e["icon_w"] + e["sym_img"].width + e["prc_img"].width + e["arr_img"].width + gap + e["chg_slot_w"] + spacer
 
-            img.paste(e["chg_img"], (x, vc(text_h)))
-            x += e["chg_img"].width + spacer
-
-        return img
+        return img_pct, img_dol
 
     def _build_page_image(self, layout: dict, show_pct: bool, page: int) -> Image.Image:
         """Build a canvas-sized image for one paginate page."""
@@ -515,11 +543,13 @@ class StocksApp(DisplayApp):
             row_top = i * row_h
             x       = 2
 
-            sym, chg, up = self._format_entry(q, show_pct)
-            color = _quote_color(q["change_pct"])
-            sym_img = _bitmap_text_img(sym + " ", _COLOR_SYM, text_h)
-            chg_img = _bitmap_text_img(chg,       color,      text_h)
-            arr_img = _arrow_img(up, arr_sz, color)
+            up      = q["change_pct"] >= 0
+            color   = _quote_color(q["change_pct"])
+            cap_h   = _bitmap_text_img("A$%", _COLOR_SYM, text_h).height
+            sym_img = _bitmap_text_img(q["symbol"] + " ",              _COLOR_SYM, text_h, fixed_h=cap_h)
+            prc_img = _bitmap_text_img(f"${q['price']:.2f} ",          color,       text_h, fixed_h=cap_h)
+            chg_img = _bitmap_text_img(self._format_change(q, show_pct), color,    text_h, fixed_h=cap_h)
+            arr_img = _arrow_img(up, cap_h, color)
 
             def vc(item_h: int) -> int:  # vertically centre in this row
                 return row_top + (row_h - item_h) // 2
@@ -530,14 +560,17 @@ class StocksApp(DisplayApp):
                 _composite_icon(img, resized, x, vc(icon_size))
                 x += icon_size + gap
 
-            img.paste(sym_img, (x, vc(text_h)))
+            img.paste(sym_img, (x, vc(cap_h)))
             x += sym_img.width
 
-            img.paste(arr_img, (x, vc(arr_sz)))
+            img.paste(prc_img, (x, vc(cap_h)))
+            x += prc_img.width
+
+            img.paste(arr_img, (x, vc(cap_h)))
             x += arr_img.width + gap
 
             if x + chg_img.width <= w:   # clip if it doesn't fit
-                img.paste(chg_img, (x, vc(text_h)))
+                img.paste(chg_img, (x, vc(cap_h)))
 
         return img
 
