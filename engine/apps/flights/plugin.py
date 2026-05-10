@@ -123,11 +123,17 @@ class FlightsApp(DisplayApp):
                 "enum": ["cards", "table"],
                 "default": "cards",
             },
-            "cycle_seconds": {
+            "min_card_seconds": {
                 "type": "number",
-                "title": "Seconds per flight card",
-                "default": 3.0,
-                "minimum": 0.5,
+                "title": "Minimum seconds per card",
+                "default": 5.0,
+                "minimum": 1.0,
+            },
+            "max_card_seconds": {
+                "type": "number",
+                "title": "Maximum seconds per card",
+                "default": 30.0,
+                "minimum": 1.0,
             },
             "text_color": {
                 "type": "string",
@@ -197,10 +203,17 @@ class FlightsApp(DisplayApp):
         )
         max_flights = int(self.config.get("max_flights", 10))
 
+        now = time.monotonic()
+        min_card_s = float(self.config.get("min_card_seconds", 5.0))
         self._flights = await self._opensky.fetch_flights(lat, lon, radius_km, max_flights)
-        self._card_idx = 0
-        self._card_last_ts = time.monotonic()
         self._fetched_once = True
+
+        elapsed = now - self._card_last_ts
+        if elapsed >= min_card_s or not self._flights:
+            self._card_idx = 0
+            self._card_last_ts = now
+        else:
+            self._card_idx = min(self._card_idx, len(self._flights) - 1)
 
         callsigns = [f["callsign"] for f in self._flights]
         self._enriched = await self._flightaware.enrich_flights(callsigns)
@@ -237,8 +250,8 @@ class FlightsApp(DisplayApp):
 
     def _draw_card(self) -> None:
         now = time.monotonic()
-        cycle_seconds = float(self.config.get("cycle_seconds", 3.0))
-        if now - self._card_last_ts >= cycle_seconds:
+        max_card_s = float(self.config.get("max_card_seconds", 30.0))
+        if now - self._card_last_ts >= max_card_s:
             self._card_idx = (self._card_idx + 1) % len(self._flights)
             self._card_last_ts = now
 

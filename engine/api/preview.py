@@ -85,13 +85,16 @@ class PreviewManager:
         app_id: str,
         config: dict[str, Any],
         registry: dict[str, type[DisplayApp]],
+        *,
+        global_config: dict[str, Any] | None = None,
+        library_configs: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         await self.stop()
         self._paused = False  # always start playing
         cls = registry.get(app_id)
         if cls is None:
             raise ValueError(f"Unknown plugin id: {app_id!r}")
-        plugin = cls(config, self._canvas)
+        plugin = cls(config, self._canvas, global_config, library_configs)
         await plugin.on_activate()
         # Kick off a single fetch in the background so data arrives quickly
         self._fetch_task = asyncio.create_task(self._fetch_once(plugin))

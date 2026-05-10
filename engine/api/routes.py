@@ -43,8 +43,15 @@ class PlaylistBody(BaseModel):
 async def start_preview(request: Request, body: PreviewBody) -> dict[str, Any]:
     from apps import APP_REGISTRY
 
+    store = request.app.state.store
     _require_app(body.app_id)
-    await request.app.state.preview_manager.start(body.app_id, body.config, APP_REGISTRY)
+    await request.app.state.preview_manager.start(
+        body.app_id,
+        body.config,
+        APP_REGISTRY,
+        global_config=store.get_app_config(body.app_id),
+        library_configs=dict(store.state.library_configs),
+    )
     return {"ok": True}
 
 
