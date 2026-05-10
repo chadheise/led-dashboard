@@ -6,7 +6,8 @@ from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
-from apps._helpers import blit, load_font, parse_color
+from libraries.canvas_utils.library import blit, parse_color
+from libraries.text_renderer.library import load_font
 
 
 class TextApp(DisplayApp):
@@ -37,8 +38,8 @@ class TextApp(DisplayApp):
         "required": ["message"],
     }
 
-    def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None) -> None:
-        super().__init__(config, canvas, global_config)
+    def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None, library_configs: dict[str, dict[str, Any]] | None = None) -> None:
+        super().__init__(config, canvas, global_config, library_configs)
         self._offset = 0
         self._rendered: Image.Image | None = None
         self._text_w = 0

@@ -4,6 +4,7 @@ import { C } from '../theme'
 const S = { width: 28, height: 28, display: 'block' as const }
 
 const ICONS: Record<string, React.ReactElement> = {
+  // ── App icons ───────────────────────────────────────────────────────────────
   text: (
     <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
       <line x1={3} y1={6} x2={21} y2={6} /><line x1={3} y1={10} x2={16} y2={10} />
@@ -25,6 +26,39 @@ const ICONS: Record<string, React.ReactElement> = {
   flights: (
     <svg {...S} viewBox="0 0 24 24" fill="currentColor">
       <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 00-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+    </svg>
+  ),
+
+  // ── Library icons ───────────────────────────────────────────────────────────
+  canvas_utils: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect x={3} y={3} width={18} height={18} rx={2} /><path d="M3 9h18M9 21V9" />
+    </svg>
+  ),
+  text_renderer: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="4 7 4 4 20 4 20 7" /><line x1={9} y1={20} x2={15} y2={20} /><line x1={12} y1={4} x2={12} y2={20} />
+    </svg>
+  ),
+  yahoo_finance: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="3,18 8,11 13,14 20,5" /><polyline points="16,5 20,5 20,9" />
+    </svg>
+  ),
+  espn_sports: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx={12} cy={12} r={10} /><path d="M12 8v4l3 3" />
+    </svg>
+  ),
+  opensky: (
+    <svg {...S} viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 00-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+    </svg>
+  ),
+  flightaware: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx={12} cy={12} r={10} /><line x1={2} y1={12} x2={22} y2={12} />
+      <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
     </svg>
   ),
 }

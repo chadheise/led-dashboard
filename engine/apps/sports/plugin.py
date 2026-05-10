@@ -1,22 +1,14 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any, ClassVar
 
-import httpx
 from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
-from apps._helpers import blit, load_font
-
-
-_SPORT_MAP: dict[str, str] = {
-    "nfl": "football",
-    "nba": "basketball",
-    "mlb": "baseball",
-    "nhl": "hockey",
-}
+from libraries.canvas_utils.library import blit
+from libraries.text_renderer.library import load_font
+from libraries.espn_sports.library import ESPNSportsLibrary
 
 
 class SportsApp(DisplayApp):
@@ -24,6 +16,7 @@ class SportsApp(DisplayApp):
     name: ClassVar[str] = "Sports Scores"
     description: ClassVar[str] = "Live scores from the ESPN API — NFL, NBA, MLB, and NHL, rotating through active games"
     icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v8a5 5 0 0010 0V3H7z"/><path d="M7 6H5a1.5 1.5 0 000 3h2"/><path d="M17 6h2a1.5 1.5 0 010 3h-2"/><line x1="12" y1="16" x2="12" y2="20"/><line x1="9" y1="20" x2="15" y2="20"/></svg>'
+    libraries: ClassVar[list[str]] = ["espn_sports"]
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Sports Scores",
@@ -56,8 +49,15 @@ class SportsApp(DisplayApp):
         "required": ["leagues"],
     }
 
-    def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None) -> None:
-        super().__init__(config, canvas, global_config)
+    def __init__(
+        self,
+        config: dict[str, Any],
+        canvas: Canvas,
+        global_config: dict[str, Any] | None = None,
+        library_configs: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(config, canvas, global_config, library_configs)
+        self._espn = ESPNSportsLibrary(self.library_configs.get("espn_sports", {}))
         self._games: list[dict[str, Any]] = []
         self._game_idx = 0
         self._frame_count = 0
@@ -69,53 +69,9 @@ class SportsApp(DisplayApp):
         return list(raw) if raw else ["nfl"]
 
     async def fetch_data(self) -> None:
-        leagues = self._get_leagues()
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            results = await asyncio.gather(
-                *[self._fetch_league(client, lg) for lg in leagues],
-                return_exceptions=True,
-            )
-        all_games: list[dict[str, Any]] = []
-        for result in results:
-            if isinstance(result, list):
-                all_games.extend(result)
-        if all_games:
-            self._games = all_games
-
-    async def _fetch_league(
-        self, client: httpx.AsyncClient, league: str
-    ) -> list[dict[str, Any]]:
-        sport = _SPORT_MAP.get(league, "football")
-        url = f"https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard"
-        try:
-            resp = await client.get(url)
-            data = resp.json()
-        except Exception:
-            return []
-        games: list[dict[str, Any]] = []
-        for event in data.get("events", []):
-            comp = event.get("competitions", [{}])[0]
-            competitors = comp.get("competitors", [])
-            if len(competitors) < 2:
-                continue
-            home = next(
-                (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
-            )
-            away = next(
-                (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
-            )
-            status_type = event.get("status", {}).get("type", {})
-            games.append(
-                {
-                    "home_abbr": home.get("team", {}).get("abbreviation", "???"),
-                    "away_abbr": away.get("team", {}).get("abbreviation", "???"),
-                    "home_score": home.get("score", "-"),
-                    "away_score": away.get("score", "-"),
-                    "status": status_type.get("shortDetail", "Scheduled"),
-                    "state": status_type.get("state", "pre"),
-                }
-            )
-        return games
+        games = await self._espn.fetch_scores(self._get_leagues())
+        if games:
+            self._games = games
 
     async def on_activate(self) -> None:
         self._game_idx = 0
@@ -141,7 +97,6 @@ class SportsApp(DisplayApp):
         score_font = load_font(24)
         label_font = load_font(12)
 
-        # Away team left, home team right, status bottom center
         away_text = f"{game['away_abbr']}  {game['away_score']}"
         home_text = f"{game['home_score']}  {game['home_abbr']}"
         vs_text = "—"
@@ -156,7 +111,6 @@ class SportsApp(DisplayApp):
             try:
                 draw.text(xy, text, font=font, fill=(200, 200, 200), anchor=anchor)
             except TypeError:
-                # anchor not supported by bitmap fonts — fall back to manual position
                 bbox = draw.textbbox((0, 0), text, font=font)
                 tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 fx = {"l": xy[0], "m": xy[0] - tw // 2, "r": xy[0] - tw}[anchor[0]]

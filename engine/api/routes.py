@@ -77,9 +77,47 @@ def list_apps(request: Request) -> list[dict[str, Any]]:
             "schema": cls.config_schema,
             "global_config_schema": cls.global_config_schema,
             "global_config": store.get_app_config(cls.id),
+            "libraries": cls.libraries,
         }
         for cls in APP_REGISTRY.values()
     ]
+
+
+# ── Library catalog ────────────────────────────────────────────────────────────
+
+
+@router.get("/libraries")
+def list_libraries(request: Request) -> list[dict[str, Any]]:
+    from libraries import LIBRARY_REGISTRY
+
+    store = request.app.state.store
+    return [
+        {
+            "id": cls.id,
+            "name": cls.name,
+            "description": cls.description,
+            "icon": cls.icon,
+            "global_config_schema": cls.global_config_schema,
+            "global_config": store.get_library_config(cls.id),
+        }
+        for cls in LIBRARY_REGISTRY.values()
+    ]
+
+
+@router.get("/libraries/{lib_id}/config")
+def get_library_config(request: Request, lib_id: str) -> dict[str, Any]:
+    _require_library(lib_id)
+    return request.app.state.store.get_library_config(lib_id)
+
+
+@router.put("/libraries/{lib_id}/config")
+async def save_library_config(
+    request: Request, lib_id: str, body: AppConfigBody
+) -> dict[str, Any]:
+    _require_library(lib_id)
+    request.app.state.store.save_library_config(lib_id, body.config)
+    await _maybe_reload(request)
+    return body.config
 
 
 class AppConfigBody(BaseModel):
@@ -276,6 +314,13 @@ def _require_app(app_id: str) -> None:
         raise HTTPException(422, f"Unknown app id: {app_id!r}")
 
 
+def _require_library(lib_id: str) -> None:
+    from libraries import LIBRARY_REGISTRY
+
+    if lib_id not in LIBRARY_REGISTRY:
+        raise HTTPException(422, f"Unknown library id: {lib_id!r}")
+
+
 async def _reload_scene_manager(
     request: Request, playlist_id: str | None = None
 ) -> None:
@@ -288,6 +333,7 @@ async def _reload_scene_manager(
             config=e["config"],
             duration=e["duration"],
             global_config=e.get("global_config", {}),
+            library_configs=e.get("library_configs", {}),
         )
         for e in resolved
     ]

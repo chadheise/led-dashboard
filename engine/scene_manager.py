@@ -19,6 +19,7 @@ class PlaylistEntry:
     config: dict[str, Any]
     duration: float = 30.0
     global_config: dict[str, Any] = field(default_factory=dict)
+    library_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
     entry_id: str = field(default_factory=lambda: str(uuid4()))
 
 
@@ -47,7 +48,9 @@ class SceneManager:
             cls = self._registry.get(entry.app_id)
             if cls is None:
                 raise ValueError(f"Unknown app id: {entry.app_id!r}")
-            self._apps.append(cls(entry.config, self._canvas, entry.global_config))
+            self._apps.append(
+                cls(entry.config, self._canvas, entry.global_config, entry.library_configs)
+            )
 
         self._current_idx = 0
         self._last_switch = time.monotonic()

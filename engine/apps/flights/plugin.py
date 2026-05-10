@@ -2,30 +2,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
-from io import BytesIO
 from typing import Any, ClassVar
 
-import httpx
 from PIL import Image, ImageDraw
 
 logger = logging.getLogger(__name__)
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
-from apps._helpers import blit, load_font, parse_color
-
-
-_OPENSKY_TOKEN_URL = (
-    "https://auth.opensky-network.org/auth/realms/opensky-network"
-    "/protocol/openid-connect/token"
-)
-_FLIGHTAWARE_BASE = "https://aeroapi.flightaware.com/aeroapi"
-
-
-def _km_to_deg(km: float) -> float:
-    return km / 111.0
+from libraries.canvas_utils.library import blit, parse_color
+from libraries.text_renderer.library import load_font
+from libraries.opensky.library import OpenSkyLibrary
+from libraries.flightaware.library import FlightAwareLibrary
 
 
 def _clip_text(draw: ImageDraw.ImageDraw, text: str, font: Any, max_w: int) -> str:
@@ -49,29 +38,8 @@ class FlightsApp(DisplayApp):
         '<path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 00-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22'
         "l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z\"/></svg>"
     )
-
-    global_config_schema: ClassVar[dict[str, Any]] = {
-        "type": "object",
-        "title": "Flights — Global Settings",
-        "properties": {
-            "opensky_client_id": {
-                "type": "string",
-                "title": "OpenSky Client ID (optional)",
-                "default": "",
-            },
-            "opensky_client_secret": {
-                "type": "string",
-                "title": "OpenSky Client Secret (optional)",
-                "default": "",
-            },
-            "flightaware_api_key": {
-                "type": "string",
-                "title": "FlightAware AeroAPI Key (optional)",
-                "default": "",
-            },
-        },
-    }
-
+    libraries: ClassVar[list[str]] = ["opensky", "flightaware"]
+    global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Flights",
@@ -143,62 +111,22 @@ class FlightsApp(DisplayApp):
         config: dict[str, Any],
         canvas: Canvas,
         global_config: dict[str, Any] | None = None,
+        library_configs: dict[str, dict[str, Any]] | None = None,
     ) -> None:
-        super().__init__(config, canvas, global_config)
+        super().__init__(config, canvas, global_config, library_configs)
+        self._opensky = OpenSkyLibrary(self.library_configs.get("opensky", {}))
+        self._flightaware = FlightAwareLibrary(self.library_configs.get("flightaware", {}))
         self._flights: list[dict[str, Any]] = []
         self._enriched: dict[str, dict[str, Any]] = {}
-        self._logos: dict[str, Image.Image | None] = {}   # keyed by IATA airline code
+        self._logos: dict[str, Image.Image | None] = {}
         self._logos_fetched: set[str] = set()
         self._fetched_once: bool = False
         self._card_idx: int = 0
         self._card_last_ts: float = 0.0
-        self._opensky_token: str | None = None
-        self._opensky_token_expiry: float = 0.0
-
-    # ── Token management ───────────────────────────────────────────────────────
-
-    async def _get_opensky_token(self) -> str | None:
-        client_id = self.global_config.get("opensky_client_id", "").strip()
-        client_secret = self.global_config.get("opensky_client_secret", "").strip()
-        if not client_id or not client_secret:
-            return None
-
-        now = time.monotonic()
-        if self._opensky_token and now < self._opensky_token_expiry - 60:
-            return self._opensky_token
-
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    _OPENSKY_TOKEN_URL,
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                    },
-                )
-            data = resp.json()
-            token = data.get("access_token")
-            expires_in = int(data.get("expires_in", 300))
-            if token:
-                self._opensky_token = token
-                self._opensky_token_expiry = now + expires_in
-                return token
-        except Exception:
-            pass
-
-        self._opensky_token = None
-        return None
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
     async def fetch_data(self) -> None:
-        self._enriched = {}
-        await self._fetch_flights()
-        await self._enrich_flights()
-        await self._fetch_logos()
-
-    async def _fetch_flights(self) -> None:
         loc = self.config.get("location", {})
         lat = float(loc.get("latitude", 0.0) if isinstance(loc, dict) else 0.0)
         lon = float(loc.get("longitude", 0.0) if isinstance(loc, dict) else 0.0)
@@ -207,123 +135,15 @@ class FlightsApp(DisplayApp):
             if isinstance(loc, dict) else self.config.get("radius_km", 50.0)
         )
         max_flights = int(self.config.get("max_flights", 10))
-        d = _km_to_deg(radius_km)
 
-        token = await self._get_opensky_token()
-        headers = {"Authorization": f"Bearer {token}"} if token else {}
-
-        params = {
-            "lamin": lat - d,
-            "lomin": lon - d,
-            "lamax": lat + d,
-            "lomax": lon + d,
-        }
-
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    "https://opensky-network.org/api/states/all",
-                    params=params,
-                    headers=headers,
-                )
-            data = resp.json()
-        except Exception as exc:
-            logger.warning("OpenSky fetch failed: %s", exc)
-            return
-
-        flights: list[dict[str, Any]] = []
-        for state in data.get("states") or []:
-            callsign = (state[1] or "").strip() or state[0] or "??????"
-            alt_m: float | None = state[7]
-            velocity: float | None = state[9]
-            heading: float | None = state[10]
-            f_lat: float | None = state[6]
-            f_lon: float | None = state[5]
-
-            alt_ft = round(alt_m * 3.281) if alt_m is not None else None
-            spd_kt = round(velocity * 1.944) if velocity is not None else None
-            dist_km = (
-                math.sqrt((f_lat - lat) ** 2 + (f_lon - lon) ** 2) * 111.0
-                if f_lat is not None and f_lon is not None
-                else None
-            )
-
-            flights.append({
-                "callsign": callsign[:8].upper(),
-                "alt_ft": alt_ft,
-                "spd_kt": spd_kt,
-                "heading": heading,
-                "dist_km": dist_km,
-            })
-
-        flights.sort(key=lambda f: f["dist_km"] if f["dist_km"] is not None else 9999)
-        self._flights = flights[:max_flights]
+        self._flights = await self._opensky.fetch_flights(lat, lon, radius_km, max_flights)
         self._card_idx = 0
         self._card_last_ts = time.monotonic()
         self._fetched_once = True
-        logger.info("OpenSky: %d flights in range (showing %d)", len(flights), len(self._flights))
 
-    async def _enrich_flights(self) -> None:
-        api_key = self.global_config.get("flightaware_api_key", "").strip()
-        if not api_key:
-            logger.debug("FlightAware: no API key configured, skipping enrichment")
-            return
-        if not self._flights:
-            return
-
-        logger.info("FlightAware: enriching %d flights", len(self._flights))
-        async with httpx.AsyncClient(
-            timeout=10.0,
-            headers={"x-apikey": api_key},
-        ) as client:
-            await asyncio.gather(
-                *[self._fetch_enrichment(client, f["callsign"]) for f in self._flights],
-                return_exceptions=True,
-            )
-        logger.info("FlightAware: enriched %d/%d flights", len(self._enriched), len(self._flights))
-
-    async def _fetch_enrichment(
-        self, client: httpx.AsyncClient, callsign: str
-    ) -> None:
-        try:
-            resp = await client.get(f"{_FLIGHTAWARE_BASE}/flights/{callsign}")
-            if resp.status_code != 200:
-                logger.warning(
-                    "FlightAware %s: HTTP %d — %s",
-                    callsign, resp.status_code, resp.text[:300],
-                )
-                return
-            data = resp.json()
-            flights_list = data.get("flights", [])
-            if not flights_list:
-                logger.debug("FlightAware %s: no flights in response", callsign)
-                return
-            flight = flights_list[0]
-
-            origin_obj = flight.get("origin") or {}
-            dest_obj = flight.get("destination") or {}
-            origin = origin_obj.get("code_iata") or origin_obj.get("code", "")
-            dest = dest_obj.get("code_iata") or dest_obj.get("code", "")
-            # AeroAPI: operator = ICAO code (e.g. "UAL"), operator_iata = 2-letter (e.g. "UA")
-            airline = flight.get("operator") or ""
-            operator_iata = flight.get("operator_iata") or ""
-            aircraft_type = flight.get("aircraft_type", "")
-
-            self._enriched[callsign] = {
-                "origin": origin.upper() if origin else "",
-                "dest": dest.upper() if dest else "",
-                "airline": airline,
-                "operator_iata": operator_iata.upper(),
-                "aircraft_type": aircraft_type,
-            }
-            logger.info(
-                "FlightAware %s: %s→%s %s(%s) %s",
-                callsign, origin, dest, airline, operator_iata, aircraft_type,
-            )
-        except Exception as exc:
-            logger.warning("FlightAware enrichment failed for %s: %s", callsign, exc)
-
-    # ── Logo fetching ──────────────────────────────────────────────────────────
+        callsigns = [f["callsign"] for f in self._flights]
+        self._enriched = await self._flightaware.enrich_flights(callsigns)
+        await self._fetch_logos()
 
     async def _fetch_logos(self) -> None:
         needed = {
@@ -331,29 +151,17 @@ class FlightsApp(DisplayApp):
             for e in self._enriched.values()
             if e.get("operator_iata")
         } - self._logos_fetched
+
         if not needed:
             return
-        async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
-            await asyncio.gather(
-                *[self._fetch_logo(client, code) for code in needed],
-                return_exceptions=True,
-            )
 
-    async def _fetch_logo(self, client: httpx.AsyncClient, iata: str) -> None:
-        self._logos_fetched.add(iata)
-        try:
-            resp = await client.get(
-                f"https://www.gstatic.com/flights/airline_logos/70px/{iata}.png"
-            )
-            if resp.status_code == 200:
-                self._logos[iata] = Image.open(BytesIO(resp.content)).convert("RGBA")
-                logger.info("Logo fetched for %s", iata)
-            else:
-                self._logos[iata] = None
-                logger.debug("No logo for %s: HTTP %d", iata, resp.status_code)
-        except Exception as exc:
-            self._logos[iata] = None
-            logger.debug("Logo fetch failed for %s: %s", iata, exc)
+        results = await asyncio.gather(
+            *[self._flightaware.fetch_logo(code) for code in needed],
+            return_exceptions=True,
+        )
+        for iata, result in zip(needed, results):
+            self._logos_fetched.add(iata)
+            self._logos[iata] = result if isinstance(result, Image.Image) else None
 
     # ── Rendering ──────────────────────────────────────────────────────────────
 
@@ -390,7 +198,6 @@ class FlightsApp(DisplayApp):
         inner_w = w - 2 * pad
         inner_h = h - 2 * pad
 
-        # Logo: square, full inner height; only shown when enough room remains for text
         operator_iata = enriched.get("operator_iata", "")
         raw_logo = self._logos.get(operator_iata) if operator_iata else None
         logo_size = inner_h

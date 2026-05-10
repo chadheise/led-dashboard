@@ -48,6 +48,7 @@ class AppState(BaseModel):
     playlists: dict[str, Playlist] = {}
     active_playlist_id: str | None = None
     app_configs: dict[str, dict[str, Any]] = {}  # keyed by app_id
+    library_configs: dict[str, dict[str, Any]] = {}  # keyed by library_id
 
 
 # ── Store ──────────────────────────────────────────────────────────────────────
@@ -97,6 +98,15 @@ class StateStore:
         self._state.app_configs[app_id] = config
         self._save()
 
+    # ── Library configs ────────────────────────────────────────────────────
+
+    def get_library_config(self, lib_id: str) -> dict[str, Any]:
+        return self._state.library_configs.get(lib_id, {})
+
+    def save_library_config(self, lib_id: str, config: dict[str, Any]) -> None:
+        self._state.library_configs[lib_id] = config
+        self._save()
+
     # ── Playlists ──────────────────────────────────────────────────────────
 
     def save_playlist(self, playlist: Playlist) -> Playlist:
@@ -126,6 +136,7 @@ class StateStore:
         pid = playlist_id or self._state.active_playlist_id
         if not pid or pid not in self._state.playlists:
             return []
+        all_library_configs = dict(self._state.library_configs)
         result = []
         for item in self._state.playlists[pid].items:
             module = self._state.modules.get(item.module_id)
@@ -138,6 +149,7 @@ class StateStore:
                         "module_id": module.id,
                         "module_name": module.name,
                         "global_config": self._state.app_configs.get(module.app_id, {}),
+                        "library_configs": all_library_configs,
                     }
                 )
         return result
