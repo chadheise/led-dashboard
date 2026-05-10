@@ -242,7 +242,7 @@ class StocksApp(DisplayApp):
             },
             "rows": {
                 "type": "integer",
-                "title": "Rows per page (paginate only)",
+                "title": "Rows",
                 "default": 1,
                 "minimum": 1,
                 "maximum": 8,
@@ -282,27 +282,29 @@ class StocksApp(DisplayApp):
         self._logos: dict[str, Image.Image | None] = {}
         self._logos_fetched: set[str] = set()
 
-        # Pre-built marquee images (one per price display mode)
-        self._marquee_pct: Image.Image | None = None
-        self._marquee_dollar: Image.Image | None = None
-        self._marquee_w: int = 0
+        # Marquee: one image per row, two price modes.
+        # Indexed [row_index]; both lists are always the same length.
+        self._marquee_pct_rows: list[Image.Image | None] = []
+        self._marquee_dol_rows: list[Image.Image | None] = []
+        self._row_widths: list[int] = []
+        self._row_offsets: list[float] = []   # fractional for smooth sub-pixel speeds
+        self._row_speeds:  list[float] = []
 
         # Paginate image cache keyed by (show_pct, page)
         self._page_cache: dict[tuple[bool, int], Image.Image] = {}
 
-        # Runtime state
-        self._offset: int = 0
-        self._show_pct: bool = True
-        self._alt_counter: int = 0
-        self._page: int = 0
-        self._page_counter: int = 0
+        # Shared runtime state
+        self._show_pct:    bool = True
+        self._alt_counter: int  = 0
+        self._page:        int  = 0
+        self._page_counter:int  = 0
 
     async def on_activate(self) -> None:
-        self._offset = self.canvas.width
-        self._show_pct = True
+        self._show_pct    = True
         self._alt_counter = 0
-        self._page = 0
+        self._page        = 0
         self._page_counter = 0
+        self._row_offsets = []   # reset; _build_images will reinitialise
         if self._quotes:
             self._build_images()
 
@@ -402,12 +404,9 @@ class StocksApp(DisplayApp):
         rows         = max(1, int(self.config.get("rows", 1)))
         show_icons   = bool(self.config.get("show_icons", True))
 
-        if display_mode == "paginate":
-            row_h  = max(8, h // rows)
-            n_rows = rows
-        else:
-            row_h  = h
-            n_rows = 1
+        # rows applies to both marquee and paginate
+        row_h  = max(8, h // rows)
+        n_rows = rows
 
         # Target text height in pixels: ~65 % of the available row height.
         # _bitmap_text_img() picks the right rendering strategy automatically:
@@ -431,12 +430,28 @@ class StocksApp(DisplayApp):
     # ── Image building ─────────────────────────────────────────────────────────
 
     def _build_images(self) -> None:
-        """Pre-build both price-display-mode marquee images and clear page cache."""
+        """Pre-build marquee images for every row (both price modes) and clear page cache."""
         if not self._quotes:
             return
-        layout = self._compute_layout()
-        self._marquee_pct, self._marquee_dollar = self._render_both_marquees(layout)
-        self._marquee_w = self._marquee_pct.width if self._marquee_pct else 0
+        layout  = self._compute_layout()
+        n_rows  = layout["n_rows"]
+
+        self._marquee_pct_rows, self._marquee_dol_rows = self._render_both_marquees(layout)
+        self._row_widths = [img.width if img else 0 for img in self._marquee_pct_rows]
+
+        # Preserve existing offsets if row count unchanged (avoids reset on data refresh)
+        if len(self._row_offsets) != n_rows:
+            cw = self.canvas.width
+            self._row_offsets = [float(cw) for _ in range(n_rows)]
+
+        # Scroll speeds: base 2 px/frame, rising to 3.5 px/frame for the last row
+        if n_rows <= 1:
+            self._row_speeds = [2.0]
+        else:
+            self._row_speeds = [
+                2.0 + 1.5 * i / (n_rows - 1) for i in range(n_rows)
+            ]
+
         self._page_cache.clear()
 
     def _format_change(self, q: dict[str, Any], show_pct: bool) -> str:
@@ -447,21 +462,51 @@ class StocksApp(DisplayApp):
 
     def _render_both_marquees(
         self, layout: dict
-    ) -> tuple[Image.Image | None, Image.Image | None]:
-        """Build both marquee images (pct mode and dollar mode) in one pass.
+    ) -> tuple[list[Image.Image | None], list[Image.Image | None]]:
+        """Build marquee image pairs (pct + dollar) for every row.
 
-        Both images share identical total widths and element positions.
-        Each entry's change-value slot is fixed to max(pct_w, dollar_w) so
-        the images are truly interchangeable at any scroll offset — switching
-        between them shows only the change value updating in place with no
-        jump or jitter.
+        Stocks are distributed round-robin across rows so each row scrolls an
+        independent subset.  Within a row both mode images share identical
+        widths and element positions — switching between them replaces only the
+        change value with no jump.
         """
         if not self._quotes:
+            return [], []
+
+        n_rows = layout["n_rows"]
+
+        # Round-robin: quote i → row (i % n_rows)
+        row_quotes: list[list[dict[str, Any]]] = [[] for _ in range(n_rows)]
+        for i, q in enumerate(self._quotes):
+            row_quotes[i % n_rows].append(q)
+
+        pct_rows: list[Image.Image | None] = []
+        dol_rows: list[Image.Image | None] = []
+        for quotes_in_row in row_quotes:
+            if not quotes_in_row:
+                pct_rows.append(None)
+                dol_rows.append(None)
+            else:
+                p, d = self._render_row_pair(layout, quotes_in_row)
+                pct_rows.append(p)
+                dol_rows.append(d)
+
+        return pct_rows, dol_rows
+
+    def _render_row_pair(
+        self, layout: dict, quotes: list[dict[str, Any]]
+    ) -> tuple[Image.Image | None, Image.Image | None]:
+        """Build the pct-mode and dollar-mode wide images for one marquee row.
+
+        Both images are guaranteed to have the same total width so switching
+        between them at any scroll offset is seamless.
+        """
+        if not quotes:
             return None, None
 
         text_h    = layout["text_h"]
         icon_size = layout["icon_size"]
-        h         = self.canvas.height
+        h         = layout["row_h"]   # each row image is row_h tall, not canvas height
         gap       = max(2, text_h // 5)
         spacer    = max(10, text_h * 2)
 
@@ -470,12 +515,12 @@ class StocksApp(DisplayApp):
         cap_h = _bitmap_text_img("A$%", _COLOR_SYM, text_h).height
 
         def vc(item_h: int) -> int:
-            return (h - item_h) // 2
+            return max(0, (h - item_h) // 2)
 
         # Pre-render every element for both modes, fixing heights to cap_h
         entries: list[dict[str, Any]] = []
         total_w = 0
-        for q in self._quotes:
+        for q in quotes:
             up    = q["change_pct"] >= 0
             color = _quote_color(q["change_pct"])
 
@@ -594,17 +639,48 @@ class StocksApp(DisplayApp):
         else:
             self._render_paginate_frame()
 
+    def _blit_row(
+        self, img: Image.Image, x_offset: int, y_start: int, row_h: int
+    ) -> None:
+        """Blit a marquee-row image into a horizontal band of the canvas."""
+        data  = img.tobytes()
+        iw, ih = img.size
+        cw    = self.canvas.width
+        ch    = self.canvas.height
+        src_h = min(ih, row_h)
+
+        dst_x_start = max(0, x_offset)
+        dst_x_end   = min(cw, x_offset + iw)
+
+        for dst_x in range(dst_x_start, dst_x_end):
+            src_x = dst_x - x_offset
+            for src_y in range(src_h):
+                dst_y = y_start + src_y
+                if dst_y >= ch:
+                    break
+                idx = (src_y * iw + src_x) * 3
+                self.canvas.set_pixel(dst_x, dst_y,
+                                      data[idx], data[idx + 1], data[idx + 2])
+
     def _render_marquee_frame(self) -> None:
-        img = self._marquee_pct if self._show_pct else self._marquee_dollar
-        if img is None:
+        if not self._marquee_pct_rows:
             self._build_images()
-            img = self._marquee_pct if self._show_pct else self._marquee_dollar
-        if img is None:
+        if not self._marquee_pct_rows:
             return
-        blit(self.canvas, img, self._offset)
-        self._offset -= 2
-        if self._offset < -self._marquee_w:
-            self._offset = self.canvas.width
+
+        rows_imgs = self._marquee_pct_rows if self._show_pct else self._marquee_dol_rows
+        n_rows = len(rows_imgs)
+        row_h  = self.canvas.height // n_rows
+
+        for i, img in enumerate(rows_imgs):
+            if img is None:
+                continue
+            row_y  = i * row_h
+            offset = int(self._row_offsets[i])
+            self._blit_row(img, offset, row_y, row_h)
+            self._row_offsets[i] -= self._row_speeds[i]
+            if self._row_offsets[i] < -self._row_widths[i]:
+                self._row_offsets[i] = float(self.canvas.width)
 
     def _render_paginate_frame(self) -> None:
         layout         = self._compute_layout()
