@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import AppIcon, { PencilIcon, TrashIcon } from "../components/AppIcon";
+import ModuleSelect from "../components/ModuleSelect";
 import DisplayPreview from "../components/DisplayPreview";
 import TransportControls from "../components/TransportControls";
 import {
@@ -97,6 +98,8 @@ export default function Playlists() {
   const [showNoModulesWarning, setShowNoModulesWarning] = useState(false);
   const [origName, setOrigName] = useState("");
   const [origItems, setOrigItems] = useState<EditItem[]>([]);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState<number | null>(null);
 
   useEffect(() => {
     refresh();
@@ -240,6 +243,30 @@ export default function Playlists() {
   };
   const moduleName = (id: string) =>
     modules.find((m) => m.id === id)?.name ?? id;
+  const moduleAppId = (id: string) =>
+    modules.find((m) => m.id === id)?.app_id ?? "";
+
+  const onDragStart = (idx: number) => setDragIdx(idx);
+  const onDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    setDragOver(idx);
+  };
+  const onDrop = (idx: number) => {
+    if (dragIdx !== null && dragIdx !== idx) {
+      setFItems((prev) => {
+        const items = [...prev];
+        const [moved] = items.splice(dragIdx, 1);
+        items.splice(idx, 0, moved);
+        return items;
+      });
+    }
+    setDragIdx(null);
+    setDragOver(null);
+  };
+  const onDragEnd = () => {
+    setDragIdx(null);
+    setDragOver(null);
+  };
 
   // ── Derived ────────────────────────────────────────────────────────────────
   const isEditing = editing !== null;
@@ -655,13 +682,39 @@ export default function Playlists() {
                 {fItems.map((item, idx) => (
                   <div
                     key={idx}
+                    draggable
+                    onDragStart={() => onDragStart(idx)}
+                    onDragOver={(e) => onDragOver(e, idx)}
+                    onDrop={() => onDrop(idx)}
+                    onDragEnd={onDragEnd}
                     style={{
                       display: "flex",
                       gap: 8,
                       alignItems: "center",
                       marginBottom: 6,
+                      opacity: dragIdx === idx ? 0.4 : 1,
+                      borderTop: dragOver === idx && dragIdx !== null && dragIdx > idx
+                        ? `2px solid ${C.sage}`
+                        : "2px solid transparent",
+                      borderBottom: dragOver === idx && dragIdx !== null && dragIdx < idx
+                        ? `2px solid ${C.sage}`
+                        : "2px solid transparent",
                     }}
                   >
+                    {/* Drag handle */}
+                    <span
+                      title="Drag to reorder"
+                      style={{
+                        cursor: "grab",
+                        color: C.textDim,
+                        fontSize: "1rem",
+                        lineHeight: 1,
+                        userSelect: "none",
+                        flexShrink: 0,
+                      }}
+                    >
+                      ⠿
+                    </span>
                     <button
                       onClick={() => setPreviewModuleId(item.module_id)}
                       title="Preview this module"
@@ -669,19 +722,11 @@ export default function Playlists() {
                     >
                       ▶
                     </button>
-                    <select
+                    <ModuleSelect
                       value={item.module_id}
-                      onChange={(e) =>
-                        updateItem(idx, { module_id: e.target.value })
-                      }
-                      style={{ ...fieldStyle, flex: 1 }}
-                    >
-                      {modules.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </select>
+                      options={modules}
+                      onChange={(id) => updateItem(idx, { module_id: id })}
+                    />
                     <input
                       type="number"
                       value={item.duration}

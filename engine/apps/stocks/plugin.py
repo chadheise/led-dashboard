@@ -11,7 +11,7 @@ from canvas.base import Canvas
 from plugin_base import DisplayApp
 from PIL import ImageFont
 
-from plugins._helpers import blit
+from apps._helpers import blit
 
 
 # ── Preset stock groupings ─────────────────────────────────────────────────────
@@ -526,7 +526,7 @@ class StocksApp(DisplayApp):
 
             sym_img = _bitmap_text_img(q["symbol"] + " ",             _COLOR_SYM, text_h, fixed_h=cap_h)
             prc_img = _bitmap_text_img(f"${q['price']:.2f} ",         color,       text_h, fixed_h=cap_h)
-            arr_img = _arrow_img(up, cap_h, color)
+            arr_img = _arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
 
             chg_pct_img = _bitmap_text_img(self._format_change(q, True),  color, text_h, fixed_h=cap_h)
             chg_dol_img = _bitmap_text_img(self._format_change(q, False), color, text_h, fixed_h=cap_h)
@@ -560,7 +560,7 @@ class StocksApp(DisplayApp):
                     ex += icon_size + gap
                 img.paste(e["sym_img"], (ex, vc(cap_h))); ex += e["sym_img"].width
                 img.paste(e["prc_img"], (ex, vc(cap_h))); ex += e["prc_img"].width
-                img.paste(e["arr_img"], (ex, vc(cap_h))); ex += e["arr_img"].width + gap
+                img.paste(e["arr_img"], (ex, vc(e["arr_img"].height))); ex += e["arr_img"].width + gap
 
             # Change value — left-aligned within the fixed-width slot
             chg_x = x + e["icon_w"] + e["sym_img"].width + e["prc_img"].width + e["arr_img"].width + gap
@@ -594,7 +594,7 @@ class StocksApp(DisplayApp):
             sym_img = _bitmap_text_img(q["symbol"] + " ",              _COLOR_SYM, text_h, fixed_h=cap_h)
             prc_img = _bitmap_text_img(f"${q['price']:.2f} ",          color,       text_h, fixed_h=cap_h)
             chg_img = _bitmap_text_img(self._format_change(q, show_pct), color,    text_h, fixed_h=cap_h)
-            arr_img = _arrow_img(up, cap_h, color)
+            arr_img = _arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
 
             def vc(item_h: int) -> int:  # vertically centre in this row
                 return row_top + (row_h - item_h) // 2
@@ -611,7 +611,7 @@ class StocksApp(DisplayApp):
             img.paste(prc_img, (x, vc(cap_h)))
             x += prc_img.width
 
-            img.paste(arr_img, (x, vc(cap_h)))
+            img.paste(arr_img, (x, vc(arr_img.height)))
             x += arr_img.width + gap
 
             if x + chg_img.width <= w:   # clip if it doesn't fit

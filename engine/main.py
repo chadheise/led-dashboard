@@ -12,7 +12,7 @@ from api.preview import PreviewManager
 from api.server import create_app
 from api.websocket import manager
 from canvas.simulator import SimulatorCanvas
-from plugins import APP_REGISTRY
+from apps import APP_REGISTRY
 from scene_manager import PlaylistEntry, SceneManager
 from state import Module, Playlist, PlaylistItem, StateStore
 

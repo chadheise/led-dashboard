@@ -41,7 +41,7 @@ class PlaylistBody(BaseModel):
 
 @router.post("/preview")
 async def start_preview(request: Request, body: PreviewBody) -> dict[str, Any]:
-    from plugins import APP_REGISTRY
+    from apps import APP_REGISTRY
 
     _require_app(body.app_id)
     await request.app.state.preview_manager.start(body.app_id, body.config, APP_REGISTRY)
@@ -65,7 +65,7 @@ async def toggle_preview_pause(request: Request) -> dict[str, Any]:
 
 @router.get("/apps")
 def list_apps() -> list[dict[str, Any]]:
-    from plugins import APP_REGISTRY
+    from apps import APP_REGISTRY
 
     return [
         {
@@ -247,7 +247,7 @@ def get_status(request: Request) -> dict[str, Any]:
 
 
 def _require_app(app_id: str) -> None:
-    from plugins import APP_REGISTRY
+    from apps import APP_REGISTRY
 
     if app_id not in APP_REGISTRY:
         raise HTTPException(422, f"Unknown app id: {app_id!r}")

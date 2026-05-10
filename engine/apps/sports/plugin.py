@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
 from plugin_base import DisplayApp
-from plugins._helpers import blit, load_font
+from apps._helpers import blit, load_font
 
 
 _SPORT_MAP: dict[str, str] = {
