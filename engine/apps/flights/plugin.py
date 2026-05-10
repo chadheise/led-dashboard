@@ -5,7 +5,7 @@ import logging
 import time
 from typing import Any, ClassVar
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,56 @@ def _clip_text(text: str, size: int, max_w: int) -> str:
             return text
         text = text[:-1]
     return ""
+
+
+_UNIT_CYCLE_S: float = 4.0
+
+
+def _build_stat_lines(flight: dict[str, Any], imperial: bool) -> list[str]:
+    track = flight.get("track")
+    trk_str = f"Trk: {track}deg" if track is not None else "Trk: ---"
+
+    if imperial:
+        alt = flight.get("alt_ft")
+        spd = flight.get("spd_mph")
+        vr = flight.get("vr_mph")
+        alt_str = f"Alt: {alt} ft" if alt is not None else "Alt: ---"
+        spd_str = f"Spd: {spd} mph" if spd is not None else "Spd: ---"
+        vr_str = (f"Vr: {'+' if vr >= 0 else ''}{vr} mph" if vr is not None else "Vr: ---")
+    else:
+        alt = flight.get("alt_m")
+        spd = flight.get("spd_kph")
+        vr = flight.get("vr_kph")
+        alt_str = f"Alt: {alt} m" if alt is not None else "Alt: ---"
+        spd_str = f"Spd: {spd} kph" if spd is not None else "Spd: ---"
+        vr_str = (f"Vr: {'+' if vr >= 0 else ''}{vr} kph" if vr is not None else "Vr: ---")
+
+    return [alt_str, spd_str, trk_str, vr_str]
+
+
+_DEBUG_FLIGHT: dict[str, Any] = {
+    "callsign": "DL699",
+    "alt_m": 789,
+    "alt_ft": 2559,
+    "spd_kph": 456,
+    "spd_mph": 283,
+    "track": 270,
+    "vr_kph": 23,
+    "vr_mph": 14,
+    "spd_kt": None,
+    "heading": 270,
+    "dist_km": None,
+}
+
+_DEBUG_ENRICHED: dict[str, Any] = {
+    "airline": "Delta Airlines",
+    "origin": "JFK",
+    "dest": "SEA",
+    "aircraft_type": "Boeing 737-700",
+    "operator_iata": "DL",
+    "origin_name": "JFK Intl",
+    "dest_name": "Seattle-Tacoma Intl",
+}
 
 
 class FlightsApp(DisplayApp):
@@ -85,16 +135,22 @@ class FlightsApp(DisplayApp):
                 "x-input-type": "color",
                 "default": "#C8C8C8",
             },
-            "show_border": {
-                "type": "boolean",
-                "title": "Show card border",
-                "default": True,
-            },
             "refresh_interval": {
                 "type": "number",
                 "title": "Refresh interval (s)",
                 "default": 30,
                 "minimum": 10,
+            },
+            "units": {
+                "type": "string",
+                "title": "Units",
+                "enum": ["metric", "imperial", "metric+imperial"],
+                "default": "metric+imperial",
+            },
+            "debug": {
+                "type": "boolean",
+                "title": "Debug mode (static data)",
+                "default": False,
             },
         },
         "required": ["location"],
@@ -117,10 +173,21 @@ class FlightsApp(DisplayApp):
         self._fetched_once: bool = False
         self._card_idx: int = 0
         self._card_last_ts: float = 0.0
+        self._show_imperial: bool = False
+        self._unit_ts: float = time.monotonic()
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
     async def fetch_data(self) -> None:
+        if self.config.get("debug", False):
+            self._flights = [dict(_DEBUG_FLIGHT)]
+            self._enriched = {"DL699": dict(_DEBUG_ENRICHED)}
+            self._card_idx = 0
+            self._card_last_ts = time.monotonic()
+            self._fetched_once = True
+            await self._fetch_logos()
+            return
+
         loc = self.config.get("location", {})
         lat = float(loc.get("latitude", 0.0) if isinstance(loc, dict) else 0.0)
         lon = float(loc.get("longitude", 0.0) if isinstance(loc, dict) else 0.0)
@@ -175,71 +242,85 @@ class FlightsApp(DisplayApp):
             self._card_idx = (self._card_idx + 1) % len(self._flights)
             self._card_last_ts = now
 
+        units = self.config.get("units", "metric+imperial")
+        if units == "metric+imperial":
+            if now - self._unit_ts >= _UNIT_CYCLE_S:
+                self._show_imperial = not self._show_imperial
+                self._unit_ts = now
+        else:
+            self._show_imperial = units == "imperial"
+
         flight = self._flights[self._card_idx]
         enriched = self._enriched.get(flight["callsign"], {})
 
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
-        show_border = bool(self.config.get("show_border", True))
 
         w, h = self.canvas.width, self.canvas.height
         img = Image.new("RGB", (w, h))
-        draw = ImageDraw.Draw(img)
 
-        if show_border:
-            draw.rectangle([(0, 0), (w - 1, h - 1)], outline=(80, 80, 80))
-
-        pad = 3 if show_border else 1
-        inner_w = w - 2 * pad
+        pad = 2
         inner_h = h - 2 * pad
+        inner_w = w - 2 * pad
 
-        operator_iata = enriched.get("operator_iata", "")
+        # Divide available height into 5 equal slots; text is centered in each slot.
+        slot_h = inner_h // 5
+        font_size = max(6, slot_h - 2)
+        logo_gap = 2
+        stats_gap = 2
+
+        def row_y(row: int, img_h: int) -> int:
+            """Top-left y to vertically center img_h within slot `row`."""
+            return pad + row * slot_h + (slot_h - img_h) // 2
+
+        # Pre-compute stats width so text columns know how much space they have
+        stat_strs = _build_stat_lines(flight, self._show_imperial)
+        stat_imgs = [render_lores(s, text_color, font_size) for s in stat_strs]
+        stats_w = max((si.width for si in stat_imgs), default=0)
+
+        # Logo: square spanning top 3 slots
+        logo_dim = 3 * slot_h
+        operator_iata = enriched.get("operator_iata", "") or ""
         raw_logo = self._logos.get(operator_iata) if operator_iata else None
-        logo_size = inner_h
-        logo_gap = 3
-        min_text_w = 30
-        show_logo = raw_logo is not None and (inner_w - logo_size - logo_gap) >= min_text_w
-        if show_logo:
-            resized = raw_logo.resize((logo_size, logo_size), Image.LANCZOS)
+        if raw_logo is not None:
+            resized = raw_logo.resize((logo_dim, logo_dim), Image.LANCZOS)
             bg = Image.new("RGB", resized.size, (0, 0, 0))
-            bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+            if resized.mode == "RGBA":
+                bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+            else:
+                bg.paste(resized.convert("RGB"))
             img.paste(bg, (pad, pad))
-            text_x = pad + logo_size + logo_gap
-            text_w = inner_w - logo_size - logo_gap
+            mid_x = pad + logo_dim + logo_gap
         else:
-            text_x = pad
-            text_w = inner_w
+            mid_x = pad
 
-        font_size = max(8, inner_h // 3 - 1)
-        glyph_h = render_lores("A", (255, 255, 255), font_size).height
-        row_h = glyph_h + 1
+        # Middle text (rows 0-2): airline name, route, aircraft type
+        mid_w = (w - pad - stats_w - stats_gap) - mid_x
+        airline = enriched.get("airline", "") or ""
+        origin = enriched.get("origin", "") or ""
+        dest = enriched.get("dest", "") or ""
+        aircraft_type = enriched.get("aircraft_type", "") or ""
+        route = f"{origin}->{dest}" if origin and dest else ""
 
-        block_h = row_h * 3
-        y0 = pad + max(0, (inner_h - block_h) // 2)
+        for i, line in enumerate([airline, route, aircraft_type]):
+            if line:
+                clipped = _clip_text(line, font_size, mid_w)
+                line_img = render_lores(clipped, text_color, font_size)
+                img.paste(line_img, (mid_x, row_y(i, line_img.height)))
 
-        airline = enriched.get("airline", "")
-        line1 = f"{flight['callsign']} {airline}" if airline else flight["callsign"]
-        line1 = _clip_text(line1, font_size, text_w)
+        # Bottom text (rows 3-4): origin and destination airport names, left-aligned
+        origin_name = enriched.get("origin_name", "") or ""
+        dest_name = enriched.get("dest_name", "") or ""
+        bottom_w = inner_w - stats_w - stats_gap
 
-        origin = enriched.get("origin", "")
-        dest = enriched.get("dest", "")
-        if origin and dest:
-            line2 = f"{origin}->{dest}"
-        elif flight["alt_ft"] is not None:
-            line2 = f"Alt: {flight['alt_ft']:,}ft"
-        else:
-            line2 = "Alt: ---"
+        for i, name in enumerate([origin_name, dest_name]):
+            if name:
+                clipped = _clip_text(name, font_size, bottom_w)
+                name_img = render_lores(clipped, text_color, font_size)
+                img.paste(name_img, (pad, row_y(3 + i, name_img.height)))
 
-        aircraft_type = enriched.get("aircraft_type", "")
-        if aircraft_type:
-            line3 = aircraft_type
-        elif flight["spd_kt"] is not None:
-            line3 = f"{flight['spd_kt']}kt"
-        else:
-            line3 = "---"
-
-        for i, line in enumerate((line1, line2, line3)):
-            line_img = render_lores(line, text_color, font_size)
-            img.paste(line_img, (text_x, y0 + i * row_h))
+        # Stats: right-aligned, vertically centered in rows 0-3
+        for i, si in enumerate(stat_imgs):
+            img.paste(si, (w - pad - si.width, row_y(i, si.height)))
 
         blit(self.canvas, img)
 

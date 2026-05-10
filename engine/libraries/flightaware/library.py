@@ -101,6 +101,8 @@ class FlightAwareLibrary(Library):
             dest_obj = flight.get("destination") or {}
             origin = origin_obj.get("code_iata") or origin_obj.get("code", "")
             dest = dest_obj.get("code_iata") or dest_obj.get("code", "")
+            origin_name = origin_obj.get("name", "")
+            dest_name = dest_obj.get("name", "")
             airline = flight.get("operator") or ""
             operator_iata = flight.get("operator_iata") or ""
             aircraft_type = flight.get("aircraft_type", "")
@@ -112,6 +114,8 @@ class FlightAwareLibrary(Library):
             return {
                 "origin": origin.upper() if origin else "",
                 "dest": dest.upper() if dest else "",
+                "origin_name": origin_name,
+                "dest_name": dest_name,
                 "airline": airline,
                 "operator_iata": operator_iata.upper(),
                 "aircraft_type": aircraft_type,

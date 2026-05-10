@@ -95,8 +95,16 @@ class OpenSkyLibrary(Library):
             f_lat: float | None = state[6]
             f_lon: float | None = state[5]
 
+            vr_ms: float | None = state[11]
+
             alt_ft = round(alt_m * 3.281) if alt_m is not None else None
+            alt_m_rounded = round(alt_m) if alt_m is not None else None
             spd_kt = round(velocity * 1.944) if velocity is not None else None
+            spd_kph = round(velocity * 3.6) if velocity is not None else None
+            spd_mph = round(velocity * 2.237) if velocity is not None else None
+            track_deg = round(heading) if heading is not None else None
+            vr_kph = round(vr_ms * 3.6) if vr_ms is not None else None
+            vr_mph = round(vr_ms * 2.237) if vr_ms is not None else None
             dist_km = (
                 math.sqrt((f_lat - lat) ** 2 + (f_lon - lon) ** 2) * 111.0
                 if f_lat is not None and f_lon is not None
@@ -106,7 +114,13 @@ class OpenSkyLibrary(Library):
             flights.append({
                 "callsign": callsign[:8].upper(),
                 "alt_ft": alt_ft,
+                "alt_m": alt_m_rounded,
                 "spd_kt": spd_kt,
+                "spd_kph": spd_kph,
+                "spd_mph": spd_mph,
+                "track": track_deg,
+                "vr_kph": vr_kph,
+                "vr_mph": vr_mph,
                 "heading": heading,
                 "dist_km": dist_km,
             })
