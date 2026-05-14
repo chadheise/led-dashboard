@@ -14,10 +14,25 @@ from libraries.canvas_utils.library import blit
 FONTS_DIR = Path(__file__).parent / "fonts"
 _LORES_DIR: Path = FONTS_DIR / "LoRes"
 
-# High-res uses PIL's built-in default (clean, smooth).
-# Low-res auto-selects from _LORES_DIR by closest design size.
-_DEFAULT_SIZE_THRESHOLD: int = 24  # px; below this switches to low-res font
+# Explicit LoRes font table keyed by design size.
+# Each entry is (regular_filename, bold_filename).
+# Size 28 has no bold variant, so regular is used for both.
+_LORES_FONTS: dict[int, tuple[str, str]] = {
+    9:  ("LoRes9OTNarrow-Regular.ttf",  "LoRes9OTNarrow-Bold.ttf"),
+    12: ("LoRes12OT-Regular.ttf",       "LoRes12OT-Bold.ttf"),
+    15: ("LoRes15OTNarrow-Regular.ttf", "LoRes15OT-Bold.ttf"),
+    22: ("LoRes22OTNarrow-Regular.ttf", "LoRes22OTOakland-Bold.ttf"),
+    28: ("LoRes28OT-Regular.ttf",       "LoRes28OT-Regular.ttf"),
+}
+_LORES_SIZES: list[int] = sorted(_LORES_FONTS)
+_LORES_MAX: int = max(_LORES_SIZES)  # 28
 
+# Roboto variable font (OFL licensed) for sizes > _LORES_MAX.
+# Supports named instances "Regular" and "Bold" via set_variation_by_name.
+_ROBOTO_PATH: Path = FONTS_DIR / "Roboto" / "Roboto[wdth,wght].ttf"
+
+# Legacy auto-selection support (used by select_font / render_lores).
+_DEFAULT_SIZE_THRESHOLD: int = 24  # px; below this switches to low-res font
 _LORES_SIZE_RE = re.compile(r"LoRes(\d+)(Minus|Plus)?OT")
 
 _BASE_FONT: ImageFont.ImageFont = ImageFont.load_default()
@@ -26,6 +41,33 @@ _BITMAP_THRESHOLD: int = 80  # grayscale cutoff for pixel-on/off in bitmap_text_
 
 
 # ── Module-level utility functions ─────────────────────────────────────────────
+
+
+def _snap_lores_size(size: int) -> int:
+    """Return the nearest supported LoRes design size."""
+    return min(_LORES_SIZES, key=lambda s: abs(s - size))
+
+
+def _resolve_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Select the best font for size and bold.
+
+    Sizes ≤ _LORES_MAX: snap to the nearest LoRes design size and load the
+    matching pixel font at that design size (never scaled).
+    Sizes > _LORES_MAX: use Helvetica, falling back to PIL's built-in default.
+    """
+    if size <= _LORES_MAX:
+        snapped = _snap_lores_size(size)
+        filename = _LORES_FONTS[snapped][1 if bold else 0]
+        return load_font_file(_LORES_DIR / filename, snapped)
+    if _ROBOTO_PATH.exists():
+        try:
+            font = ImageFont.truetype(str(_ROBOTO_PATH), size=size)
+            if bold:
+                font.set_variation_by_name("Bold")
+            return font
+        except Exception:
+            pass
+    return load_font(size)
 
 
 def _parse_lores_design_size(filename: str) -> float | None:
@@ -157,17 +199,19 @@ def render_text(
     color: tuple[int, int, int],
     size: int,
     *,
+    bold: bool = False,
+    aliasing: bool = False,
+    fixed_h: int | None = None,
+    # Legacy override params — if either is provided the old select_font path is used.
     high_res_font: Path | str | None = None,
     low_res_font: Path | str | None = None,
     threshold: int = _DEFAULT_SIZE_THRESHOLD,
-    aliasing: bool = False,
-    fixed_h: int | None = None,
 ) -> Image.Image:
     """Render text with automatic font selection and configurable aliasing.
 
-    Font selection:
-        size >= threshold → high_res_font (default: CoFo Sans Pixel)
-        size <  threshold → low_res_font  (default: Lo-Res OT)
+    Font selection (default path):
+        size ≤ 28 → nearest LoRes design size (9, 12, 15, 22, 28), bold variant if bold=True.
+        size > 28 → Helvetica (falls back to PIL built-in if not found on the system).
 
     aliasing=True  → smooth anti-aliased render.
     aliasing=False → pixel-perfect: every pixel is either full color or black.
@@ -179,12 +223,15 @@ def render_text(
         h = fixed_h if fixed_h is not None else max(1, size)
         return Image.new("RGB", (1, h))
 
-    font = select_font(
-        size,
-        high_res_font=high_res_font,
-        low_res_font=low_res_font,
-        threshold=threshold,
-    )
+    if high_res_font is not None or low_res_font is not None:
+        font = select_font(
+            size,
+            high_res_font=high_res_font,
+            low_res_font=low_res_font,
+            threshold=threshold,
+        )
+    else:
+        font = _resolve_font(size, bold)
 
     bbox = ImageDraw.Draw(Image.new("L", (1, 1))).textbbox((0, 0), text, font=font)
     gw = max(1, bbox[2] - bbox[0])

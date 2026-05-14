@@ -370,22 +370,36 @@ class SportsApp(DisplayApp):
         STATUS_FONT = 12
 
         # Logo: for a single score use nearly the full height; shrink for 2-up
-        logo_size  = (h - 4) if n_cols == 1 else max(28, h - 22)
-        score_font = 28
-        abbr_font  = 16
+        logo_size = (h - 4) if n_cols == 1 else max(28, h - 22)
 
-        # Logo is centred in the content area (above the status strip)
+        # Content area sits above the status strip
         content_h = h - STATUS_H
         logo_y    = max(0, (content_h - logo_size) // 2)
-        logo_cy   = logo_y + logo_size // 2   # vertical centre of logo
 
-        # Team name sits directly above score, block centred on logo vertical centre
+        # Font sizes fill content_h with a 2 px margin top and bottom.
+        # Score gets ~65 % of the block, abbr the rest; gap absorbs whatever is left.
+        _MARGIN       = 2
+        block_avail   = content_h - 2 * _MARGIN
+        score_font    = max(22, block_avail * 13 // 20)
+        abbr_font     = max(12, block_avail * 6  // 20)
+
+        # For multi-column layouts clamp score_font so a 3-digit score fits per-team.
+        # Away text grows rightward from ax; home text grows leftward from rx = slot_width-ax.
+        # Each team therefore has (rx - ax) // 2 horizontal pixels before they would overlap.
+        if n_cols > 1:
+            ax = 2 + logo_size + 3
+            per_team_px = (slot_width - 2 * ax) // 2
+            while score_font > 22:
+                if render_text("000", (255, 255, 255), score_font, bold=True).width <= per_team_px:
+                    break
+                score_font -= 1
+
         probe_abbr_h  = render_text("A", (255, 255, 255), abbr_font).height
-        probe_score_h = render_text("0", (255, 255, 255), score_font).height
-        text_gap = 4
-        block_h  = probe_abbr_h + text_gap + probe_score_h
-        abbr_y   = logo_cy - block_h // 2
-        score_y  = abbr_y + probe_abbr_h + text_gap
+        probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
+        text_gap      = 4
+        block_h       = probe_abbr_h + text_gap + probe_score_h
+        abbr_y        = (content_h - block_h) // 2
+        score_y       = abbr_y + probe_abbr_h + text_gap
 
         # ── Away (left) ────────────────────────────────────────────────────
         ax = x_offset + 2
@@ -394,8 +408,8 @@ class SportsApp(DisplayApp):
             r, g, b, a = a_logo.split()
             img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_y), a)
             ax += a_logo.size[0] + 3
-        _paste(img, render_text(away_abbr,  away_color, abbr_font),  ax, abbr_y,  "lt")
-        _paste(img, render_text(away_score, away_color, score_font), ax, score_y, "lt")
+        _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
+        _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
 
         # ── Home (right) ───────────────────────────────────────────────────
         rx = x_offset + slot_width - 2
@@ -404,8 +418,8 @@ class SportsApp(DisplayApp):
             r, g, b, a = h_logo.split()
             img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], logo_y), a)
             rx -= h_logo.size[0] + 3
-        _paste(img, render_text(home_abbr,  home_color, abbr_font),  rx, abbr_y,  "rt")
-        _paste(img, render_text(home_score, home_color, score_font), rx, score_y, "rt")
+        _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
+        _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
 
         # ── Status ─────────────────────────────────────────────────────────
         _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
@@ -428,8 +442,8 @@ class SportsApp(DisplayApp):
 
         team_h    = (h - STATUS_H) // 2
         logo_size = max(6, team_h - 4)
-        # Single font for inline name + score; fill most of the row height
-        text_font = max(12, team_h - 8)
+        # Single font for inline name + score; snap to largest LoRes size that fits the row
+        text_font = max(12, team_h)
 
         for i, (logo_key, abbr, score, color) in enumerate([
             ("away_logo_url", away_abbr, away_score, away_color),
@@ -448,7 +462,7 @@ class SportsApp(DisplayApp):
 
             # Render name and score inline, both centred on the logo's vertical midpoint
             abbr_img  = render_text(abbr,  color, text_font)
-            score_img = render_text(score, color, text_font)
+            score_img = render_text(score, color, text_font, bold=True)
             _paste(img, abbr_img,  lx,                        logo_cy, "lm")
             _paste(img, score_img, lx + abbr_img.width + 3,   logo_cy, "lm")
 
