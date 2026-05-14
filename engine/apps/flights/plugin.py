@@ -12,14 +12,14 @@ logger = logging.getLogger(__name__)
 from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_lores
+from libraries.text_renderer.library import render_text
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
     while text:
-        if render_lores(text, (255, 255, 255), size).width <= max_w:
+        if render_text(text, (255, 255, 255), size).width <= max_w:
             return text
         text = text[:-1]
     return ""
@@ -289,7 +289,7 @@ class FlightsApp(DisplayApp):
 
         # Pre-compute stats width so text columns know how much space they have
         stat_strs = _build_stat_lines(flight, self._show_imperial)
-        stat_imgs = [render_lores(s, text_color, font_size) for s in stat_strs]
+        stat_imgs = [render_text(s, text_color, font_size) for s in stat_strs]
         stats_w = max((si.width for si in stat_imgs), default=0)
 
         # Logo: square spanning top 3 slots
@@ -319,7 +319,7 @@ class FlightsApp(DisplayApp):
         for i, line in enumerate([airline, route, aircraft_type]):
             if line:
                 clipped = _clip_text(line, font_size, mid_w)
-                line_img = render_lores(clipped, text_color, font_size)
+                line_img = render_text(clipped, text_color, font_size)
                 img.paste(line_img, (mid_x, row_y(i, line_img.height)))
 
         # Bottom text (rows 3-4): origin and destination airport names, left-aligned
@@ -330,7 +330,7 @@ class FlightsApp(DisplayApp):
         for i, name in enumerate([origin_name, dest_name]):
             if name:
                 clipped = _clip_text(name, font_size, bottom_w)
-                name_img = render_lores(clipped, text_color, font_size)
+                name_img = render_text(clipped, text_color, font_size)
                 img.paste(name_img, (pad, row_y(3 + i, name_img.height)))
 
         # Stats: right-aligned, vertically centered in rows 0-3
@@ -344,7 +344,7 @@ class FlightsApp(DisplayApp):
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
         font_size = 12
 
-        glyph_h = render_lores("A", (255, 255, 255), font_size).height
+        glyph_h = render_text("A", (255, 255, 255), font_size).height
         row_h = glyph_h + 2
 
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
@@ -353,7 +353,7 @@ class FlightsApp(DisplayApp):
             alt = f"{flight['alt_ft']:,}ft" if flight["alt_ft"] is not None else "   ---"
             spd = f"{flight['spd_kt']}kt" if flight["spd_kt"] is not None else "---"
             row = f"{flight['callsign']:<8}  {alt:>8}  {spd:>5}"
-            row_img = render_lores(row, text_color, font_size)
+            row_img = render_text(row, text_color, font_size)
             y = i * row_h + 1
             if y + row_img.height <= img.height:
                 img.paste(row_img, (2, y))
@@ -362,7 +362,7 @@ class FlightsApp(DisplayApp):
 
     def _draw_no_flights(self) -> None:
         msg = "Loading..." if not self._fetched_once else "No flights nearby"
-        msg_img = render_lores(msg, (80, 80, 80), 14)
+        msg_img = render_text(msg, (80, 80, 80), 14)
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
         x = (self.canvas.width - msg_img.width) // 2
         y = (self.canvas.height - msg_img.height) // 2

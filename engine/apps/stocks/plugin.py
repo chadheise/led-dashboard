@@ -9,9 +9,7 @@ from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit
 from libraries.yahoo_finance.library import YahooFinanceLibrary, PRESET_GROUPS, INDEX_SYMBOLS, TICKER_DOMAIN
-from libraries.text_renderer.library import TextRendererLibrary, FONTS_DIR
-
-_STOCKS_FONT = FONTS_DIR / "LoRes" / "LoRes12OT-Regular.ttf"
+from libraries.text_renderer.library import TextRendererLibrary
 
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -139,7 +137,7 @@ class StocksApp(DisplayApp):
         self._page_counter: int = 0
 
     def _rt(self, text: str, color: tuple[int, int, int], size: int, **kwargs) -> Image.Image:
-        return self._renderer.render_lores(text, color, size, font_path=_STOCKS_FONT, **kwargs)
+        return self._renderer.render_text(text, color, size, bold=True, **kwargs)
 
     async def on_activate(self) -> None:
         self._show_pct = True
@@ -190,7 +188,8 @@ class StocksApp(DisplayApp):
         show_icons = bool(self.config.get("show_icons", True))
 
         row_h = max(8, h // rows)
-        text_h = max(self._renderer.base_font_h, round(row_h * 0.65))
+        ratio = 0.50 if rows == 1 else 0.65
+        text_h = max(self._renderer.base_font_h, round(row_h * ratio))
         arrow_size = text_h
         icon_size = text_h if (show_icons and text_h >= 12) else 0
 
