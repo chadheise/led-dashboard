@@ -289,7 +289,7 @@ class ESPNSportsLibrary(Library):
             img = self._logo_cache[url]
             if img is None:
                 return None
-            return img.resize(target_size, Image.LANCZOS)
+            return self._scale_down(img, target_size)
 
         cache_path = self._logo_dir / f"{hashlib.sha256(url.encode()).hexdigest()}.png"
         now = time.time()
@@ -300,7 +300,7 @@ class ESPNSportsLibrary(Library):
                 try:
                     img = Image.open(cache_path).convert("RGBA")
                     self._logo_cache[url] = img
-                    return img.resize(target_size, Image.LANCZOS)
+                    return self._scale_down(img, target_size)
                 except Exception:
                     pass  # fall through to re-download
 
@@ -311,19 +311,26 @@ class ESPNSportsLibrary(Library):
             except Exception:
                 pass
             self._logo_cache[url] = downloaded
-            return downloaded.resize(target_size, Image.LANCZOS)
+            return self._scale_down(downloaded, target_size)
 
         # Download failed — use stale disk file as fallback
         if cache_path.exists():
             try:
                 img = Image.open(cache_path).convert("RGBA")
                 self._logo_cache[url] = img
-                return img.resize(target_size, Image.LANCZOS)
+                return self._scale_down(img, target_size)
             except Exception:
                 pass
 
         self._logo_cache[url] = None
         return None
+
+    @staticmethod
+    def _scale_down(img: Image.Image, target_size: tuple[int, int]) -> Image.Image:
+        """Resize img to target_size only if it would be a downscale; never upscale."""
+        if img.size[0] <= target_size[0] and img.size[1] <= target_size[1]:
+            return img
+        return img.resize(target_size, Image.LANCZOS)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 

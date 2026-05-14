@@ -1,6 +1,6 @@
 # led-dashboard
 
-RGB LED wall display controller — Raspberry Pi 4 driving 10× HUB75 P5 panels (320×64 px).
+RGB LED wall display controller — Raspberry Pi 4 driving a configurable number of HUB75 panels (e.g. 10× P5 panels for resolution 320×64 px).
 
 ## Quickstart
 

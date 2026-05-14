@@ -137,14 +137,14 @@ class SportsApp(DisplayApp):
                 "title": "Upcoming game window",
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
-                "default": {"hours": 24},
+                "default": {"days": 1},
             },
             "completed_game_window": {
                 "type": "object",
                 "title": "Keep completed games for",
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
-                "default": {"hours": 3},
+                "default": {"days": 1},
             },
             "seconds_per_score": {
                 "type": "integer",
@@ -193,9 +193,18 @@ class SportsApp(DisplayApp):
         ))
         return max(1, seconds) * _FPS
 
-    @staticmethod
-    def _logo_size_for_columns(cols: int) -> tuple[int, int]:
-        return {1: (20, 20), 2: (16, 16)}.get(cols, (12, 12))
+    def _get_logo(self, url: str | None, size: int) -> Image.Image | None:
+        """Return the logo for url scaled to size×size, or None. Never upscales."""
+        if not url:
+            return None
+        logo = self._logos.get(url)
+        if logo is None:
+            return None
+        if logo.size == (size, size):
+            return logo
+        if size > logo.size[0]:
+            return logo  # return native size rather than upscaling
+        return logo.resize((size, size), Image.LANCZOS)
 
     async def fetch_data(self) -> None:
         favorite_teams = list(self.config.get("favorite_teams") or [])
@@ -207,9 +216,8 @@ class SportsApp(DisplayApp):
 
         self._games = self._filter_by_time_window(games)
 
-        n = self._scores_per_screen()
-        logo_size = self._logo_size_for_columns(n)
-        new_logos = await self._espn.fetch_logos(self._games, logo_size)
+        # Store logos at full display height so any layout can downscale cleanly
+        new_logos = await self._espn.fetch_logos(self._games, (64, 64))
         self._logos.update(new_logos)
 
     def _filter_by_time_window(
@@ -218,10 +226,10 @@ class SportsApp(DisplayApp):
         now = datetime.datetime.now(datetime.timezone.utc)
         show_upcoming = bool(self.config.get("show_upcoming_games", True))
         upcoming_secs = _duration_to_seconds(
-            self.config.get("upcoming_game_window", {"hours": 24})
+            self.config.get("upcoming_game_window", {"days": 1})
         )
         completed_secs = _duration_to_seconds(
-            self.config.get("completed_game_window", {"hours": 3})
+            self.config.get("completed_game_window", {"days": 1})
         )
 
         result: list[dict[str, Any]] = []
@@ -303,9 +311,13 @@ class SportsApp(DisplayApp):
                 ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))
                 x_off += 1
                 actual_w -= 1
-            self._draw_game_slot(img, game, x_off, actual_w)
+            self._draw_game_slot(img, game, x_off, actual_w, n_cols)
 
         blit(self.canvas, img)
+
+    # ── Layout constants (relative to display height) ──────────────────────────
+
+    _WIDE_THRESHOLD = 130  # slot widths >= this use the wide side-by-side layout
 
     def _draw_game_slot(
         self,
@@ -313,50 +325,132 @@ class SportsApp(DisplayApp):
         game: dict[str, Any],
         x_offset: int,
         slot_width: int,
+        n_cols: int,
     ) -> None:
         h = self.canvas.height
-        n = self._scores_per_screen()
-        logo_size = self._logo_size_for_columns(n)
-        lw = logo_size[0]
 
-        score_size = 18 if slot_width < 100 else 24
-        label_size = 10 if slot_width < 100 else 12
-        score_y = h // 2
-
-        # Team colors — use alternate if primary is black (invisible on black display)
         away_color = _team_color(game.get("away_color", ""), game.get("away_alt_color", ""))
         home_color = _team_color(game.get("home_color", ""), game.get("home_alt_color", ""))
 
-        # ── Away side (left) ────────────────────────────────────────────────
-        ax = x_offset + 2
-        away_logo = self._logos.get(game.get("away_logo_url") or "")
-        if away_logo:
-            paste_y = score_y - lw // 2
-            r, g, b, a = away_logo.split()
-            img.paste(Image.merge("RGB", (r, g, b)), (ax, paste_y), a)
-            ax += lw + 2
-
         away_rank = game.get("away_rank")
         away_prefix = f"#{away_rank} " if away_rank and away_rank <= 25 else ""
-        away_text = f"{away_prefix}{game['away_abbr']} {game['away_score']}"
-        _paste(img, render_text(away_text, away_color, score_size), ax, score_y, "lm")
-
-        # ── Home side (right) ───────────────────────────────────────────────
-        rx = x_offset + slot_width - 2
-        home_logo = self._logos.get(game.get("home_logo_url") or "")
-        if home_logo:
-            paste_y = score_y - lw // 2
-            paste_x = rx - lw
-            r, g, b, a = home_logo.split()
-            img.paste(Image.merge("RGB", (r, g, b)), (paste_x, paste_y), a)
-            rx -= lw + 2
-
         home_rank = game.get("home_rank")
         home_suffix = f" #{home_rank}" if home_rank and home_rank <= 25 else ""
-        home_text = f"{game['home_score']} {game['home_abbr']}{home_suffix}"
-        _paste(img, render_text(home_text, home_color, score_size), rx, score_y, "rm")
 
-        # ── Status / playoff info (bottom center) ───────────────────────────
+        away_abbr = f"{away_prefix}{game['away_abbr']}"
+        home_abbr = f"{game['home_abbr']}{home_suffix}"
+        away_score = str(game.get("away_score", "-"))
+        home_score = str(game.get("home_score", "-"))
         status_text = game.get("series_summary") or str(game.get("status", ""))
-        _paste(img, render_text(status_text, (140, 140, 140), label_size),
-               x_offset + slot_width // 2, h - 3, "mb")
+
+        if slot_width >= self._WIDE_THRESHOLD:
+            self._draw_wide(img, game, x_offset, slot_width, h, n_cols,
+                            away_abbr, away_score, away_color,
+                            home_abbr, home_score, home_color, status_text)
+        else:
+            self._draw_stacked(img, game, x_offset, slot_width, h,
+                               away_abbr, away_score, away_color,
+                               home_abbr, home_score, home_color, status_text)
+
+    def _draw_wide(
+        self,
+        img: Image.Image,
+        game: dict[str, Any],
+        x_offset: int,
+        slot_width: int,
+        h: int,
+        n_cols: int,
+        away_abbr: str, away_score: str, away_color: tuple[int, int, int],
+        home_abbr: str, home_score: str, home_color: tuple[int, int, int],
+        status_text: str,
+    ) -> None:
+        """Logo fills height. Abbr above score in the text column beside each logo."""
+        # All sizes derived from display height + n_cols — fixed per layout, never per game
+        STATUS_H   = 12
+        STATUS_FONT = 12
+
+        # Logo: for a single score use nearly the full height; shrink for 2-up
+        logo_size  = (h - 4) if n_cols == 1 else max(28, h - 22)
+        score_font = 28
+        abbr_font  = 16
+
+        # Logo is centred in the content area (above the status strip)
+        content_h = h - STATUS_H
+        logo_y    = max(0, (content_h - logo_size) // 2)
+        logo_cy   = logo_y + logo_size // 2   # vertical centre of logo
+
+        # Team name sits directly above score, block centred on logo vertical centre
+        probe_abbr_h  = render_text("A", (255, 255, 255), abbr_font).height
+        probe_score_h = render_text("0", (255, 255, 255), score_font).height
+        text_gap = 4
+        block_h  = probe_abbr_h + text_gap + probe_score_h
+        abbr_y   = logo_cy - block_h // 2
+        score_y  = abbr_y + probe_abbr_h + text_gap
+
+        # ── Away (left) ────────────────────────────────────────────────────
+        ax = x_offset + 2
+        a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
+        if a_logo:
+            r, g, b, a = a_logo.split()
+            img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_y), a)
+            ax += a_logo.size[0] + 3
+        _paste(img, render_text(away_abbr,  away_color, abbr_font),  ax, abbr_y,  "lt")
+        _paste(img, render_text(away_score, away_color, score_font), ax, score_y, "lt")
+
+        # ── Home (right) ───────────────────────────────────────────────────
+        rx = x_offset + slot_width - 2
+        h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
+        if h_logo:
+            r, g, b, a = h_logo.split()
+            img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], logo_y), a)
+            rx -= h_logo.size[0] + 3
+        _paste(img, render_text(home_abbr,  home_color, abbr_font),  rx, abbr_y,  "rt")
+        _paste(img, render_text(home_score, home_color, score_font), rx, score_y, "rt")
+
+        # ── Status ─────────────────────────────────────────────────────────
+        _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
+               x_offset + slot_width // 2, h - 2, "mb")
+
+    def _draw_stacked(
+        self,
+        img: Image.Image,
+        game: dict[str, Any],
+        x_offset: int,
+        slot_width: int,
+        h: int,
+        away_abbr: str, away_score: str, away_color: tuple[int, int, int],
+        home_abbr: str, home_score: str, home_color: tuple[int, int, int],
+        status_text: str,
+    ) -> None:
+        """Away top / home bottom. Logo left; abbr+score block centred on the logo."""
+        STATUS_H    = 12
+        STATUS_FONT = 12
+
+        team_h    = (h - STATUS_H) // 2
+        logo_size = max(6, team_h - 4)
+        # Single font for inline name + score; fill most of the row height
+        text_font = max(12, team_h - 8)
+
+        for i, (logo_key, abbr, score, color) in enumerate([
+            ("away_logo_url", away_abbr, away_score, away_color),
+            ("home_logo_url", home_abbr, home_score, home_color),
+        ]):
+            y_top  = i * team_h
+            logo_y = y_top + (team_h - logo_size) // 2   # centred in row
+            logo_cy = logo_y + logo_size // 2             # vertical centre of logo
+            lx      = x_offset + 2
+
+            logo = self._get_logo(game.get(logo_key), logo_size)
+            if logo:
+                r, g, b, a = logo.split()
+                img.paste(Image.merge("RGB", (r, g, b)), (lx, logo_y), a)
+                lx += logo.size[0] + 3
+
+            # Render name and score inline, both centred on the logo's vertical midpoint
+            abbr_img  = render_text(abbr,  color, text_font)
+            score_img = render_text(score, color, text_font)
+            _paste(img, abbr_img,  lx,                        logo_cy, "lm")
+            _paste(img, score_img, lx + abbr_img.width + 3,   logo_cy, "lm")
+
+        _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
+               x_offset + slot_width // 2, h - 2, "mb")
