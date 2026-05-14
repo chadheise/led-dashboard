@@ -1,0 +1,5 @@
+{
+  "sp500":  ["^GSPC"],
+  "nasdaq": ["^IXIC"],
+  "dow":    ["^DJI"]
+}

@@ -43,7 +43,7 @@ class ESPNSportsLibrary(Library):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._logo_cache: dict[str, Image.Image | None] = {}
-        data_dir = Path(__file__).parent.parent.parent / "data"
+        data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
         self._teams_dir = data_dir / "teams"
@@ -265,25 +265,35 @@ class ESPNSportsLibrary(Library):
         games: list[dict[str, Any]],
         target_size: tuple[int, int],
     ) -> dict[str, Image.Image | None]:
-        urls = {
-            url
-            for game in games
-            for url in [game.get("home_logo_url"), game.get("away_logo_url")]
-            if url
-        }
-        if not urls:
+        # Map each URL to (league, abbr) using the first game that mentions it.
+        url_to_meta: dict[str, tuple[str, str]] = {}
+        for game in games:
+            league = game.get("league", "unknown")
+            for url_key, abbr_key in [("home_logo_url", "home_abbr"), ("away_logo_url", "away_abbr")]:
+                url = game.get(url_key)
+                abbr = game.get(abbr_key, "")
+                if url and url not in url_to_meta:
+                    url_to_meta[url] = (league, abbr)
+
+        if not url_to_meta:
             return {}
+
         results = await asyncio.gather(
-            *[self.fetch_logo(u, target_size) for u in urls],
+            *[self.fetch_logo(url, target_size, league, abbr)
+              for url, (league, abbr) in url_to_meta.items()],
             return_exceptions=True,
         )
         return {
             url: (img if isinstance(img, Image.Image) else None)
-            for url, img in zip(urls, results)
+            for url, img in zip(url_to_meta.keys(), results)
         }
 
     async def fetch_logo(
-        self, url: str, target_size: tuple[int, int]
+        self,
+        url: str,
+        target_size: tuple[int, int],
+        league: str = "unknown",
+        team_abbr: str = "",
     ) -> Image.Image | None:
         if url in self._logo_cache:
             img = self._logo_cache[url]
@@ -291,7 +301,12 @@ class ESPNSportsLibrary(Library):
                 return None
             return self._scale_down(img, target_size)
 
-        cache_path = self._logo_dir / f"{hashlib.sha256(url.encode()).hexdigest()}.png"
+        safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", team_abbr) if team_abbr else None
+        if not safe_name:
+            safe_name = hashlib.sha256(url.encode()).hexdigest()[:12]
+        league_dir = self._logo_dir / league
+        league_dir.mkdir(parents=True, exist_ok=True)
+        cache_path = league_dir / f"{safe_name}.png"
         now = time.time()
 
         if cache_path.exists():
