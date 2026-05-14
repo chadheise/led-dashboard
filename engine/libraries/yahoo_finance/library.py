@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from io import BytesIO
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
 from PIL import Image
 
 from libraries.base import Library
+
+
+_LOGO_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
 
 
 PRESET_GROUPS: dict[str, list[str]] = {
@@ -69,6 +74,13 @@ class YahooFinanceLibrary(Library):
     )
     global_config_schema: ClassVar[dict[str, Any]] = {}
 
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self._logo_cache: dict[str, Image.Image | None] = {}
+        data_dir = Path(__file__).parent.parent.parent / "data"
+        self._logo_dir = data_dir / "logos" / "stocks"
+        self._logo_dir.mkdir(parents=True, exist_ok=True)
+
     async def fetch_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             results = await asyncio.gather(
@@ -78,13 +90,55 @@ class YahooFinanceLibrary(Library):
         return [r for r in results if isinstance(r, dict)]
 
     async def fetch_logo(self, symbol: str) -> Image.Image | None:
+        if symbol in self._logo_cache:
+            return self._logo_cache[symbol]
+
         domain = TICKER_DOMAIN.get(symbol)
         if not domain:
+            self._logo_cache[symbol] = None
             return None
+
+        cache_path = self._logo_dir / f"{symbol}.png"
+        now = time.time()
+
+        if cache_path.exists():
+            age = now - cache_path.stat().st_mtime
+            if age < _LOGO_TTL_SECONDS:
+                try:
+                    img = Image.open(cache_path).convert("RGBA")
+                    self._logo_cache[symbol] = img
+                    return img
+                except Exception:
+                    pass
+
+        downloaded = await self._download_logo(domain)
+        if downloaded is not None:
+            try:
+                downloaded.save(cache_path, format="PNG")
+            except Exception:
+                pass
+            self._logo_cache[symbol] = downloaded
+            return downloaded
+
+        # Download failed — use stale disk file as fallback
+        if cache_path.exists():
+            try:
+                img = Image.open(cache_path).convert("RGBA")
+                self._logo_cache[symbol] = img
+                return img
+            except Exception:
+                pass
+
+        self._logo_cache[symbol] = None
+        return None
+
+    @staticmethod
+    async def _download_logo(domain: str) -> Image.Image | None:
         try:
             async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
                 resp = await client.get(
-                    f"https://logo.clearbit.com/{domain}",
+                    "https://www.google.com/s2/favicons",
+                    params={"domain": domain, "sz": "64"},
                     headers={"User-Agent": "Mozilla/5.0"},
                 )
                 if resp.status_code == 200:

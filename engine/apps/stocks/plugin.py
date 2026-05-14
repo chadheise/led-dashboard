@@ -37,7 +37,7 @@ class StocksApp(DisplayApp):
     name: ClassVar[str] = "Stock Ticker"
     description: ClassVar[str] = (
         "Live prices and % change from Yahoo Finance — marquee or paginated, "
-        "with company icons and curated preset groups"
+        "with company logos and curated preset groups"
     )
     icon: ClassVar[str] = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
@@ -64,11 +64,11 @@ class StocksApp(DisplayApp):
                 "type": "array",
                 "title": "Ticker symbols (custom source only)",
                 "items": {"type": "string"},
-                "default": ["AAPL", "MSFT", "GOOGL"],
+                "default": ["AAPL", "MSFT", "GOOGL", "META", "AMZN", "TSLA", "NVDA",],
             },
             "show_icons": {
                 "type": "boolean",
-                "title": "Show company icons",
+                "title": "Show company logos",
                 "default": True,
             },
             "display_mode": {
@@ -188,7 +188,7 @@ class StocksApp(DisplayApp):
         show_icons = bool(self.config.get("show_icons", True))
 
         row_h = max(8, h // rows)
-        ratio = 0.50 if rows == 1 else 0.65
+        ratio = 0.40 if rows == 1 else 0.65
         text_h = max(self._renderer.base_font_h, round(row_h * ratio))
         arrow_size = text_h
         icon_size = text_h if (show_icons and text_h >= 12) else 0
