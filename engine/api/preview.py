@@ -95,10 +95,12 @@ class PreviewManager:
         if cls is None:
             raise ValueError(f"Unknown plugin id: {app_id!r}")
         plugin = cls(config, self._canvas, global_config, library_configs)
+        # on_activate already calls fetch_data for apps that override it (e.g. SportsApp),
+        # so this covers the initial data load synchronously before rendering starts.
         await plugin.on_activate()
-        # Kick off a single fetch in the background so data arrives quickly
-        self._fetch_task = asyncio.create_task(self._fetch_once(plugin))
         self._render_task = asyncio.create_task(self._render_loop(plugin))
+        # Periodic re-fetch keeps preview data fresh while editing
+        self._fetch_task = asyncio.create_task(self._fetch_periodic(plugin))
 
     async def stop(self) -> None:
         for task in (self._render_task, self._fetch_task):
@@ -111,11 +113,13 @@ class PreviewManager:
         self._render_task = None
         self._fetch_task = None
 
-    async def _fetch_once(self, plugin: DisplayApp) -> None:
-        try:
-            await plugin.fetch_data()
-        except Exception as exc:
-            logger.debug("Preview fetch_data error: %s", exc)
+    async def _fetch_periodic(self, plugin: DisplayApp) -> None:
+        while True:
+            await asyncio.sleep(plugin.refresh_interval)
+            try:
+                await plugin.fetch_data()
+            except Exception as exc:
+                logger.debug("Preview fetch_data error: %s", exc)
 
     async def _render_loop(self, plugin: DisplayApp) -> None:
         interval = 1.0 / self._fps

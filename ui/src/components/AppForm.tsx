@@ -1,5 +1,8 @@
 import { C, F, fieldStyle, labelStyle } from '../theme'
 import LocationMapInput from './LocationMapInput'
+import DurationInput from './DurationInput'
+import MultiPicker from './MultiPicker'
+import TeamPicker from './TeamPicker'
 
 // ── Schema types ───────────────────────────────────────────────────────────────
 
@@ -25,8 +28,15 @@ interface SchemaProperty {
    *   'color'        Native color picker + hex field
    *   'location'     Paired latitude / longitude fields (value: {latitude,longitude})
    *   'multi-select' Checkbox group built from items.enum
+   *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
+   *   'duration'     Number + unit selector ({value, unit}); units from x-duration-units
+   *   'team-picker'  Dynamic league + team selector (string[] of "league:abbr")
    */
   'x-input-type'?: string
+  /** Labels for multi-select options — map from option value to display label */
+  'x-enum-labels'?: Record<string, string>
+  /** Allowed time units for duration inputs */
+  'x-duration-units'?: string[]
   /** Restrict the radius slider on location inputs (km). Takes precedence over radius_km.minimum/maximum. */
   'x-radius-min'?: number
   'x-radius-max'?: number
@@ -113,9 +123,10 @@ function LocationInput({ title, value, onChange }: { title: string; value: unkno
   )
 }
 
-function MultiSelectInput({ title, options, value, onChange }: {
+function MultiSelectInput({ title, options, labels, value, onChange }: {
   title: string
   options: string[]
+  labels?: Record<string, string>
   value: unknown
   onChange: (v: string[]) => void
 }) {
@@ -138,7 +149,7 @@ function MultiSelectInput({ title, options, value, onChange }: {
               onChange={e => toggle(opt, e.target.checked)}
               style={{ accentColor: C.positive }}
             />
-            {opt.toUpperCase()}
+            {labels?.[opt] ?? opt.toUpperCase()}
           </label>
         ))}
       </div>
@@ -189,15 +200,57 @@ export default function AppForm({ schema, value, onChange }: Props) {
           )
         }
 
-        if (xType === 'multi-select') {
-          const options = prop.items?.enum ?? []
+        if (xType === 'multi-picker') {
+          const options = (prop.items?.enum ?? []).map(v => ({
+            value: v,
+            label: prop['x-enum-labels']?.[v] ?? v,
+          }))
           return (
-            <MultiSelectInput
+            <MultiPicker
               key={key}
               title={title}
               options={options}
               value={v}
               onChange={sel => onChange({ ...value, [key]: sel })}
+            />
+          )
+        }
+
+        if (xType === 'multi-select') {
+          const options = prop.items?.enum ?? []
+          const labels = prop['x-enum-labels']
+          return (
+            <MultiSelectInput
+              key={key}
+              title={title}
+              options={options}
+              labels={labels}
+              value={v}
+              onChange={sel => onChange({ ...value, [key]: sel })}
+            />
+          )
+        }
+
+        if (xType === 'duration') {
+          const allowedUnits = prop['x-duration-units'] ?? ['seconds', 'minutes', 'hours', 'days', 'months', 'years']
+          return (
+            <DurationInput
+              key={key}
+              title={title}
+              value={v}
+              allowedUnits={allowedUnits}
+              onChange={dur => onChange({ ...value, [key]: dur })}
+            />
+          )
+        }
+
+        if (xType === 'team-picker') {
+          return (
+            <TeamPicker
+              key={key}
+              title={title}
+              value={v}
+              onChange={teams => onChange({ ...value, [key]: teams })}
             />
           )
         }

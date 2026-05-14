@@ -147,6 +147,23 @@ async def save_app_config(
     return body.config
 
 
+# ── Sports data ───────────────────────────────────────────────────────────────
+
+
+@router.get("/sports/leagues")
+def get_sports_leagues() -> list[dict[str, str]]:
+    from libraries.espn_sports.library import _LEAGUES
+
+    return _LEAGUES
+
+
+@router.get("/sports/teams/{league}")
+async def get_sports_teams(league: str) -> list[dict[str, Any]]:
+    from libraries.espn_sports.library import ESPNSportsLibrary
+
+    return await ESPNSportsLibrary({}).fetch_teams(league)
+
+
 # ── Modules CRUD ───────────────────────────────────────────────────────────────
 
 

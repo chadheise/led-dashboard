@@ -1,0 +1,13 @@
+[
+  {"id": "1",   "name": "ACC"},
+  {"id": "4",   "name": "Big 12"},
+  {"id": "5",   "name": "Big Ten"},
+  {"id": "8",   "name": "SEC"},
+  {"id": "9",   "name": "Pac-12"},
+  {"id": "151", "name": "American Athletic"},
+  {"id": "12",  "name": "Conference USA"},
+  {"id": "18",  "name": "Independent"},
+  {"id": "15",  "name": "MAC"},
+  {"id": "17",  "name": "Mountain West"},
+  {"id": "37",  "name": "Sun Belt"}
+]
