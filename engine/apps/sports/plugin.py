@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 from canvas.base import Canvas
 from plugin_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import load_font
+from libraries.text_renderer.library import render_text
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 
 
@@ -44,14 +44,41 @@ def _duration_to_seconds(d: Any) -> float:
     return 0.0
 
 
+def _paste(
+    img: Image.Image,
+    text_img: Image.Image,
+    x: int,
+    y: int,
+    anchor: str,
+) -> None:
+    """Paste a rendered text image onto img at (x, y) using a two-char PIL anchor."""
+    w, h = text_img.size
+    px = x - {"l": 0, "m": w // 2, "r": w}[anchor[0]]
+    py = y - {"t": 0, "m": h // 2, "b": h}[anchor[1]]
+    img.paste(text_img, (px, py))
+
+
+_BLACK_THRESHOLD = 30  # max channel value below which a color is considered black
+
+
 def _brighten(color: tuple[int, int, int], minimum: int = 100) -> tuple[int, int, int]:
-    """Ensure a team color is bright enough to read on a black LED background."""
+    """Scale color up so its brightest channel is at least `minimum`."""
     r, g, b = color
     peak = max(r, g, b)
+    if peak == 0:
+        return (minimum, minimum, minimum)
     if peak < minimum:
-        scale = minimum / max(peak, 1)
+        scale = minimum / peak
         return (min(255, int(r * scale)), min(255, int(g * scale)), min(255, int(b * scale)))
     return (r, g, b)
+
+
+def _team_color(primary_hex: str, alt_hex: str) -> tuple[int, int, int]:
+    """Return a visible team color, falling back to the alternate if the primary is black."""
+    color = parse_color(primary_hex or "000000")
+    if max(color) < _BLACK_THRESHOLD:
+        color = parse_color(alt_hex or "aaaaaa")
+    return _brighten(color)
 
 
 
@@ -287,36 +314,32 @@ class SportsApp(DisplayApp):
         x_offset: int,
         slot_width: int,
     ) -> None:
-        draw = ImageDraw.Draw(img)
         h = self.canvas.height
         n = self._scores_per_screen()
         logo_size = self._logo_size_for_columns(n)
         lw = logo_size[0]
 
-        font_size = 18 if slot_width < 100 else 24
-        score_font = load_font(font_size)
-        label_font = load_font(10 if slot_width < 100 else 12)
-
+        score_size = 18 if slot_width < 100 else 24
+        label_size = 10 if slot_width < 100 else 12
         score_y = h // 2
 
-        # Team colors — ensure visible on black background
-        away_color = _brighten(parse_color(game.get("away_color") or "aaaaaa"))
-        home_color = _brighten(parse_color(game.get("home_color") or "aaaaaa"))
+        # Team colors — use alternate if primary is black (invisible on black display)
+        away_color = _team_color(game.get("away_color", ""), game.get("away_alt_color", ""))
+        home_color = _team_color(game.get("home_color", ""), game.get("home_alt_color", ""))
 
         # ── Away side (left) ────────────────────────────────────────────────
         ax = x_offset + 2
         away_logo = self._logos.get(game.get("away_logo_url") or "")
         if away_logo:
             paste_y = score_y - lw // 2
-            # Extract alpha as explicit mask to avoid any RGBA→RGB mode confusion
             r, g, b, a = away_logo.split()
             img.paste(Image.merge("RGB", (r, g, b)), (ax, paste_y), a)
             ax += lw + 2
 
         away_rank = game.get("away_rank")
-        away_prefix = f"#{away_rank} " if away_rank else ""
+        away_prefix = f"#{away_rank} " if away_rank and away_rank <= 25 else ""
         away_text = f"{away_prefix}{game['away_abbr']} {game['away_score']}"
-        self._draw_text(draw, (ax, score_y), away_text, score_font, away_color, "lm")
+        _paste(img, render_text(away_text, away_color, score_size), ax, score_y, "lm")
 
         # ── Home side (right) ───────────────────────────────────────────────
         rx = x_offset + slot_width - 2
@@ -329,32 +352,11 @@ class SportsApp(DisplayApp):
             rx -= lw + 2
 
         home_rank = game.get("home_rank")
-        home_suffix = f" #{home_rank}" if home_rank else ""
+        home_suffix = f" #{home_rank}" if home_rank and home_rank <= 25 else ""
         home_text = f"{game['home_score']} {game['home_abbr']}{home_suffix}"
-        self._draw_text(draw, (rx, score_y), home_text, score_font, home_color, "rm")
+        _paste(img, render_text(home_text, home_color, score_size), rx, score_y, "rm")
 
         # ── Status / playoff info (bottom center) ───────────────────────────
         status_text = game.get("series_summary") or str(game.get("status", ""))
-        self._draw_text(
-            draw, (x_offset + slot_width // 2, h - 3),
-            status_text, label_font, (140, 140, 140), "mb",
-        )
-
-    @staticmethod
-    def _draw_text(
-        draw: ImageDraw.ImageDraw,
-        xy: tuple[int, int],
-        text: str,
-        font: Any,
-        fill: tuple[int, int, int],
-        anchor: str,
-    ) -> None:
-        try:
-            draw.text(xy, text, font=font, fill=fill, anchor=anchor)
-        except TypeError:
-            bbox = draw.textbbox((0, 0), text, font=font)
-            tw = bbox[2] - bbox[0]
-            th = bbox[3] - bbox[1]
-            fx = {"l": xy[0], "m": xy[0] - tw // 2, "r": xy[0] - tw}[anchor[0]]
-            fy = {"t": xy[1], "m": xy[1] - th // 2, "b": xy[1] - th}[anchor[1]]
-            draw.text((fx, fy - bbox[1]), text, font=font, fill=fill)
+        _paste(img, render_text(status_text, (140, 140, 140), label_size),
+               x_offset + slot_width // 2, h - 3, "mb")

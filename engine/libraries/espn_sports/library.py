@@ -424,6 +424,8 @@ class ESPNSportsLibrary(Library):
                     "away_score": away.get("score", "-"),
                     "home_color": home_team.get("color", "444444"),
                     "away_color": away_team.get("color", "444444"),
+                    "home_alt_color": home_team.get("alternateColor", "aaaaaa"),
+                    "away_alt_color": away_team.get("alternateColor", "aaaaaa"),
                     "home_logo_url": home_team.get("logo"),
                     "away_logo_url": away_team.get("logo"),
                     "status": status_type.get("shortDetail", "Scheduled"),
