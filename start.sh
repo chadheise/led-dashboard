@@ -39,9 +39,9 @@ python3 main.py &
 ENGINE_PID=$!
 
 # Start UI preview server (serves the built dist/)
-log "Starting UI server on :8080..."
+log "Starting UI server on :3000..."
 cd "$REPO_DIR/ui"
-npm run preview -- --host 0.0.0.0 --port 8080 &
+npm run preview -- --host 0.0.0.0 --port 3000 &
 UI_PID=$!
 
 log "Services started. Engine PID=$ENGINE_PID, UI PID=$UI_PID"
