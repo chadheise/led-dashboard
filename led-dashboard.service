@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/led-dashboard
-ExecStart=/home/pi/led-dashboard/start.sh
+User=chadheise
+WorkingDirectory=/home/chadheise/led-dashboard
+ExecStart=/home/chadheise/led-dashboard/start.sh
 Restart=on-failure
 RestartSec=15
 StandardOutput=journal
