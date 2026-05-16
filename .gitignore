@@ -9,6 +9,7 @@ dist/
 # Node
 ui/node_modules/
 ui/dist/
+ui/.vite/
 
 # Editor
 .DS_Store
