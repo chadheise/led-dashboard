@@ -456,6 +456,23 @@ class ESPNSportsLibrary(Library):
             home_conf: str | None = home_groups[0].get("name") if home_groups else None
             away_conf: str | None = away_groups[0].get("name") if away_groups else None
 
+            # In-game situational data (football: down/distance/possession; baseball: runners/outs)
+            situation = comp.get("situation") or {}
+
+            # Team records (for football display)
+            home_record: str | None = next(
+                (r.get("summary") for r in home.get("records", []) if r.get("name") == "overall"),
+                None,
+            )
+            away_record: str | None = next(
+                (r.get("summary") for r in away.get("records", []) if r.get("name") == "overall"),
+                None,
+            )
+
+            # Match context note (soccer: group name or knockout round)
+            notes = comp.get("notes") or []
+            match_note: str = notes[0].get("headline", "") if notes else ""
+
             games.append(
                 {
                     "league": league,
@@ -480,6 +497,12 @@ class ESPNSportsLibrary(Library):
                     "away_rank": away_rank,
                     "home_conf": home_conf,
                     "away_conf": away_conf,
+                    "situation": situation,
+                    "home_id": home_team.get("id", ""),
+                    "away_id": away_team.get("id", ""),
+                    "home_record": home_record,
+                    "away_record": away_record,
+                    "match_note": match_note,
                 }
             )
         if filter_mode == "top25":

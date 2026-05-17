@@ -83,6 +83,30 @@ def _team_color(primary_hex: str, alt_hex: str) -> tuple[int, int, int]:
 
 
 
+def _make_diamond_img(on_first: bool, on_second: bool, on_third: bool) -> Image.Image:
+    """Render an 11×11 baseball diamond; each base is a diamond (rotated-square) shape."""
+    size = 11
+    r = 2  # half-width of each base diamond
+    yellow = (220, 180, 0)
+    empty_color = (70, 70, 70)
+    img = Image.new("RGB", (size, size), (0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Centers placed so the four bases form a larger diamond together
+    bases = [
+        ((5, 2), on_second),   # 2B top
+        ((8, 5), on_first),    # 1B right
+        ((5, 8), False),       # HP bottom — always empty
+        ((2, 5), on_third),    # 3B left
+    ]
+    for (cx, cy), occupied in bases:
+        pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
+        if occupied:
+            draw.polygon(pts, fill=yellow)
+        else:
+            draw.polygon(pts, outline=empty_color)
+    return img
+
+
 class SportsApp(DisplayApp):
     id: ClassVar[str] = "sports"
     name: ClassVar[str] = "Sports Scores"
@@ -478,6 +502,40 @@ class SportsApp(DisplayApp):
         home_score = str(game.get("home_score", "-"))
         status_text = game.get("series_summary") or str(game.get("status", ""))
 
+        state = game.get("state", "pre")
+        sport = game.get("sport", "")
+        situation = game.get("situation") or {}
+
+        if state == "in" and sport == "football":
+            # Append record to each abbreviation
+            if game.get("away_record"):
+                away_abbr = f"{away_abbr} ({game['away_record']})"
+            if game.get("home_record"):
+                home_abbr = f"{home_abbr} ({game['home_record']})"
+
+            # Possession indicator — ESPN ref looks like ".../teams/{id}"
+            pos_ref = (situation.get("possession") or {}).get("$ref", "") \
+                if isinstance(situation.get("possession"), dict) \
+                else ""
+            home_id = game.get("home_id", "")
+            away_id = game.get("away_id", "")
+            if home_id and f"/teams/{home_id}" in pos_ref:
+                home_abbr = f"> {home_abbr}"
+            elif away_id and f"/teams/{away_id}" in pos_ref:
+                away_abbr = f"{away_abbr} <"
+
+            # Append down & distance to status text
+            down = situation.get("down")
+            distance = situation.get("distance")
+            if down and distance is not None:
+                down_str = ["1st", "2nd", "3rd", "4th"][min(int(down) - 1, 3)]
+                status_text = f"{status_text} {down_str}&{distance}"
+
+        elif state == "in" and sport == "soccer":
+            match_note = game.get("match_note", "")
+            if match_note:
+                status_text = f"{status_text} | {match_note}"
+
         if slot_width >= self._WIDE_THRESHOLD:
             self._draw_wide(img, game, x_offset, slot_width, h, n_cols,
                             away_abbr, away_score, away_color,
@@ -486,6 +544,45 @@ class SportsApp(DisplayApp):
             self._draw_stacked(img, game, x_offset, slot_width, h,
                                away_abbr, away_score, away_color,
                                home_abbr, home_score, home_color, status_text)
+
+    def _draw_status_bar(
+        self,
+        img: Image.Image,
+        game: dict[str, Any],
+        x_offset: int,
+        slot_width: int,
+        h: int,
+        status_text: str,
+    ) -> None:
+        STATUS_FONT = 12
+        STATUS_H = 12
+        cx = x_offset + slot_width // 2
+
+        if game.get("state") == "in" and game.get("sport") == "baseball":
+            situation = game.get("situation", {})
+            diamond = _make_diamond_img(
+                bool(situation.get("onFirst")),
+                bool(situation.get("onSecond")),
+                bool(situation.get("onThird")),
+            )
+            outs = int(situation.get("outs") or 0)
+            outs_text = "1 out" if outs == 1 else f"{outs} outs"
+
+            inning_img = render_text(status_text, (140, 140, 140), STATUS_FONT)
+            outs_img = render_text(outs_text, (140, 140, 140), STATUS_FONT)
+            gap = 3
+            total_w = inning_img.width + gap + diamond.width + gap + outs_img.width
+            sx = cx - total_w // 2
+            mid_y = h - STATUS_H // 2
+            _paste(img, inning_img, sx, mid_y, "lm")
+            sx += inning_img.width + gap
+            diamond_y = max(0, h - STATUS_H + (STATUS_H - diamond.height) // 2)
+            img.paste(diamond, (max(x_offset, sx), diamond_y))
+            sx += diamond.width + gap
+            _paste(img, outs_img, sx, mid_y, "lm")
+        else:
+            _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
+                   cx, h - 2, "mb")
 
     def _draw_wide(
         self,
@@ -501,8 +598,7 @@ class SportsApp(DisplayApp):
     ) -> None:
         """Logo fills height. Abbr above score in the text column beside each logo."""
         # All sizes derived from display height + n_cols — fixed per layout, never per game
-        STATUS_H   = 12
-        STATUS_FONT = 12
+        STATUS_H = 12
 
         # Logo: for a single score use nearly the full height; shrink for 2-up
         logo_size = (h - 4) if n_cols == 1 else max(28, h - 22)
@@ -562,8 +658,7 @@ class SportsApp(DisplayApp):
         _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
 
         # ── Status ─────────────────────────────────────────────────────────
-        _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
-               x_offset + slot_width // 2, h - 2, "mb")
+        self._draw_status_bar(img, game, x_offset, slot_width, h, status_text)
 
     def _draw_stacked(
         self,
@@ -577,8 +672,7 @@ class SportsApp(DisplayApp):
         status_text: str,
     ) -> None:
         """Away top / home bottom. Logo left; abbr+score block centred on the logo."""
-        STATUS_H    = 12
-        STATUS_FONT = 12
+        STATUS_H = 12
 
         team_h    = (h - STATUS_H) // 2
         logo_size = max(6, team_h - 4)
@@ -608,5 +702,4 @@ class SportsApp(DisplayApp):
             _paste(img, abbr_img,  lx,                        logo_cy, "lm")
             _paste(img, score_img, lx + abbr_img.width + 3,   logo_cy, "lm")
 
-        _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
-               x_offset + slot_width // 2, h - 2, "mb")
+        self._draw_status_bar(img, game, x_offset, slot_width, h, status_text)
