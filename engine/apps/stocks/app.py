@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
 from app_base import DisplayApp
+from grid import SizeConstraints, split_vertical
 from libraries.canvas_utils.library import blit
 from libraries.yahoo_finance.library import YahooFinanceLibrary, PRESET_GROUPS
 from libraries.text_renderer.library import TextRendererLibrary
@@ -50,6 +51,7 @@ class StocksApp(DisplayApp):
         '<polyline points="3,18 8,11 13,14 20,5"/><polyline points="16,5 20,5 20,9"/></svg>'
     )
     libraries: ClassVar[list[str]] = ["yahoo_finance", "text_renderer"]
+    size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=32)
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -659,25 +661,6 @@ class StocksApp(DisplayApp):
         else:
             self._render_paginate_frame()
 
-    def _blit_row(self, img: Image.Image, x_offset: int, y_start: int, row_h: int) -> None:
-        data = img.tobytes()
-        iw, ih = img.size
-        cw = self.canvas.width
-        ch = self.canvas.height
-        src_h = min(ih, row_h)
-
-        dst_x_start = max(0, x_offset)
-        dst_x_end = min(cw, x_offset + iw)
-
-        for dst_x in range(dst_x_start, dst_x_end):
-            src_x = dst_x - x_offset
-            for src_y in range(src_h):
-                dst_y = y_start + src_y
-                if dst_y >= ch:
-                    break
-                idx = (src_y * iw + src_x) * 3
-                self.canvas.set_pixel(dst_x, dst_y, data[idx], data[idx + 1], data[idx + 2])
-
     def _render_marquee_frame(self) -> None:
         if not self._marquee_pct_rows:
             self._build_images()
@@ -686,26 +669,24 @@ class StocksApp(DisplayApp):
 
         rows_imgs = self._marquee_pct_rows if self._show_pct else self._marquee_dol_rows
         n_rows = len(rows_imgs)
-        row_h = self.canvas.height // n_rows
+        row_regions = split_vertical(self.canvas, n_rows)
 
-        cw = self.canvas.width
-        for i, img in enumerate(rows_imgs):
+        for i, (img, region) in enumerate(zip(rows_imgs, row_regions)):
             if img is None:
                 continue
             strip_w = self._row_widths[i]
             if strip_w <= 0:
                 continue
-            row_y = i * row_h
 
             # Advance and keep offset in [-strip_w, 0) for seamless looping
             self._row_offsets[i] -= self._row_speeds[i]
             if self._row_offsets[i] <= -strip_w:
                 self._row_offsets[i] += strip_w
 
-            # Draw enough copies of the strip to fill the canvas with no gap
+            # Draw enough copies of the strip to fill the row with no gap
             x = int(self._row_offsets[i])
-            while x < cw:
-                self._blit_row(img, x, row_y, row_h)
+            while x < region.width:
+                blit(region, img, x)
                 x += strip_w
 
     def _fit_text(

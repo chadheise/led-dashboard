@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from canvas.base import Canvas
+from grid import SizeConstraints
 
 
 class DisplayApp(ABC):
@@ -14,6 +15,7 @@ class DisplayApp(ABC):
     config_schema: ClassVar[dict[str, Any]]
     global_config_schema: ClassVar[dict[str, Any]] = {}  # app-level params (API keys, defaults)
     libraries: ClassVar[list[str]] = []  # library IDs this app depends on
+    size_constraints: ClassVar[SizeConstraints] = SizeConstraints()  # no constraints by default
 
     def __init__(
         self,

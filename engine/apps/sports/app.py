@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
 from app_base import DisplayApp
+from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
@@ -81,22 +82,22 @@ def _team_color(primary_hex: str, alt_hex: str) -> tuple[int, int, int]:
     return _brighten(color)
 
 
-
-
-def _make_diamond_img(on_first: bool, on_second: bool, on_third: bool) -> Image.Image:
-    """Render an 11×11 baseball diamond; each base is a diamond (rotated-square) shape."""
-    size = 11
-    r = 2  # half-width of each base diamond
-    yellow = (220, 180, 0)
+def _make_diamond_img(
+    on_first: bool, on_second: bool, on_third: bool, size: int = 11
+) -> Image.Image:
+    """Render a baseball diamond as a square image of `size` × `size` pixels."""
+    half  = size // 2
+    inset = max(2, size // 5)
+    r     = max(2, size // 5)  # half-width of each base diamond
+    yellow      = (220, 180, 0)
     empty_color = (70, 70, 70)
-    img = Image.new("RGB", (size, size), (0, 0, 0))
+    img  = Image.new("RGB", (size, size), (0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # Centers placed so the four bases form a larger diamond together
     bases = [
-        ((5, 2), on_second),   # 2B top
-        ((8, 5), on_first),    # 1B right
-        ((5, 8), False),       # HP bottom — always empty
-        ((2, 5), on_third),    # 3B left
+        ((half,            inset           ), on_second),   # 2B top
+        ((size - inset - 1, half           ), on_first),    # 1B right
+        ((half,            size - inset - 1), False),       # HP bottom — always empty
+        ((inset,           half            ), on_third),    # 3B left
     ]
     for (cx, cy), occupied in bases:
         pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
@@ -124,6 +125,7 @@ class SportsApp(DisplayApp):
         '<line x1="9" y1="20" x2="15" y2="20"/></svg>'
     )
     libraries: ClassVar[list[str]] = ["espn_sports"]
+    size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=64)
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Sports Scores",
@@ -375,13 +377,6 @@ class SportsApp(DisplayApp):
             max_pages = max(1, math.ceil(len(self._games) / n))
             self._page_idx = (self._page_idx + 1) % max_pages
 
-    def _render_game_card(self, game: dict[str, Any], card_w: int, n_cols: int) -> Image.Image:
-        """Render a single game as a standalone card image."""
-        h = self.canvas.height
-        card = Image.new("RGB", (card_w, h), (0, 0, 0))
-        self._draw_game_slot(card, game, 0, card_w, n_cols)
-        return card
-
     def _build_marquee_strip(self) -> Image.Image | None:
         if not self._games:
             return None
@@ -390,7 +385,7 @@ class SportsApp(DisplayApp):
         h = self.canvas.height
         strip = Image.new("RGB", (card_w * len(self._games), h), (0, 0, 0))
         for i, game in enumerate(self._games):
-            card = self._render_game_card(game, card_w, n)
+            card = self._render_slot_image(game, card_w, h)
             strip.paste(card, (i * card_w, 0))
             if i > 0:
                 ImageDraw.Draw(strip).line([(i * card_w, 0), (i * card_w, h - 1)], fill=(35, 35, 35))
@@ -437,7 +432,6 @@ class SportsApp(DisplayApp):
                 self._stagger_slot_counter[i] = 0
                 self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + n) % max(1, n_games)
 
-        # Draw current state: each slot shows its game
         card_w = self.canvas.width // n
         h = self.canvas.height
         w = self.canvas.width
@@ -452,7 +446,8 @@ class SportsApp(DisplayApp):
                 ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))
                 x_off += 1
                 actual_w -= 1
-            self._draw_game_slot(img, game, x_off, actual_w, n)
+            card = self._render_slot_image(game, actual_w, h)
+            img.paste(card, (x_off, 0))
 
         blit(self.canvas, img)
 
@@ -470,23 +465,18 @@ class SportsApp(DisplayApp):
                 ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))
                 x_off += 1
                 actual_w -= 1
-            self._draw_game_slot(img, game, x_off, actual_w, n_cols)
+            card = self._render_slot_image(game, actual_w, h)
+            img.paste(card, (x_off, 0))
 
         blit(self.canvas, img)
 
-    # ── Layout constants (relative to display height) ──────────────────────────
+    def _render_slot_image(self, game: dict[str, Any], w: int, h: int) -> Image.Image:
+        """Render a single game as a PIL image at the given dimensions.
 
-    _WIDE_THRESHOLD = 130  # slot widths >= this use the wide side-by-side layout
-
-    def _draw_game_slot(
-        self,
-        img: Image.Image,
-        game: dict[str, Any],
-        x_offset: int,
-        slot_width: int,
-        n_cols: int,
-    ) -> None:
-        h = self.canvas.height
+        Selects a layout tier based on available pixel width so the same method
+        works correctly whether the slot is the full display or a narrow sub-column.
+        """
+        img = Image.new("RGB", (w, h), (0, 0, 0))
 
         away_color = _team_color(game.get("away_color", ""), game.get("away_alt_color", ""))
         home_color = _team_color(game.get("home_color", ""), game.get("home_alt_color", ""))
@@ -536,50 +526,61 @@ class SportsApp(DisplayApp):
             if match_note:
                 status_text = f"{status_text} | {match_note}"
 
-        if slot_width >= self._WIDE_THRESHOLD:
-            self._draw_wide(img, game, x_offset, slot_width, h, n_cols,
+        # Select layout tier based on available pixel width
+        if w >= 128:
+            self._draw_wide(img, game, w, h,
                             away_abbr, away_score, away_color,
                             home_abbr, home_score, home_color, status_text)
-        else:
-            self._draw_stacked(img, game, x_offset, slot_width, h,
+        elif w >= 48:
+            self._draw_stacked(img, game, w, h,
                                away_abbr, away_score, away_color,
                                home_abbr, home_score, home_color, status_text)
+        else:
+            self._draw_minimal(img, w, h,
+                               away_score, away_color,
+                               home_score, home_color)
+
+        return img
 
     def _draw_status_bar(
         self,
         img: Image.Image,
         game: dict[str, Any],
-        x_offset: int,
-        slot_width: int,
+        w: int,
         h: int,
         status_text: str,
     ) -> None:
         STATUS_FONT = 12
         STATUS_H = 12
-        cx = x_offset + slot_width // 2
+        cx = w // 2
 
         if game.get("state") == "in" and game.get("sport") == "baseball":
             situation = game.get("situation", {})
-            diamond = _make_diamond_img(
-                bool(situation.get("onFirst")),
-                bool(situation.get("onSecond")),
-                bool(situation.get("onThird")),
-            )
             outs = int(situation.get("outs") or 0)
             outs_text = "1 out" if outs == 1 else f"{outs} outs"
-
             inning_img = render_text(status_text, (140, 140, 140), STATUS_FONT)
-            outs_img = render_text(outs_text, (140, 140, 140), STATUS_FONT)
-            gap = 3
-            total_w = inning_img.width + gap + diamond.width + gap + outs_img.width
-            sx = cx - total_w // 2
-            mid_y = h - STATUS_H // 2
-            _paste(img, inning_img, sx, mid_y, "lm")
-            sx += inning_img.width + gap
-            diamond_y = max(0, h - STATUS_H + (STATUS_H - diamond.height) // 2)
-            img.paste(diamond, (max(x_offset, sx), diamond_y))
-            sx += diamond.width + gap
-            _paste(img, outs_img, sx, mid_y, "lm")
+
+            if w >= 256:
+                # Diamond and outs are shown in the content area for large format;
+                # status bar carries only the inning text.
+                _paste(img, inning_img, cx, h - 2, "mb")
+            else:
+                diamond = _make_diamond_img(
+                    bool(situation.get("onFirst")),
+                    bool(situation.get("onSecond")),
+                    bool(situation.get("onThird")),
+                )
+                outs_img = render_text(outs_text, (140, 140, 140), STATUS_FONT)
+                gap = 3
+                total_w = inning_img.width + gap + diamond.width + gap + outs_img.width
+                sx = cx - total_w // 2
+                mid_y = h - STATUS_H // 2
+                _paste(img, inning_img, sx, mid_y, "lm")
+                sx += inning_img.width + gap
+                diamond_y = max(0, h - STATUS_H + (STATUS_H - diamond.height) // 2)
+                img.paste(diamond, (max(0, sx), diamond_y))
+                sx += diamond.width + gap
+                _paste(img, outs_img, sx, mid_y, "lm")
         else:
             _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
                    cx, h - 2, "mb")
@@ -588,84 +589,136 @@ class SportsApp(DisplayApp):
         self,
         img: Image.Image,
         game: dict[str, Any],
-        x_offset: int,
-        slot_width: int,
+        w: int,
         h: int,
-        n_cols: int,
         away_abbr: str, away_score: str, away_color: tuple[int, int, int],
         home_abbr: str, home_score: str, home_color: tuple[int, int, int],
         status_text: str,
     ) -> None:
-        """Logo fills height. Abbr above score in the text column beside each logo."""
-        # All sizes derived from display height + n_cols — fixed per layout, never per game
-        STATUS_H = 12
-
-        # Logo: for a single score use nearly the full height; shrink for 2-up
-        logo_size = (h - 4) if n_cols == 1 else max(28, h - 22)
-
-        # Content area sits above the status strip
+        """Logo fills height. Team info + score beside each logo; 3-line layout for large format."""
+        STATUS_H  = 12
+        logo_size = (h - 4) if w >= 256 else max(28, h - 22)
         content_h = h - STATUS_H
+        _MARGIN   = 2
+        block_avail = content_h - 2 * _MARGIN
+        logo_max_w  = logo_size if w < 256 else None
 
-        # Font sizes fill content_h with a 2 px margin top and bottom.
-        # Score gets ~65 % of the block, abbr the rest; gap absorbs whatever is left.
-        _MARGIN       = 2
-        block_avail   = content_h - 2 * _MARGIN
-        score_font    = max(22, block_avail * 13 // 20)
-        abbr_font     = max(12, block_avail * 6  // 20)
+        if w >= 256:
+            # ── Large format: city / team name / score (3 lines) ───────────
+            city_font     = 12
+            team_font     = 12
+            name_gap      = 2
+            score_gap     = 4
+            probe_city_h  = render_text("A", (255, 255, 255), city_font).height
+            probe_team_h  = render_text("A", (255, 255, 255), team_font).height
+            score_font    = max(22, block_avail - probe_city_h - name_gap - probe_team_h - score_gap)
+            probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
 
-        # For multi-column layouts clamp score_font so a 3-digit score fits per-team.
-        # Away text grows rightward from ax; home text grows leftward from rx = slot_width-ax.
-        # Each team therefore has (rx - ax) // 2 horizontal pixels before they would overlap.
-        if n_cols > 1:
+            block_h = probe_city_h + name_gap + probe_team_h + score_gap + probe_score_h
+            city_y  = (content_h - block_h) // 2
+            team_y  = city_y + probe_city_h + name_gap
+            score_y = team_y + probe_team_h + score_gap
+
+            away_rank_v    = game.get("away_rank")
+            home_rank_v    = game.get("home_rank")
+            away_city_text = game.get("away_location") or away_abbr
+            home_city_text = game.get("home_location") or home_abbr
+            away_team_text = (f"#{away_rank_v} " if away_rank_v and away_rank_v <= 25 else "") \
+                             + (game.get("away_nickname") or away_abbr)
+            home_team_text = (game.get("home_nickname") or home_abbr) \
+                             + (f" #{home_rank_v}" if home_rank_v and home_rank_v <= 25 else "")
+
+            # Away (left)
+            ax = 2
+            a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
+            if a_logo:
+                r, g, b, a = a_logo.split()
+                img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
+                ax += a_logo.size[0] + 3
+            _paste(img, render_text(away_city_text, away_color, city_font),              ax, city_y,  "lt")
+            _paste(img, render_text(away_team_text, away_color, team_font),              ax, team_y,  "lt")
+            _paste(img, render_text(away_score,     away_color, score_font, bold=True),  ax, score_y, "lt")
+
+            # Home (right)
+            rx = w - 2
+            h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
+            if h_logo:
+                r, g, b, a = h_logo.split()
+                img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
+                rx -= h_logo.size[0] + 3
+            _paste(img, render_text(home_city_text, home_color, city_font),              rx, city_y,  "rt")
+            _paste(img, render_text(home_team_text, home_color, team_font),              rx, team_y,  "rt")
+            _paste(img, render_text(home_score,     home_color, score_font, bold=True),  rx, score_y, "rt")
+
+        else:
+            # ── Narrower slots: abbreviation / score (2 lines) ─────────────
+            score_font = max(22, block_avail * 13 // 20)
+            abbr_font  = max(12, block_avail * 6  // 20)
+
             ax = 2 + logo_size + 3
-            per_team_px = (slot_width - 2 * ax) // 2
+            per_team_px = (w - 2 * ax) // 2
             while score_font > 22:
                 if render_text("000", (255, 255, 255), score_font, bold=True).width <= per_team_px:
                     break
                 score_font -= 1
 
-        probe_abbr_h  = render_text("A", (255, 255, 255), abbr_font).height
-        probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
-        text_gap      = 4
-        block_h       = probe_abbr_h + text_gap + probe_score_h
-        abbr_y        = (content_h - block_h) // 2
-        score_y       = abbr_y + probe_abbr_h + text_gap
+            probe_abbr_h  = render_text("A", (255, 255, 255), abbr_font).height
+            probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
+            text_gap      = 4
+            block_h       = probe_abbr_h + text_gap + probe_score_h
+            abbr_y        = (content_h - block_h) // 2
+            score_y       = abbr_y + probe_abbr_h + text_gap
 
-        # For multi-column, cap logo width to logo_size so it matches the pre-computed
-        # ax/rx positions used in per_team_px. Single-column can let wide logos breathe.
-        logo_max_w = logo_size if n_cols > 1 else None
+            # Away (left)
+            ax = 2
+            a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
+            if a_logo:
+                r, g, b, a = a_logo.split()
+                img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
+                ax += a_logo.size[0] + 3
+            _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
+            _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
 
-        # ── Away (left) ────────────────────────────────────────────────────
-        ax = x_offset + 2
-        a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
-        if a_logo:
-            r, g, b, a = a_logo.split()
-            a_logo_y = max(0, (content_h - a_logo.size[1]) // 2)
-            img.paste(Image.merge("RGB", (r, g, b)), (ax, a_logo_y), a)
-            ax += a_logo.size[0] + 3
-        _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
-        _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
+            # Home (right)
+            rx = w - 2
+            h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
+            if h_logo:
+                r, g, b, a = h_logo.split()
+                img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
+                rx -= h_logo.size[0] + 3
+            _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
+            _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
 
-        # ── Home (right) ───────────────────────────────────────────────────
-        rx = x_offset + slot_width - 2
-        h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
-        if h_logo:
-            r, g, b, a = h_logo.split()
-            h_logo_y = max(0, (content_h - h_logo.size[1]) // 2)
-            img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], h_logo_y), a)
-            rx -= h_logo.size[0] + 3
-        _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
-        _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
+        # ── Baseball situation (large format only) ─────────────────────────
+        if w >= 256 and game.get("state") == "in" and game.get("sport") == "baseball":
+            situation = game.get("situation") or {}
+            outs = int(situation.get("outs") or 0)
+            outs_img = render_text(
+                "1 out" if outs == 1 else f"{outs} outs",
+                (140, 140, 140), 12,
+            )
+            gap = 3
+            diamond_size = max(18, content_h - outs_img.height - gap - 4)
+            diamond_img = _make_diamond_img(
+                bool(situation.get("onFirst")),
+                bool(situation.get("onSecond")),
+                bool(situation.get("onThird")),
+                size=diamond_size,
+            )
+            block_h = outs_img.height + gap + diamond_img.height
+            block_y = (content_h - block_h) // 2
+            cx = w // 2
+            _paste(img, outs_img, cx, block_y, "mt")
+            img.paste(diamond_img, (cx - diamond_img.width // 2, block_y + outs_img.height + gap))
 
         # ── Status ─────────────────────────────────────────────────────────
-        self._draw_status_bar(img, game, x_offset, slot_width, h, status_text)
+        self._draw_status_bar(img, game, w, h, status_text)
 
     def _draw_stacked(
         self,
         img: Image.Image,
         game: dict[str, Any],
-        x_offset: int,
-        slot_width: int,
+        w: int,
         h: int,
         away_abbr: str, away_score: str, away_color: tuple[int, int, int],
         home_abbr: str, home_score: str, home_color: tuple[int, int, int],
@@ -684,7 +737,7 @@ class SportsApp(DisplayApp):
             ("home_logo_url", home_abbr, home_score, home_color),
         ]):
             y_top = i * team_h
-            lx    = x_offset + 2
+            lx    = 2
 
             logo = self._get_logo(game.get(logo_key), logo_size)
             actual_logo_h = logo.size[1] if logo is not None else logo_size
@@ -702,4 +755,20 @@ class SportsApp(DisplayApp):
             _paste(img, abbr_img,  lx,                        logo_cy, "lm")
             _paste(img, score_img, lx + abbr_img.width + 3,   logo_cy, "lm")
 
-        self._draw_status_bar(img, game, x_offset, slot_width, h, status_text)
+        self._draw_status_bar(img, game, w, h, status_text)
+
+    def _draw_minimal(
+        self,
+        img: Image.Image,
+        w: int,
+        h: int,
+        away_score: str, away_color: tuple[int, int, int],
+        home_score: str, home_color: tuple[int, int, int],
+    ) -> None:
+        """Scores only — used for very narrow slots where no other content fits."""
+        row_h = h // 2
+        font = max(9, min(row_h - 2, 22))
+        _paste(img, render_text(away_score, away_color, font, bold=True),
+               w // 2, row_h // 2, "mm")
+        _paste(img, render_text(home_score, home_color, font, bold=True),
+               w // 2, row_h + row_h // 2, "mm")
