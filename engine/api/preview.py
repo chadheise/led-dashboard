@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from canvas.simulator import SimulatorCanvas
-from plugin_base import DisplayApp
+from app_base import DisplayApp
 
 logger = logging.getLogger(__name__)
 

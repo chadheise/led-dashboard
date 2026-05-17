@@ -5,7 +5,7 @@ from typing import Any, ClassVar
 from PIL import Image
 
 from canvas.base import Canvas
-from plugin_base import DisplayApp
+from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text
 

@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from canvas.base import Canvas
-from plugin_base import DisplayApp
+from app_base import DisplayApp
 
 logger = logging.getLogger(__name__)
 

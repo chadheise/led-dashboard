@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 from PIL import Image, ImageDraw
 
 from canvas.base import Canvas
-from plugin_base import DisplayApp
+from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
@@ -120,6 +120,12 @@ class SportsApp(DisplayApp):
                 "items": {"type": "string"},
                 "default": [],
             },
+            "display_mode": {
+                "type": "string",
+                "title": "Display mode",
+                "enum": ["paginate", "marquee", "staggered"],
+                "default": "paginate",
+            },
             "scores_per_screen": {
                 "type": "integer",
                 "title": "Scores per screen",
@@ -152,6 +158,18 @@ class SportsApp(DisplayApp):
                 "default": 5,
                 "minimum": 1,
             },
+            "marquee_speed": {
+                "type": "number",
+                "title": "Marquee scroll speed (px/frame)",
+                "default": 1.5,
+                "minimum": 0.5,
+            },
+            "stagger_delay": {
+                "type": "integer",
+                "title": "Stagger delay between slots (seconds)",
+                "default": 2,
+                "minimum": 1,
+            },
             "refresh_interval": {
                 "type": "number",
                 "title": "Score data refresh interval (seconds)",
@@ -172,9 +190,19 @@ class SportsApp(DisplayApp):
         super().__init__(config, canvas, global_config, library_configs)
         self._espn = ESPNSportsLibrary(self.library_configs.get("espn_sports", {}))
         self._games: list[dict[str, Any]] = []
+        self._logos: dict[str, Image.Image | None] = {}
+
+        # Paginate state
         self._page_idx = 0
         self._frame_count = 0
-        self._logos: dict[str, Image.Image | None] = {}
+
+        # Marquee state
+        self._marquee_strip: Image.Image | None = None
+        self._marquee_offset: float = 0.0
+
+        # Staggered state
+        self._stagger_slot_idx: list[int] = []
+        self._stagger_slot_counter: list[int] = []
 
     def _get_leagues(self) -> list[str]:
         raw = self.config.get("leagues", self.config.get("league", []))
@@ -219,6 +247,9 @@ class SportsApp(DisplayApp):
         # Store logos at full display height so any layout can downscale cleanly
         new_logos = await self._espn.fetch_logos(self._games, (64, 64))
         self._logos.update(new_logos)
+
+        # Rebuild marquee strip whenever data changes
+        self._marquee_strip = self._build_marquee_strip()
 
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
@@ -271,15 +302,36 @@ class SportsApp(DisplayApp):
 
         return result
 
+    def _init_stagger_state(self) -> None:
+        n = self._scores_per_screen()
+        frames_per_score = self._frames_per_score()
+        stagger_delay_s = max(1, int(self.config.get("stagger_delay", 2)))
+        stagger_offset = min(stagger_delay_s * _FPS, frames_per_score // max(1, n))
+        self._stagger_slot_idx = list(range(n))
+        self._stagger_slot_counter = [i * stagger_offset for i in range(n)]
+
     async def on_activate(self) -> None:
         self._page_idx = 0
         self._frame_count = 0
+        self._marquee_offset = 0.0
+        self._marquee_strip = None
+        self._init_stagger_state()
         await self.fetch_data()
 
     async def render_frame(self) -> None:
         if not self._games:
             return  # blank canvas — scene manager has already cleared it
 
+        display_mode = self.config.get("display_mode", "paginate")
+
+        if display_mode == "marquee":
+            self._render_marquee_frame()
+        elif display_mode == "staggered":
+            self._render_staggered_frame()
+        else:
+            self._render_paginate_frame()
+
+    def _render_paginate_frame(self) -> None:
         n = self._scores_per_screen()
         frames_per_score = self._frames_per_score()
 
@@ -296,6 +348,87 @@ class SportsApp(DisplayApp):
             self._frame_count = 0
             max_pages = max(1, math.ceil(len(self._games) / n))
             self._page_idx = (self._page_idx + 1) % max_pages
+
+    def _render_game_card(self, game: dict[str, Any], card_w: int, n_cols: int) -> Image.Image:
+        """Render a single game as a standalone card image."""
+        h = self.canvas.height
+        card = Image.new("RGB", (card_w, h), (0, 0, 0))
+        self._draw_game_slot(card, game, 0, card_w, n_cols)
+        return card
+
+    def _build_marquee_strip(self) -> Image.Image | None:
+        if not self._games:
+            return None
+        n = self._scores_per_screen()
+        card_w = self.canvas.width // n
+        h = self.canvas.height
+        strip = Image.new("RGB", (card_w * len(self._games), h), (0, 0, 0))
+        for i, game in enumerate(self._games):
+            card = self._render_game_card(game, card_w, n)
+            strip.paste(card, (i * card_w, 0))
+            if i > 0:
+                ImageDraw.Draw(strip).line([(i * card_w, 0), (i * card_w, h - 1)], fill=(35, 35, 35))
+        return strip
+
+    def _render_marquee_frame(self) -> None:
+        if self._marquee_strip is None:
+            self._marquee_strip = self._build_marquee_strip()
+        if self._marquee_strip is None:
+            return
+
+        strip = self._marquee_strip
+        strip_w = strip.width
+        cw = self.canvas.width
+        ch = self.canvas.height
+        speed = float(self.config.get("marquee_speed", 1.5))
+
+        off = int(self._marquee_offset)
+        img = Image.new("RGB", (cw, ch), (0, 0, 0))
+        img.paste(strip, (off, 0))
+        # Wrap: show start of strip when the end has scrolled into view
+        if off < 0:
+            img.paste(strip, (off + strip_w, 0))
+
+        blit(self.canvas, img)
+
+        self._marquee_offset -= speed
+        if self._marquee_offset <= -strip_w:
+            self._marquee_offset = 0.0
+
+    def _render_staggered_frame(self) -> None:
+        n = self._scores_per_screen()
+        frames_per_score = self._frames_per_score()
+        n_games = len(self._games)
+
+        # Lazily initialize stagger state when n changes or first run
+        if len(self._stagger_slot_idx) != n:
+            self._init_stagger_state()
+
+        # Advance each slot's counter independently
+        for i in range(n):
+            self._stagger_slot_counter[i] += 1
+            if self._stagger_slot_counter[i] >= frames_per_score:
+                self._stagger_slot_counter[i] = 0
+                self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + n) % max(1, n_games)
+
+        # Draw current state: each slot shows its game
+        card_w = self.canvas.width // n
+        h = self.canvas.height
+        w = self.canvas.width
+        img = Image.new("RGB", (w, h), (0, 0, 0))
+
+        for i in range(n):
+            game_idx = self._stagger_slot_idx[i] % max(1, n_games)
+            game = self._games[game_idx]
+            x_off = i * card_w
+            actual_w = card_w if i < n - 1 else w - x_off
+            if i > 0:
+                ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))
+                x_off += 1
+                actual_w -= 1
+            self._draw_game_slot(img, game, x_off, actual_w, n)
+
+        blit(self.canvas, img)
 
     # ── Drawing ────────────────────────────────────────────────────────────────
 

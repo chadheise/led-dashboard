@@ -3,6 +3,7 @@ import LocationMapInput from './LocationMapInput'
 import DurationInput from './DurationInput'
 import MultiPicker from './MultiPicker'
 import TeamPicker from './TeamPicker'
+import StreamList from './StreamList'
 
 // ── Schema types ───────────────────────────────────────────────────────────────
 
@@ -251,6 +252,22 @@ export default function AppForm({ schema, value, onChange }: Props) {
               title={title}
               value={v}
               onChange={teams => onChange({ ...value, [key]: teams })}
+            />
+          )
+        }
+
+        if (xType === 'stream-list') {
+          // Source options come from items.properties.source.enum
+          const sourceOptions: string[] =
+            (prop as { items?: { properties?: { source?: { enum?: string[] } } } })
+              .items?.properties?.source?.enum ?? []
+          return (
+            <StreamList
+              key={key}
+              title={title}
+              sourceOptions={sourceOptions}
+              value={v}
+              onChange={streams => onChange({ ...value, [key]: streams })}
             />
           )
         }

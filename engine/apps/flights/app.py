@@ -10,7 +10,7 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 from canvas.base import Canvas
-from plugin_base import DisplayApp
+from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text
 from libraries.opensky.library import OpenSkyLibrary

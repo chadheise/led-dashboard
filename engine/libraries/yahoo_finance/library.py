@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import json
 import re
 import time
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -22,7 +23,25 @@ except ImportError:
 
 
 _LIB_DIR = Path(__file__).parent
+_DOW30: list[str] = json.loads((_LIB_DIR / "dow30.json").read_text())
+_NASDAQ100: list[str] = json.loads((_LIB_DIR / "nasdaq100.json").read_text())
 _LOGO_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
+_LIST_TTL_SECONDS: float = 24 * 3600        # 24 hours
+_CHART_TTL_SECONDS: float = 3600            # 1 hour
+
+_SP500_CSV_URL = (
+    "https://raw.githubusercontent.com/datasets/s-and-p-500-companies"
+    "/main/data/constituents.csv"
+)
+_QUOTE_BATCH_SIZE = 100
+
+_CHART_RANGE_PARAMS: dict[str, tuple[str, str]] = {
+    "1W": ("5d", "15m"),
+    "1M": ("1mo", "1d"),
+    "3M": ("3mo", "1d"),
+    "6M": ("6mo", "1wk"),
+    "1Y": ("1y", "1wk"),
+}
 
 # Loaded from JSON at import time so plugins can reference them as module-level names.
 PRESET_GROUPS: dict[str, list[str]] = json.loads(
@@ -64,6 +83,10 @@ class YahooFinanceLibrary(Library):
         data_dir = Path(__file__).parent.parent.parent / "data" / "yahoo_finance"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
+        self._lists_dir = data_dir / "lists"
+        self._lists_dir.mkdir(parents=True, exist_ok=True)
+        self._charts_dir = data_dir / "charts"
+        self._charts_dir.mkdir(parents=True, exist_ok=True)
 
     async def fetch_quotes(self, symbols: list[str]) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -72,6 +95,148 @@ class YahooFinanceLibrary(Library):
                 return_exceptions=True,
             )
         return [r for r in results if isinstance(r, dict)]
+
+    async def fetch_sp500_symbols(self) -> list[str]:
+        cache_path = self._lists_dir / "sp500.json"
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age < _LIST_TTL_SECONDS:
+                try:
+                    return json.loads(cache_path.read_text())["symbols"]
+                except Exception:
+                    pass
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(_SP500_CSV_URL, headers={"User-Agent": "Mozilla/5.0"})
+            reader = csv.DictReader(StringIO(resp.text))
+            symbols = [row["Symbol"].strip().replace(".", "-") for row in reader if row.get("Symbol")]
+            if symbols:
+                cache_path.write_text(json.dumps({"symbols": symbols}))
+                return symbols
+        except Exception:
+            pass
+
+        # Fall back to hardcoded list on network failure
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text())["symbols"]
+            except Exception:
+                pass
+        return list(PRESET_GROUPS.get("largest_market_cap", []))
+
+    def fetch_dow30_symbols(self) -> list[str]:
+        return list(_DOW30)
+
+    def fetch_nasdaq100_symbols(self) -> list[str]:
+        return list(_NASDAQ100)
+
+    async def fetch_largest_market_cap(self, n: int = 10) -> list[str]:
+        cache_path = self._lists_dir / f"largest_market_cap_{n}.json"
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age < _LIST_TTL_SECONDS:
+                try:
+                    return json.loads(cache_path.read_text())["symbols"]
+                except Exception:
+                    pass
+
+        universe = await self.fetch_sp500_symbols()
+        batches = [
+            universe[i : i + _QUOTE_BATCH_SIZE]
+            for i in range(0, len(universe), _QUOTE_BATCH_SIZE)
+        ]
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                raw_batches = await asyncio.gather(
+                    *[self._fetch_market_caps(client, batch) for batch in batches],
+                    return_exceptions=True,
+                )
+            cap_map: dict[str, float] = {}
+            for result in raw_batches:
+                if isinstance(result, dict):
+                    cap_map.update(result)
+
+            ranked = sorted(cap_map, key=lambda s: cap_map[s], reverse=True)[:n]
+            if ranked:
+                cache_path.write_text(json.dumps({"symbols": ranked}))
+                return ranked
+        except Exception:
+            pass
+
+        if cache_path.exists():
+            try:
+                return json.loads(cache_path.read_text())["symbols"]
+            except Exception:
+                pass
+        return list(PRESET_GROUPS.get("largest_market_cap", []))
+
+    @staticmethod
+    async def _fetch_market_caps(
+        client: httpx.AsyncClient, symbols: list[str]
+    ) -> dict[str, float]:
+        try:
+            resp = await client.get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": ",".join(symbols), "fields": "marketCap"},
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            data = resp.json()
+            results = data.get("quoteResponse", {}).get("result", [])
+            return {
+                r["symbol"]: float(r.get("marketCap", 0))
+                for r in results
+                if r.get("marketCap")
+            }
+        except Exception:
+            return {}
+
+    async def fetch_chart_data(self, symbol: str, time_frame: str) -> dict[str, Any] | None:
+        cache_path = self._charts_dir / f"{symbol}_{time_frame}.json"
+        if cache_path.exists():
+            age = time.time() - cache_path.stat().st_mtime
+            if age < _CHART_TTL_SECONDS:
+                try:
+                    return json.loads(cache_path.read_text())
+                except Exception:
+                    pass
+
+        range_str, interval = _CHART_RANGE_PARAMS.get(time_frame, ("1mo", "1d"))
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+                    params={"range": range_str, "interval": interval},
+                    headers={"User-Agent": "Mozilla/5.0"},
+                )
+            data = resp.json()
+            result = data["chart"]["result"][0]
+            meta = result["meta"]
+            timestamps: list[int] = result.get("timestamp", [])
+            closes: list[float] = result.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            closes = [c for c in closes if c is not None]
+
+            price: float = meta.get("regularMarketPrice", 0.0)
+            prev: float = meta.get("previousClose") or meta.get("chartPreviousClose", price)
+            change_pct = ((price - prev) / prev * 100) if prev else 0.0
+
+            payload: dict[str, Any] = {
+                "symbol": symbol,
+                "timestamps": timestamps,
+                "closes": closes,
+                "current_price": price,
+                "change_pct": change_pct,
+                "dollar_change": price - prev,
+            }
+            cache_path.write_text(json.dumps(payload))
+            return payload
+        except Exception:
+            if cache_path.exists():
+                try:
+                    return json.loads(cache_path.read_text())
+                except Exception:
+                    pass
+            return None
 
     async def fetch_logo(self, symbol: str) -> Image.Image | None:
         if symbol in self._logo_cache:
