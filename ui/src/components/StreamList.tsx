@@ -15,13 +15,13 @@ interface Props {
 const SOURCE_LABELS: Record<string, string> = {
   custom: 'Custom',
   tech: 'Tech',
-  largest_market_cap: 'Largest Market Cap (dynamic)',
+  largest_market_cap: 'Largest Market Cap',
   finance: 'Finance',
   healthcare: 'Healthcare',
   energy: 'Energy',
-  sp500: 'S&P 500 (index + all components)',
-  nasdaq: 'NASDAQ-100 (index + components)',
-  dow: 'Dow Jones 30 (index + components)',
+  sp500: 'S&P 500',
+  nasdaq: 'NASDAQ-100',
+  dow: 'Dow Jones 30',
 }
 
 const rowStyle: React.CSSProperties = {

@@ -39,7 +39,7 @@ def _composite_icon(base: Image.Image, icon: Image.Image, x: int, y: int) -> Non
 
 class StocksApp(DisplayApp):
     id: ClassVar[str] = "stocks"
-    name: ClassVar[str] = "Stock Ticker"
+    name: ClassVar[str] = "Stocks"
     description: ClassVar[str] = (
         "Live prices and % change from Yahoo Finance — marquee, paginated, or chart view, "
         "with per-row data streams and company logos"
@@ -53,7 +53,7 @@ class StocksApp(DisplayApp):
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
-        "title": "Stock Ticker",
+        "title": "Stocks",
         "properties": {
             "streams": {
                 "type": "array",
@@ -107,9 +107,9 @@ class StocksApp(DisplayApp):
                 "enum": ["1W", "1M", "3M", "6M", "1Y"],
                 "default": "1M",
             },
-            "chart_stocks_per_screen": {
+            "stocks_per_screen": {
                 "type": "integer",
-                "title": "Stocks per screen (chart mode)",
+                "title": "Stocks per screen",
                 "default": 1,
                 "minimum": 1,
                 "maximum": 4,
@@ -252,9 +252,15 @@ class StocksApp(DisplayApp):
                     self._logos[sym] = logo if isinstance(logo, Image.Image) else None
                     self._logos_fetched.add(sym)
 
-        # Fetch chart data for first stream if in chart mode
+        # Fetch chart data for all streams if in chart mode
         if display_mode == "chart" and all_symbols_per_stream:
-            chart_syms = list(all_symbols_per_stream[0])
+            seen: set[str] = set()
+            chart_syms: list[str] = []
+            for syms in all_symbols_per_stream:
+                for s in syms:
+                    if s not in seen:
+                        seen.add(s)
+                        chart_syms.append(s)
             chart_results = await asyncio.gather(
                 *[self._yahoo.fetch_chart_data(s, time_frame) for s in chart_syms],
                 return_exceptions=True,
@@ -472,9 +478,9 @@ class StocksApp(DisplayApp):
         gap = max(2, text_h // 5)
         logo = self._logos.get(symbol) if icon_size > 0 else None
 
-        cap_h = self._rt("A$%", _COLOR_SYM, text_h).height
+        cap_h = self._rt("A$%", (255, 255, 255), text_h).height
         arr_img = self._renderer.arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
-        sym_img = self._rt(symbol + " ", _COLOR_SYM, text_h, fixed_h=cap_h)
+        sym_img = self._rt(symbol + " ", (255, 255, 255), text_h, fixed_h=cap_h)
         prc_img = self._rt(f"${price:.2f} ", color, text_h, fixed_h=cap_h)
         chg_str = (
             f"{abs(change_pct):.2f}%"
@@ -490,17 +496,21 @@ class StocksApp(DisplayApp):
             ay = line_y + (line_h - arr_img.height) // 2
             dst.paste(arr_img, (ax, ay))
 
+        # logo_inner: reduce by 2px so there is at least 1px margin on all sides
+        logo_inner = max(1, icon_size - 2) if logo is not None else 0
+
         # Choose single-line or two-line layout based on available width
         if icon_w + sym_img.width + prc_img.width + arr_w + chg_img.width <= slot_w:
             # Everything fits on one line
             header_h = max(cap_h, icon_size) if logo is not None else cap_h
             header_img = Image.new("RGB", (slot_w, header_h), (0, 0, 0))
-            hx = 0
+            hx = 1  # 1px left margin before logo
             text_y = (header_h - cap_h) // 2
             if logo is not None:
-                resized = logo.resize((icon_size, icon_size), Image.LANCZOS)
-                _composite_icon(header_img, resized, hx, (header_h - icon_size) // 2)
-                hx += icon_w
+                resized = logo.resize((logo_inner, logo_inner), Image.LANCZOS)
+                logo_y = max(1, (header_h - logo_inner) // 2)
+                _composite_icon(header_img, resized, hx, logo_y)
+                hx += logo_inner + 1 + gap  # logo + 1px right margin + gap
             header_img.paste(sym_img, (hx, text_y)); hx += sym_img.width
             header_img.paste(prc_img, (hx, text_y)); hx += prc_img.width
             paste_arr(header_img, hx, text_y, cap_h); hx += arr_w
@@ -510,11 +520,12 @@ class StocksApp(DisplayApp):
             header_h = cap_h * 2 + gap
             header_img = Image.new("RGB", (slot_w, header_h), (0, 0, 0))
             # Line 1
-            hx = 0
+            hx = 1  # 1px left margin before logo
             if logo is not None:
-                resized = logo.resize((icon_size, icon_size), Image.LANCZOS)
-                _composite_icon(header_img, resized, hx, (cap_h - icon_size) // 2)
-                hx += icon_w
+                resized = logo.resize((logo_inner, logo_inner), Image.LANCZOS)
+                logo_y = max(1, (cap_h - logo_inner) // 2)
+                _composite_icon(header_img, resized, hx, logo_y)
+                hx += logo_inner + 1 + gap
             header_img.paste(sym_img, (hx, 0))
             # Line 2
             hx = 0
@@ -558,17 +569,31 @@ class StocksApp(DisplayApp):
         line_pts = [(scale_x(i), scale_y(c)) for i, c in enumerate(closes)]
         draw.line(line_pts, fill=color, width=1)
 
+        # Time frame label — smallest non-bold text, white, composited without black box.
+        _TF_LABELS = {"1W": "1 wk", "1M": "1 mo", "3M": "3 mo", "6M": "6 mo", "1Y": "1 yr"}
+        tf_text = _TF_LABELS.get(self.config.get("chart_time_frame", "1M"), "")
+        if tf_text:
+            tf_img = self._renderer.render_text(tf_text, (255, 255, 255), base, bold=False)
+            img.paste(tf_img, (x0 + slot_w - tf_img.width - 2, y0 + slot_h - tf_img.height - 1),
+                      mask=tf_img.convert("L"))
+
     def _render_chart_frame(self) -> None:
-        stocks_per_screen = max(1, min(4, int(self.config.get("chart_stocks_per_screen", 1))))
+        stocks_per_screen = max(1, min(4, int(self.config.get("stocks_per_screen", 1))))
         frames_per_page = int(self.config.get("frames_per_page", 90))
         direction = self.config.get("chart_split_direction", "horizontal")
 
-        # Get chart symbols from first stream
-        if not self._stream_quotes or not self._stream_quotes[0]:
+        # Collect chart symbols from all streams (deduped, order preserved)
+        if not self._stream_quotes or all(not sq for sq in self._stream_quotes):
             self._draw_loading()
             return
 
-        chart_symbols = [q["symbol"] for q in self._stream_quotes[0]]
+        seen: set[str] = set()
+        chart_symbols: list[str] = []
+        for sq in self._stream_quotes:
+            for q in sq:
+                if q["symbol"] not in seen:
+                    seen.add(q["symbol"])
+                    chart_symbols.append(q["symbol"])
         available = [s for s in chart_symbols if s in self._chart_data]
         if not available:
             self._draw_loading()
@@ -615,8 +640,12 @@ class StocksApp(DisplayApp):
             self._draw_loading()
             return
 
-        price_interval = int(self.config.get("price_display_interval", 90))
         display_mode = self.config.get("display_mode", "marquee")
+        frames_per_page = int(self.config.get("frames_per_page", 90))
+        if display_mode in ("chart", "paginate"):
+            price_interval = max(10, frames_per_page // 2)
+        else:
+            price_interval = int(self.config.get("price_display_interval", 90))
 
         self._alt_counter += 1
         if self._alt_counter >= price_interval:
@@ -679,22 +708,204 @@ class StocksApp(DisplayApp):
                 self._blit_row(img, x, row_y, row_h)
                 x += strip_w
 
+    def _fit_text(
+        self,
+        text: str,
+        color: tuple[int, int, int],
+        max_h: int,
+        max_w: int,
+        bold: bool = True,
+    ) -> Image.Image:
+        """Render text, shrinking size proportionally until it fits max_w."""
+        th = max(self._renderer.base_font_h, max_h)
+        while True:
+            rendered = self._renderer.render_text(text, color, th, bold=bold)
+            if rendered.width <= max_w or th <= self._renderer.base_font_h:
+                return rendered
+            th = max(self._renderer.base_font_h, th * max_w // rendered.width)
+
+    def _render_paginate_slot(
+        self,
+        img: Image.Image,
+        q: dict[str, Any],
+        x0: int,
+        y0: int,
+        slot_w: int,
+        slot_h: int,
+    ) -> None:
+        show_icons = bool(self.config.get("show_icons", True))
+        base = self._renderer.base_font_h
+        up = q["change_pct"] >= 0
+        color = _quote_color(q["change_pct"])
+        white = (255, 255, 255)
+        margin = 2
+
+        def ctr(item_h: int, band_y: int, band_h: int) -> int:
+            return band_y + max(0, (band_h - item_h) // 2)
+
+        def place_logo(logo: Image.Image, target_h: int, lx: int, band_y: int, band_h: int) -> int:
+            """Scale logo to target_h (aspect-ratio preserving), paste, return x advance."""
+            iw, ih = logo.size
+            scale = min(target_h / max(iw, 1), target_h / max(ih, 1))
+            lw = max(1, round(iw * scale))
+            lh = max(1, round(ih * scale))
+            resized = logo.resize((lw, lh), Image.LANCZOS)
+            _composite_icon(img, resized, lx, ctr(lh, band_y, band_h))
+            return lw + max(2, target_h // 5)  # advance including gap
+
+        # ── Measure what a single row costs at the height-ideal text size ─────────
+        text_h = max(base, slot_h * 2 // 5)
+        gap = max(2, text_h // 5)
+        icon_size = text_h if (show_icons and text_h >= 12) else 0
+        logo = self._logos.get(q["symbol"]) if icon_size > 0 else None
+        icon_w = icon_size + gap if logo is not None else 0
+
+        cap_h = self._rt("A$%", white, text_h).height
+        sym_img = self._rt(q["symbol"] + " ", white, text_h, fixed_h=cap_h)
+        prc_img = self._rt(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
+        chg_img = self._rt(self._format_change(q, self._show_pct), color, text_h, fixed_h=cap_h)
+        arr_img = self._renderer.arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
+
+        needed_1row = margin + icon_w + sym_img.width + prc_img.width + arr_img.width + gap + chg_img.width
+
+        if needed_1row <= slot_w:
+            # ── 1-row: everything fits at the ideal size ─────────────────────────
+            px = x0 + margin
+
+            def vc(item_h: int) -> int:
+                return y0 + max(0, (slot_h - item_h) // 2)
+
+            if logo is not None:
+                px += place_logo(logo, icon_size, px, y0, slot_h)
+            img.paste(sym_img, (px, vc(cap_h))); px += sym_img.width
+            img.paste(prc_img, (px, vc(cap_h))); px += prc_img.width
+            img.paste(arr_img, (px, vc(arr_img.height))); px += arr_img.width + gap
+            img.paste(chg_img, (px, vc(cap_h)))
+
+        elif slot_h >= 20:
+            # ── 2-row: [logo] symbol / price + arrow + change ────────────────────
+            row_h = slot_h // 2
+
+            # Row 1 — logo + symbol
+            r1_h = max(base, row_h * 3 // 4)
+            r1_logo = self._logos.get(q["symbol"]) if (show_icons and r1_h >= base) else None
+            icon_advance = 0
+            r1_x = x0 + margin
+            if r1_logo is not None:
+                icon_advance = place_logo(r1_logo, r1_h, r1_x, y0, row_h)
+            sym_max_w = slot_w - 2 * margin - icon_advance
+            r1_sym = self._fit_text(q["symbol"], white, r1_h, sym_max_w)
+            img.paste(r1_sym, (r1_x + icon_advance, ctr(r1_sym.height, y0, row_h)))
+
+            # Row 2 — price + arrow + change
+            r2_h = max(base, row_h * 3 // 4)
+            r2_cap = self._rt("A$%", white, r2_h).height
+            r2_prc = self._rt(f"${q['price']:.2f} ", color, r2_h, fixed_h=r2_cap)
+            r2_arr = self._renderer.arrow_img(up, max(3, round(r2_cap * 2 / 3)), color)
+            r2_gap = max(2, r2_h // 5)
+            chg_budget = slot_w - 2 * margin - r2_prc.width - r2_arr.width - r2_gap
+            r2_chg = self._fit_text(self._format_change(q, self._show_pct), color, r2_h, chg_budget)
+
+            row2_y = y0 + row_h
+            px = x0 + margin
+            img.paste(r2_prc, (px, ctr(r2_cap, row2_y, row_h))); px += r2_prc.width
+            img.paste(r2_arr, (px, ctr(r2_arr.height, row2_y, row_h))); px += r2_arr.width + r2_gap
+            img.paste(r2_chg, (px, ctr(r2_chg.height, row2_y, row_h)))
+
+        else:
+            # ── Single row, very short slot — shrink to fit ───────────────────────
+            while True:
+                gap = max(2, text_h // 5)
+                icon_size = text_h if (show_icons and text_h >= 12) else 0
+                logo = self._logos.get(q["symbol"]) if icon_size > 0 else None
+                icon_w = icon_size + gap if logo is not None else 0
+                cap_h = self._rt("A$%", white, text_h).height
+                sym_img = self._rt(q["symbol"] + " ", white, text_h, fixed_h=cap_h)
+                prc_img = self._rt(f"${q['price']:.2f} ", color, text_h, fixed_h=cap_h)
+                chg_img = self._rt(self._format_change(q, self._show_pct), color, text_h, fixed_h=cap_h)
+                arr_img = self._renderer.arrow_img(up, max(3, round(cap_h * 2 / 3)), color)
+                needed = margin + icon_w + sym_img.width + prc_img.width + arr_img.width + gap + chg_img.width
+                if needed <= slot_w or text_h <= base:
+                    break
+                text_h = max(base, text_h * slot_w // needed)
+
+            px = x0 + margin
+
+            def vc(item_h: int) -> int:
+                return y0 + max(0, (slot_h - item_h) // 2)
+
+            if logo is not None:
+                px += place_logo(logo, icon_size, px, y0, slot_h)
+            img.paste(sym_img, (px, vc(cap_h))); px += sym_img.width
+            img.paste(prc_img, (px, vc(cap_h))); px += prc_img.width
+            img.paste(arr_img, (px, vc(arr_img.height))); px += arr_img.width + gap
+            if px + chg_img.width <= x0 + slot_w:
+                img.paste(chg_img, (px, vc(cap_h)))
+
     def _render_paginate_frame(self) -> None:
-        layout = self._compute_layout()
-        frames_per_pge = int(self.config.get("frames_per_page", 90))
-        max_stream_len = max((len(sq) for sq in self._stream_quotes if sq), default=1)
-        max_pages = max(1, max_stream_len)
+        stocks_per_screen = max(1, min(4, int(self.config.get("stocks_per_screen", 1))))
+        direction = self.config.get("chart_split_direction", "horizontal")
+        frames_per_page = int(self.config.get("frames_per_page", 90))
 
         self._page_counter += 1
-        if self._page_counter >= frames_per_pge:
+        advance = self._page_counter >= frames_per_page
+        if advance:
             self._page_counter = 0
-            self._page = (self._page + 1) % max_pages
 
-        key = (self._show_pct, self._page)
-        if key not in self._page_cache:
-            self._page_cache[key] = self._build_page_image(layout, self._show_pct, self._page)
+        w, h = self.canvas.width, self.canvas.height
+        img = Image.new("RGB", (w, h), (0, 0, 0))
 
-        blit(self.canvas, self._page_cache[key])
+        if stocks_per_screen == 1:
+            # One stock per stream, streams stacked vertically — each stream pages independently
+            active = [(sq, i) for i, sq in enumerate(self._stream_quotes) if sq]
+            if not active:
+                self._draw_loading()
+                return
+            if advance:
+                self._page = (self._page + 1) % max(1, max(len(sq) for sq, _ in active))
+            n = len(active)
+            slot_h = h // n
+            for j, (sq, _) in enumerate(active):
+                q = sq[self._page % len(sq)]
+                y0 = j * slot_h
+                self._render_paginate_slot(img, q, 0, y0, w, slot_h if j < n - 1 else h - y0)
+            if n > 1:
+                draw = ImageDraw.Draw(img)
+                for j in range(1, n):
+                    draw.line([(0, j * slot_h), (w - 1, j * slot_h)], fill=(35, 35, 35))
+        else:
+            # N-up: show stocks_per_screen quotes at once, drawing from all streams combined
+            quotes = [q for sq in self._stream_quotes for q in sq]
+            if not quotes:
+                self._draw_loading()
+                return
+            max_pages = max(1, (len(quotes) + stocks_per_screen - 1) // stocks_per_screen)
+            if advance:
+                self._page = (self._page + 1) % max_pages
+            start = self._page * stocks_per_screen
+            visible = quotes[start : start + stocks_per_screen]
+            n = len(visible)
+
+            if direction == "horizontal":
+                slot_w = w // n
+                for i, q in enumerate(visible):
+                    x0 = i * slot_w
+                    self._render_paginate_slot(img, q, x0, 0, slot_w if i < n - 1 else w - x0, h)
+                if n > 1:
+                    draw = ImageDraw.Draw(img)
+                    for i in range(1, n):
+                        draw.line([(i * slot_w, 0), (i * slot_w, h - 1)], fill=(35, 35, 35))
+            else:
+                slot_h = h // n
+                for i, q in enumerate(visible):
+                    y0 = i * slot_h
+                    self._render_paginate_slot(img, q, 0, y0, w, slot_h if i < n - 1 else h - y0)
+                if n > 1:
+                    draw = ImageDraw.Draw(img)
+                    for i in range(1, n):
+                        draw.line([(0, i * slot_h), (w - 1, i * slot_h)], fill=(35, 35, 35))
+
+        blit(self.canvas, img)
 
     def _draw_loading(self) -> None:
         msg_img = self._rt("Loading...", _COLOR_DIM, 1)
