@@ -221,18 +221,20 @@ class SportsApp(DisplayApp):
         ))
         return max(1, seconds) * _FPS
 
-    def _get_logo(self, url: str | None, size: int) -> Image.Image | None:
-        """Return the logo for url scaled to size×size, or None. Never upscales."""
+    def _get_logo(self, url: str | None, size: int, max_width: int | None = None) -> Image.Image | None:
+        """Return the logo scaled to fit within height `size` (and optional `max_width`),
+        preserving aspect ratio. Never upscales."""
         if not url:
             return None
         logo = self._logos.get(url)
         if logo is None:
             return None
-        if logo.size == (size, size):
-            return logo
-        if size > logo.size[0]:
-            return logo  # return native size rather than upscaling
-        return logo.resize((size, size), Image.LANCZOS)
+        iw, ih = logo.size
+        tw = max_width if max_width is not None else iw
+        if iw <= tw and ih <= size:
+            return logo  # already fits, never upscale
+        scale = min(tw / iw, size / ih)
+        return logo.resize((max(1, round(iw * scale)), max(1, round(ih * scale))), Image.LANCZOS)
 
     async def fetch_data(self) -> None:
         favorite_teams = list(self.config.get("favorite_teams") or [])
@@ -507,7 +509,6 @@ class SportsApp(DisplayApp):
 
         # Content area sits above the status strip
         content_h = h - STATUS_H
-        logo_y    = max(0, (content_h - logo_size) // 2)
 
         # Font sizes fill content_h with a 2 px margin top and bottom.
         # Score gets ~65 % of the block, abbr the rest; gap absorbs whatever is left.
@@ -534,22 +535,28 @@ class SportsApp(DisplayApp):
         abbr_y        = (content_h - block_h) // 2
         score_y       = abbr_y + probe_abbr_h + text_gap
 
+        # For multi-column, cap logo width to logo_size so it matches the pre-computed
+        # ax/rx positions used in per_team_px. Single-column can let wide logos breathe.
+        logo_max_w = logo_size if n_cols > 1 else None
+
         # ── Away (left) ────────────────────────────────────────────────────
         ax = x_offset + 2
-        a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
+        a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
         if a_logo:
             r, g, b, a = a_logo.split()
-            img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_y), a)
+            a_logo_y = max(0, (content_h - a_logo.size[1]) // 2)
+            img.paste(Image.merge("RGB", (r, g, b)), (ax, a_logo_y), a)
             ax += a_logo.size[0] + 3
         _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
         _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
 
         # ── Home (right) ───────────────────────────────────────────────────
         rx = x_offset + slot_width - 2
-        h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
+        h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
         if h_logo:
             r, g, b, a = h_logo.split()
-            img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], logo_y), a)
+            h_logo_y = max(0, (content_h - h_logo.size[1]) // 2)
+            img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], h_logo_y), a)
             rx -= h_logo.size[0] + 3
         _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
         _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
@@ -582,12 +589,14 @@ class SportsApp(DisplayApp):
             ("away_logo_url", away_abbr, away_score, away_color),
             ("home_logo_url", home_abbr, home_score, home_color),
         ]):
-            y_top  = i * team_h
-            logo_y = y_top + (team_h - logo_size) // 2   # centred in row
-            logo_cy = logo_y + logo_size // 2             # vertical centre of logo
-            lx      = x_offset + 2
+            y_top = i * team_h
+            lx    = x_offset + 2
 
             logo = self._get_logo(game.get(logo_key), logo_size)
+            actual_logo_h = logo.size[1] if logo is not None else logo_size
+            logo_y  = y_top + (team_h - actual_logo_h) // 2  # centred on actual height
+            logo_cy = logo_y + actual_logo_h // 2             # vertical midpoint
+
             if logo:
                 r, g, b, a = logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (lx, logo_y), a)

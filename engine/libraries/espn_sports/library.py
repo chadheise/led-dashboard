@@ -19,8 +19,26 @@ _LEAGUES_FILE = Path(__file__).parent / "leagues.json"
 _LEAGUES: list[dict[str, str]] = json.loads(_LEAGUES_FILE.read_text())
 _LEAGUE_BY_ID: dict[str, dict[str, str]] = {e["id"]: e for e in _LEAGUES}
 
+# Leagues where team logos are replaced with national flags
+_FLAG_LEAGUES: set[str] = {e["id"] for e in _LEAGUES if e.get("use_flags")}
+
+# ESPN/FIFA abbreviation → ISO 3166-1 alpha-2 code for flagcdn.com
+_FIFA_FLAGS: dict[str, str] = {
+    k: v for k, v in json.loads(
+        (Path(__file__).parent / "fifa_flags.json").read_text()
+    ).items()
+    if k != "comment"
+}
+
+_FLAGCDN_BASE = "https://flagcdn.com/w80/{code}.png"
+
 _LOGO_TTL_SECONDS: float = 30 * 24 * 3600   # 30 days
 _TEAMS_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
+
+
+def _flag_url(abbr: str) -> str | None:
+    code = _FIFA_FLAGS.get(abbr.upper())
+    return _FLAGCDN_BASE.format(code=code) if code else None
 
 
 class ESPNSportsLibrary(Library):
@@ -342,10 +360,13 @@ class ESPNSportsLibrary(Library):
 
     @staticmethod
     def _scale_down(img: Image.Image, target_size: tuple[int, int]) -> Image.Image:
-        """Resize img to target_size only if it would be a downscale; never upscale."""
-        if img.size[0] <= target_size[0] and img.size[1] <= target_size[1]:
+        """Scale img to fit within target_size, preserving aspect ratio. Never upscales."""
+        iw, ih = img.size
+        tw, th = target_size
+        if iw <= tw and ih <= th:
             return img
-        return img.resize(target_size, Image.LANCZOS)
+        scale = min(tw / iw, th / ih)
+        return img.resize((max(1, int(iw * scale)), max(1, int(ih * scale))), Image.LANCZOS)
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
@@ -387,6 +408,7 @@ class ESPNSportsLibrary(Library):
         entry = _LEAGUE_BY_ID.get(league, {"sport": "football", "league": league})
         sport = entry["sport"]
         league_path = entry["league"]
+        use_flags: bool = league in _FLAG_LEAGUES
         filter_mode: str | None = entry.get("filter")  # e.g. "top25"
         url = (
             f"https://site.api.espn.com/apis/site/v2/sports"
@@ -448,8 +470,8 @@ class ESPNSportsLibrary(Library):
                     "away_color": away_team.get("color", "444444"),
                     "home_alt_color": home_team.get("alternateColor", "aaaaaa"),
                     "away_alt_color": away_team.get("alternateColor", "aaaaaa"),
-                    "home_logo_url": home_team.get("logo"),
-                    "away_logo_url": away_team.get("logo"),
+                    "home_logo_url": _flag_url(home_team.get("abbreviation", "")) if use_flags else home_team.get("logo"),
+                    "away_logo_url": _flag_url(away_team.get("abbreviation", "")) if use_flags else away_team.get("logo"),
                     "status": status_type.get("shortDetail", "Scheduled"),
                     "state": status_type.get("state", "pre"),
                     "series_summary": series_summary,

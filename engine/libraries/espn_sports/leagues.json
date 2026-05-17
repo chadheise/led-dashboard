@@ -22,5 +22,6 @@
   {"id": "usa.1",                   "sport": "soccer",     "league": "usa.1",                   "label": "MLS"},
   {"id": "esp.1",                   "sport": "soccer",     "league": "esp.1",                   "label": "La Liga"},
   {"id": "ger.1",                   "sport": "soccer",     "league": "ger.1",                   "label": "Bundesliga"},
-  {"id": "uefa.champions",          "sport": "soccer",     "league": "uefa.champions",          "label": "Champions League"}
+  {"id": "uefa.champions",          "sport": "soccer",     "league": "uefa.champions",          "label": "Champions League"},
+  {"id": "fifa.world",              "sport": "soccer",     "league": "fifa.world",              "label": "FIFA World Cup", "use_flags": true}
 ]
