@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import AppIcon, { PencilIcon, TrashIcon } from "../components/AppIcon";
 import ModuleSelect from "../components/ModuleSelect";
 import DisplayPreview from "../components/DisplayPreview";
+import MultiSizePreview from "../components/MultiSizePreview";
 import TransportControls from "../components/TransportControls";
 import {
   C,
@@ -96,6 +97,7 @@ export default function Playlists() {
   const [editing, setEditing] = useState<string | null>(null);
   const [activeSingleModuleId, setActiveSingleModuleId] = useState<string | null>(null);
   const [selectedModuleId, setSelectedModuleId] = useState<string | null>(null);
+  const [showSizePreviews, setShowSizePreviews] = useState(import.meta.env.DEV);
   const [paused, setPaused] = useState(false);
   const [editPaused, setEditPaused] = useState(false);
   const [fName, setFName] = useState("");
@@ -340,7 +342,17 @@ export default function Playlists() {
       }}
     >
       <div style={previewPaneStyle}>
-        <span style={previewLabelStyle}>{pLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={previewLabelStyle}>{pLabel}</span>
+          {import.meta.env.DEV && (
+            <button
+              onClick={() => setShowSizePreviews((p) => !p)}
+              style={{ ...btn(showSizePreviews ? "active" : "eye"), padding: "2px 8px", fontSize: F.size.xs }}
+            >
+              SIZES
+            </button>
+          )}
+        </div>
         <DisplayPreview
           wsUrl={previewWsUrl}
           scale={3}
@@ -354,6 +366,12 @@ export default function Playlists() {
           }
         />
       </div>
+
+      {import.meta.env.DEV && showSizePreviews && (
+        <div style={{ background: C.bg, borderBottom: `1px solid ${C.border}`, padding: "12px 16px", overflowX: "auto" }}>
+          <MultiSizePreview live />
+        </div>
+      )}
 
       {/* Scrollable content — preview above stays fixed */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>

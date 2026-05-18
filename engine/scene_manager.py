@@ -54,6 +54,12 @@ class SceneManager:
         self._running = False
         self._paused = False
 
+    @property
+    def current_entry(self) -> PlaylistEntry | None:
+        if not self._entries:
+            return None
+        return self._entries[self._current_idx % len(self._entries)]
+
     # ── Playlist management ────────────────────────────────────────────────
 
     async def set_playlist(self, entries: list[PlaylistEntry]) -> None:

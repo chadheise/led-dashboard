@@ -45,6 +45,7 @@ class _ConnectionManager:
 
 
 _manager = _ConnectionManager()
+_sizes_manager = _ConnectionManager()
 
 
 @router.websocket("/ws/preview/edit")
@@ -57,6 +58,18 @@ async def ws_preview_edit(ws: WebSocket) -> None:
         pass
     finally:
         _manager.disconnect(ws)
+
+
+@router.websocket("/ws/preview/sizes")
+async def ws_preview_sizes(ws: WebSocket) -> None:
+    await _sizes_manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _sizes_manager.disconnect(ws)
 
 
 # ── Preview renderer ───────────────────────────────────────────────────────────
@@ -132,3 +145,156 @@ class PreviewManager:
                     logger.debug("Preview render_frame error: %s", exc)
                 await self._canvas.render()
             await asyncio.sleep(interval)
+
+
+# ── Multi-size preview renderer ────────────────────────────────────────────────
+
+SIZES_PANEL_DIMS: list[tuple[int, int]] = [
+    (64, 32), (128, 32), (196, 32), (256, 32),
+    (64, 64), (128, 64), (196, 64), (256, 64),
+]
+
+
+class SizesPreviewManager:
+    """Renders one plugin config simultaneously at all standard panel sizes.
+
+    Two modes:
+    - Edit: start(app_id, config, ...) — renders a specific app/config
+    - Live: start_live(scene_manager, registry) — tracks and mirrors the active scene
+    """
+
+    def __init__(self, fps: int) -> None:
+        self._fps = fps
+        self._apps: list[DisplayApp] = []
+        self._render_task: asyncio.Task[None] | None = None
+        self._fetch_task: asyncio.Task[None] | None = None
+        self._live_task: asyncio.Task[None] | None = None
+        self._paused: bool = False
+
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    def toggle_pause(self) -> bool:
+        self._paused = not self._paused
+        return self._paused
+
+    # ── Public API ─────────────────────────────────────────────────────────
+
+    async def start(
+        self,
+        app_id: str,
+        config: dict[str, Any],
+        registry: dict[str, type[DisplayApp]],
+        *,
+        global_config: dict[str, Any] | None = None,
+        library_configs: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        """Edit mode: render a specific app/config at all sizes."""
+        await self._cancel_live()
+        await self._start_apps(app_id, config, registry, global_config=global_config, library_configs=library_configs)
+
+    async def start_live(self, scene_manager: Any, registry: dict[str, type[DisplayApp]]) -> None:
+        """Live mode: follow the scene manager, re-rendering when the scene changes."""
+        await self._cancel_live()
+        await self._stop_apps()
+        self._live_task = asyncio.create_task(self._live_follow_loop(scene_manager, registry))
+
+    async def stop(self) -> None:
+        await self._cancel_live()
+        await self._stop_apps()
+
+    # ── Internal ───────────────────────────────────────────────────────────
+
+    async def _start_apps(
+        self,
+        app_id: str,
+        config: dict[str, Any],
+        registry: dict[str, type[DisplayApp]],
+        *,
+        global_config: dict[str, Any] | None = None,
+        library_configs: dict[str, dict[str, Any]] | None = None,
+    ) -> None:
+        await self._stop_apps()
+        self._paused = False
+        cls = registry.get(app_id)
+        if cls is None:
+            return
+        self._apps = [
+            cls(
+                config,
+                SimulatorCanvas(w, h, _sizes_manager.broadcast),
+                global_config,
+                library_configs,
+            )
+            for w, h in SIZES_PANEL_DIMS
+        ]
+        await asyncio.gather(
+            *(app.on_activate() for app in self._apps),
+            return_exceptions=True,
+        )
+        self._render_task = asyncio.create_task(self._render_loop())
+        self._fetch_task = asyncio.create_task(self._fetch_periodic())
+
+    async def _stop_apps(self) -> None:
+        for task in (self._render_task, self._fetch_task):
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._render_task = None
+        self._fetch_task = None
+        for app in self._apps:
+            try:
+                await app.on_deactivate()
+            except Exception:
+                pass
+        self._apps = []
+
+    async def _cancel_live(self) -> None:
+        if self._live_task and not self._live_task.done():
+            self._live_task.cancel()
+            try:
+                await self._live_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._live_task = None
+
+    async def _live_follow_loop(self, scene_manager: Any, registry: dict[str, type[DisplayApp]]) -> None:
+        last_entry_id: str | None = None
+        while True:
+            entry = scene_manager.current_entry
+            if entry is not None and entry.entry_id != last_entry_id:
+                logger.debug("Sizes live: scene changed to %s (%s)", entry.app_id, entry.entry_id)
+                await self._start_apps(
+                    entry.app_id,
+                    entry.config,
+                    registry,
+                    global_config=entry.global_config,
+                    library_configs=entry.library_configs,
+                )
+                last_entry_id = entry.entry_id
+            await asyncio.sleep(0.5)
+
+    async def _render_loop(self) -> None:
+        interval = 1.0 / self._fps
+        while True:
+            if not self._paused:
+                for app in self._apps:
+                    app.canvas.clear()
+                    try:
+                        await app.render_frame()
+                    except Exception as exc:
+                        logger.debug("Sizes preview render error: %s", exc)
+                    await app.canvas.render()
+            await asyncio.sleep(interval)
+
+    async def _fetch_periodic(self) -> None:
+        while self._apps:
+            await asyncio.sleep(self._apps[0].refresh_interval)
+            await asyncio.gather(
+                *(app.fetch_data() for app in self._apps),
+                return_exceptions=True,
+            )

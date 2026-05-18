@@ -1,4 +1,5 @@
 import DisplayPreview from '../components/DisplayPreview'
+import MultiSizePreview from '../components/MultiSizePreview'
 
 export default function Preview() {
   return (
@@ -7,6 +8,7 @@ export default function Preview() {
         SIMULATOR PREVIEW
       </h1>
       <DisplayPreview wsUrl="/ws/preview" scale={3} />
+      {import.meta.env.DEV && <MultiSizePreview live />}
     </div>
   )
 }

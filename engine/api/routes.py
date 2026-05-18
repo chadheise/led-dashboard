@@ -64,7 +64,39 @@ async def stop_preview(request: Request) -> None:
 async def toggle_preview_pause(request: Request) -> dict[str, Any]:
     pm = request.app.state.preview_manager
     paused = pm.toggle_pause()
+    request.app.state.sizes_preview_manager.toggle_pause()
     return {"paused": paused}
+
+
+@router.post("/preview/sizes")
+async def start_sizes_preview(request: Request, body: PreviewBody) -> dict[str, Any]:
+    from apps import APP_REGISTRY
+
+    store = request.app.state.store
+    _require_app(body.app_id)
+    await request.app.state.sizes_preview_manager.start(
+        body.app_id,
+        body.config,
+        APP_REGISTRY,
+        global_config=store.get_app_config(body.app_id),
+        library_configs=dict(store.state.library_configs),
+    )
+    return {"ok": True}
+
+
+@router.post("/preview/sizes/live")
+async def start_live_sizes_preview(request: Request) -> dict[str, Any]:
+    from apps import APP_REGISTRY
+
+    spm = request.app.state.sizes_preview_manager
+    sm = request.app.state.scene_manager
+    await spm.start_live(sm, APP_REGISTRY)
+    return {"ok": True}
+
+
+@router.delete("/preview/sizes", status_code=204)
+async def stop_sizes_preview(request: Request) -> None:
+    await request.app.state.sizes_preview_manager.stop()
 
 
 # ── App type catalog ───────────────────────────────────────────────────────────

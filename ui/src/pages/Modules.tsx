@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import AppForm from "../components/AppForm";
 import AppIcon, { PencilIcon, TrashIcon } from "../components/AppIcon";
 import DisplayPreview from "../components/DisplayPreview";
+import MultiSizePreview from "../components/MultiSizePreview";
 import TransportControls from "../components/TransportControls";
 import {
   C,
@@ -176,6 +177,7 @@ export default function Modules() {
   const [fName, setFName] = useState("");
   const [fAppId, setFAppId] = useState("");
   const [fConfig, setFConfig] = useState<Record<string, unknown>>({});
+  const [showSizePreviews, setShowSizePreviews] = useState(import.meta.env.DEV);
   const [paused, setPaused] = useState(false);
   const [editPaused, setEditPaused] = useState(false);
   const [origName, setOrigName] = useState("");
@@ -242,6 +244,9 @@ export default function Modules() {
 
   // Reset edit-preview paused state when editing opens or closes
   useEffect(() => { setEditPaused(false); }, [editing]);
+
+  // Hide sizes strip when leaving edit mode
+  useEffect(() => { if (!editing) setShowSizePreviews(false); }, [editing]);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   const openNew = () => {
@@ -341,7 +346,21 @@ export default function Modules() {
       }}
     >
       <div style={previewPaneStyle}>
-        <span style={previewLabelStyle}>{pLabel}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={previewLabelStyle}>{pLabel}</span>
+          {import.meta.env.DEV && (
+            <button
+              onClick={() => setShowSizePreviews((p) => !p)}
+              style={{
+                ...btn(showSizePreviews ? "active" : "eye"),
+                padding: "2px 8px",
+                fontSize: F.size.xs,
+              }}
+            >
+              SIZES
+            </button>
+          )}
+        </div>
         <DisplayPreview
           wsUrl={showEditPreview ? "/ws/preview/edit" : "/ws/preview"}
           scale={3}
@@ -357,6 +376,22 @@ export default function Modules() {
           }
         />
       </div>
+
+      {import.meta.env.DEV && showSizePreviews && (
+        <div
+          style={{
+            background: C.bg,
+            borderBottom: `1px solid ${C.border}`,
+            padding: "12px 16px",
+            overflowX: "auto",
+          }}
+        >
+          {showEditPreview
+            ? <MultiSizePreview appId={fAppId} config={fConfig} />
+            : <MultiSizePreview live />
+          }
+        </div>
+      )}
 
       {/* Scrollable content — preview above stays fixed */}
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
