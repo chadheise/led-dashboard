@@ -170,10 +170,15 @@ class SizesPreviewManager:
         self._fetch_task: asyncio.Task[None] | None = None
         self._live_task: asyncio.Task[None] | None = None
         self._paused: bool = False
+        self._scene_changed: asyncio.Event = asyncio.Event()
 
     @property
     def paused(self) -> bool:
         return self._paused
+
+    def notify_scene_changed(self) -> None:
+        """Wake the live-follow loop immediately (call after next/prev scene)."""
+        self._scene_changed.set()
 
     def toggle_pause(self) -> bool:
         self._paused = not self._paused
@@ -276,7 +281,12 @@ class SizesPreviewManager:
                     library_configs=entry.library_configs,
                 )
                 last_entry_id = entry.entry_id
-            await asyncio.sleep(0.5)
+            # Wait up to 0.5 s or until explicitly woken by notify_scene_changed()
+            self._scene_changed.clear()
+            try:
+                await asyncio.wait_for(self._scene_changed.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                pass
 
     async def _render_loop(self) -> None:
         interval = 1.0 / self._fps

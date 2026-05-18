@@ -348,6 +348,7 @@ async def activate_playlist(request: Request, playlist_id: str) -> dict[str, Any
 async def prev_scene(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     await sm.prev_scene()
+    request.app.state.sizes_preview_manager.notify_scene_changed()
     return {"current_idx": sm.current_idx}
 
 
@@ -355,6 +356,7 @@ async def prev_scene(request: Request) -> dict[str, Any]:
 async def next_scene(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     await sm.next_scene()
+    request.app.state.sizes_preview_manager.notify_scene_changed()
     return {"current_idx": sm.current_idx}
 
 
@@ -362,6 +364,9 @@ async def next_scene(request: Request) -> dict[str, Any]:
 async def toggle_playpause(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     sm.set_paused(not sm.paused)
+    spm = request.app.state.sizes_preview_manager
+    if spm.paused != sm.paused:
+        spm.toggle_pause()
     return {"paused": sm.paused}
 
 
