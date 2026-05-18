@@ -654,7 +654,7 @@ class SportsApp(DisplayApp):
             city_font     = 12
             team_font     = 12
             name_gap      = 2
-            score_gap     = 2
+            score_gap     = 4
             probe_city_h  = render_text("A", (255, 255, 255), city_font).height
             probe_team_h  = render_text("A", (255, 255, 255), team_font).height
             score_font    = max(32, block_avail - probe_city_h - name_gap - probe_team_h - score_gap)
@@ -774,9 +774,11 @@ class SportsApp(DisplayApp):
         is_baseball = game.get("sport") == "baseball"
         hide_logo   = is_xs  # no logos at XS for any sport
 
-        STATUS_H = 24 if is_xs else 12
-
-        team_h    = (h - STATUS_H) // 2
+        # XS uses a 24px footer (12px league label + 12px breathing room above);
+        # taller displays keep the standard 12px status bar.
+        STATUS_H  = 24 if is_xs else 12
+        content_h = h - STATUS_H
+        team_h    = content_h // 2
         logo_size = max(6, team_h - 4)
         text_font = max(12, team_h)
 
@@ -804,16 +806,16 @@ class SportsApp(DisplayApp):
             _paste(img, score_img, lx + abbr_img.width + 3,  logo_cy, "lm")
 
         if is_xs:
-            # ── XS two-line footer ────────────────────────────────────────────
-            FONT      = 12
-            _DIM      = (140, 140, 140)
-            _GRAY     = (100, 100, 100)
-            mid_top   = h - 18   # vertical centre of top footer line (h-24 … h-12)
-            mid_bot   = h - 6    # vertical centre of bottom footer line (h-12 … h)
+            _DIM  = (140, 140, 140)
+            _GRAY = (100, 100, 100)
+            FONT  = 9   # compact font for right-column labels
 
-            # Top line: game info, right-aligned
+            # ── Right column: game info, centred in content area, right-aligned ──
             if is_baseball and game.get("state") == "in":
                 situation = game.get("situation") or {}
+                outs     = int(situation.get("outs") or 0)
+                outs_img = render_text("1 out" if outs == 1 else f"{outs} outs", _DIM, FONT)
+
                 low = status_text.lower()
                 if low.startswith("top "):
                     half_up, inning_part = True,  status_text[4:]
@@ -833,32 +835,33 @@ class SportsApp(DisplayApp):
                 else:
                     inning_img = render_text(status_text, _DIM, FONT)
 
-                outs        = int(situation.get("outs") or 0)
-                outs_img    = render_text("1 out" if outs == 1 else f"{outs} outs", _DIM, FONT)
-                diamond_img = _make_diamond_img(
+                gap          = 3
+                diamond_size = max(11, content_h - outs_img.height - inning_img.height - 2 * gap - 4)
+                diamond_img  = _make_diamond_img(
                     bool(situation.get("onFirst")),
                     bool(situation.get("onSecond")),
                     bool(situation.get("onThird")),
+                    size=diamond_size,
                 )
-                gap    = 3
-                row_h  = max(inning_img.height, diamond_img.height, outs_img.height)
-                row_w  = inning_img.width + gap + diamond_img.width + gap + outs_img.width
-                row    = Image.new("RGB", (row_w, row_h), (0, 0, 0))
-                x = 0
-                row.paste(inning_img, (x, (row_h - inning_img.height) // 2))
-                x += inning_img.width + gap
-                row.paste(diamond_img, (x, (row_h - diamond_img.height) // 2))
-                x += diamond_img.width + gap
-                row.paste(outs_img, (x, (row_h - outs_img.height) // 2))
-                _paste(img, row, w - 2, mid_top, "rm")
-            else:
-                _paste(img, render_text(status_text, _DIM, FONT), w - 2, mid_top, "rm")
 
-            # Bottom line: league label, left-aligned
+                col_w = max(diamond_img.width, outs_img.width, inning_img.width)
+                col_h = diamond_img.height + gap + outs_img.height + gap + inning_img.height
+                col   = Image.new("RGB", (col_w, col_h), (0, 0, 0))
+                col.paste(diamond_img, ((col_w - diamond_img.width) // 2, 0))
+                y = diamond_img.height + gap
+                col.paste(outs_img,    ((col_w - outs_img.width)    // 2, y))
+                y += outs_img.height + gap
+                col.paste(inning_img,  ((col_w - inning_img.width)  // 2, y))
+                _paste(img, col, w - 2, content_h // 2, "rm")
+            else:
+                # Non-baseball: status text centred in the top footer line
+                _paste(img, render_text(status_text, _DIM, 12), w // 2, h - 18, "mm")
+
+            # ── Footer: league label in bottom line, left-aligned ─────────────
             league_id    = game.get("league", "")
             league_label = _LEAGUE_LABELS.get(league_id, league_id.upper())
             if league_label:
-                _paste(img, render_text(league_label, _GRAY, FONT), 2, mid_bot, "lm")
+                _paste(img, render_text(league_label, _GRAY, 12), 2, h - 6, "lm")
         else:
             self._draw_status_bar(img, game, w, h, status_text)
 
