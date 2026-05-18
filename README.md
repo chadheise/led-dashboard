@@ -11,10 +11,19 @@ The system renders display apps (stocks, sports, flights, text) to a virtual can
 ```bash
 cd engine
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-python main.py          # starts FastAPI on :8000
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python main.py          # starts FastAPI on :8000
 ```
+
+#### Hot-reload (development)
+
+To avoid restarting the engine on every code change, set `HOT_RELOAD=true`. The engine watches `apps/` and `libraries/` for `.py` file changes and automatically reloads the affected code within about one second of saving.
+
+```bash
+HOT_RELOAD=true .venv/bin/python main.py
+```
+
+The server stays running, the WebSocket connection is preserved, and the display updates immediately with the new code. Syntax errors are logged without crashing the engine — fix and save to retry.
 
 ### UI (React)
 
@@ -439,4 +448,4 @@ After first run, all state is stored in `data/state.json` and managed through th
 2. **Plugin system + starter apps** (Stocks, Sports, Flights, Text) ✓
 3. **Display helpers + font rendering** ✓
 4. **Hardware integration** — swap `SimulatorCanvas` for `HardwareCanvas` (`rpi-rgb-led-matrix`)
-5. **Polish** — config persistence, hot-reload, systemd service, API auth
+5. **Polish** — config persistence, hot-reload ✓, systemd service, API auth

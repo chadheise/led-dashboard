@@ -1,7 +1,9 @@
 import asyncio
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 import uvicorn
@@ -103,11 +105,27 @@ def main() -> None:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await scene_manager.set_playlist(_sm_entries(store))
         await scene_manager.start()
-        task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
+        render_task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
+        hot_reload_task: asyncio.Task | None = None
+        if os.environ.get("HOT_RELOAD", "").lower() == "true":
+            from hot_reload import start_hot_reload_watcher
+            from libraries import LIBRARY_REGISTRY
+            hot_reload_task = asyncio.create_task(
+                start_hot_reload_watcher(
+                    store, scene_manager, APP_REGISTRY, LIBRARY_REGISTRY, Path(__file__).parent
+                )
+            )
+            logger.info("Hot-reload enabled")
         try:
             yield
         finally:
-            task.cancel()
+            render_task.cancel()
+            if hot_reload_task is not None:
+                hot_reload_task.cancel()
+                try:
+                    await hot_reload_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             await scene_manager.stop()
 
     app = create_app(
