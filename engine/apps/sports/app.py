@@ -628,6 +628,10 @@ class SportsApp(DisplayApp):
             home_team_text = (game.get("home_nickname") or home_abbr) \
                              + (f" #{home_rank_v}" if home_rank_v and home_rank_v <= 25 else "")
 
+            # Alt colors for city line (swap primary/alt priority to get a second distinct color)
+            away_city_color = _team_color(game.get("away_alt_color", ""), game.get("away_color", ""))
+            home_city_color = _team_color(game.get("home_alt_color", ""), game.get("home_color", ""))
+
             # Away (left)
             ax = 2
             a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
@@ -635,9 +639,9 @@ class SportsApp(DisplayApp):
                 r, g, b, a = a_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
                 ax += a_logo.size[0] + 3
-            _paste(img, render_text(away_city_text, away_color, city_font),              ax, city_y,  "lt")
-            _paste(img, render_text(away_team_text, away_color, team_font),              ax, team_y,  "lt")
-            _paste(img, render_text(away_score,     away_color, score_font, bold=True),  ax, score_y, "lt")
+            _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,  "lt")
+            _paste(img, render_text(away_team_text, away_color,      team_font),          ax, team_y,  "lt")
+            _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
 
             # Home (right)
             rx = w - 2
@@ -646,9 +650,9 @@ class SportsApp(DisplayApp):
                 r, g, b, a = h_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
                 rx -= h_logo.size[0] + 3
-            _paste(img, render_text(home_city_text, home_color, city_font),              rx, city_y,  "rt")
-            _paste(img, render_text(home_team_text, home_color, team_font),              rx, team_y,  "rt")
-            _paste(img, render_text(home_score,     home_color, score_font, bold=True),  rx, score_y, "rt")
+            _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,  "rt")
+            _paste(img, render_text(home_team_text, home_color,      team_font),          rx, team_y,  "rt")
+            _paste(img, render_text(home_score,     home_color,      score_font, bold=True), rx, score_y, "rt")
 
         else:
             # ── Narrower slots: abbreviation / score (2 lines) ─────────────
