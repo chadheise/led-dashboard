@@ -41,6 +41,10 @@ interface SchemaProperty {
   /** Restrict the radius slider on location inputs (km). Takes precedence over radius_km.minimum/maximum. */
   'x-radius-min'?: number
   'x-radius-max'?: number
+  /** Conditionally show this field only when another field equals a specific value. */
+  'x-show-if'?: { field: string; equals: unknown }
+  /** Hide this field entirely outside of Vite dev mode (npm run dev). */
+  'x-dev-only'?: boolean
 }
 
 interface Schema {
@@ -166,6 +170,12 @@ export default function AppForm({ schema, value, onChange }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {Object.entries(props).map(([key, prop]) => {
+        if (prop['x-dev-only'] && !import.meta.env.DEV) return null
+        const showIf = prop['x-show-if']
+        if (showIf) {
+          const depVal = showIf.field in value ? value[showIf.field] : (props[showIf.field]?.default ?? false)
+          if (depVal !== showIf.equals) return null
+        }
         const v = key in value ? value[key] : (prop.default ?? '')
         const title = prop.title ?? key
         const xType = prop['x-input-type']
@@ -291,6 +301,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
         }
 
         if (prop.enum) {
+          const enumLabels = prop['x-enum-labels']
           return (
             <label key={key} style={labelStyle}>
               {title}
@@ -299,7 +310,9 @@ export default function AppForm({ schema, value, onChange }: Props) {
                 onChange={e => onChange({ ...value, [key]: e.target.value })}
                 style={selectStyle}
               >
-                {prop.enum.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                {prop.enum.map(opt => (
+                  <option key={opt} value={opt}>{enumLabels?.[opt] ?? opt}</option>
+                ))}
               </select>
             </label>
           )

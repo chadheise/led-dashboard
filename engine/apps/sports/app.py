@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime
+import json
 import math
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image, ImageDraw
@@ -10,7 +12,7 @@ from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_text
+from libraries.text_renderer.library import render_text, arrow_img
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 
 
@@ -27,6 +29,13 @@ _UNIT_SECONDS: dict[str, float] = {
 }
 
 _FPS = 30  # assumed display frame rate for seconds → frames conversion
+
+_DEBUG_GAMES: list[dict[str, Any]] = json.loads(
+    (Path(__file__).parent / "debug_games.json").read_text()
+)
+_DEBUG_GAME_BY_ID: dict[str, dict[str, Any]] = {g["id"]: g["game"] for g in _DEBUG_GAMES}
+_DEBUG_GAME_IDS: list[str] = [g["id"] for g in _DEBUG_GAMES]
+_DEBUG_GAME_LABELS: dict[str, str] = {g["id"]: g["label"] for g in _DEBUG_GAMES}
 
 
 def _duration_to_seconds(d: Any) -> float:
@@ -87,17 +96,16 @@ def _make_diamond_img(
 ) -> Image.Image:
     """Render a baseball diamond as a square image of `size` × `size` pixels."""
     half  = size // 2
-    inset = max(2, size // 5)
-    r     = max(2, size // 5)  # half-width of each base diamond
+    inset = max(2, size // 4)   # tighter spacing between bases
+    r     = max(2, size // 5)   # half-width of each base diamond
     yellow      = (220, 180, 0)
     empty_color = (70, 70, 70)
     img  = Image.new("RGB", (size, size), (0, 0, 0))
     draw = ImageDraw.Draw(img)
     bases = [
-        ((half,            inset           ), on_second),   # 2B top
-        ((size - inset - 1, half           ), on_first),    # 1B right
-        ((half,            size - inset - 1), False),       # HP bottom — always empty
-        ((inset,           half            ), on_third),    # 3B left
+        ((half,             inset), on_second),          # 2B top
+        ((size - inset - 1, half),  on_first),           # 1B right
+        ((inset,            half),  on_third),           # 3B left
     ]
     for (cx, cy), occupied in bases:
         pts = [(cx, cy - r), (cx + r, cy), (cx, cy + r), (cx - r, cy)]
@@ -202,6 +210,14 @@ class SportsApp(DisplayApp):
                 "default": 60,
                 "minimum": 10,
             },
+            "debug_game": {
+                "type": "string",
+                "title": "Debug game",
+                "enum": ["", *_DEBUG_GAME_IDS],
+                "x-enum-labels": {"": "— select a game —", **_DEBUG_GAME_LABELS},
+                "default": "",
+                "x-dev-only": True,
+            },
         },
         "required": ["leagues"],
     }
@@ -263,6 +279,14 @@ class SportsApp(DisplayApp):
         return logo.resize((max(1, round(iw * scale)), max(1, round(ih * scale))), Image.LANCZOS)
 
     async def fetch_data(self) -> None:
+        game = _DEBUG_GAME_BY_ID.get(self.config.get("debug_game", ""))
+        if game:
+            self._games = [dict(game)]
+            new_logos = await self._espn.fetch_logos(self._games, (64, 64))
+            self._logos.update(new_logos)
+            self._marquee_strip = self._build_marquee_strip()
+            return
+
         favorite_teams = list(self.config.get("favorite_teams") or [])
 
         games = await self._espn.fetch_scores(
@@ -558,12 +582,34 @@ class SportsApp(DisplayApp):
             situation = game.get("situation", {})
             outs = int(situation.get("outs") or 0)
             outs_text = "1 out" if outs == 1 else f"{outs} outs"
-            inning_img = render_text(status_text, (140, 140, 140), STATUS_FONT)
+            low = status_text.lower()
+            if low.startswith("top "):
+                half_up, inning_part = True, status_text[4:]
+            elif low.startswith("bottom "):
+                half_up, inning_part = False, status_text[7:]
+            elif low.startswith("bot "):
+                half_up, inning_part = False, status_text[4:]
+            else:
+                half_up, inning_part = None, status_text
 
-            if w >= 256:
-                # Diamond and outs are shown in the content area for large format;
-                # status bar carries only the inning text.
-                _paste(img, inning_img, cx, h - 2, "mb")
+            if half_up is not None:
+                _COLOR = (140, 140, 140)
+                txt    = render_text(inning_part, _COLOR, STATUS_FONT)
+                arr    = arrow_img(half_up, max(3, txt.height * 2 // 3), _COLOR)
+                inning_img = Image.new("RGB", (arr.width + 2 + txt.width, txt.height), (0, 0, 0))
+                inning_img.paste(arr, (0, (txt.height - arr.height) // 2))
+                inning_img.paste(txt, (arr.width + 2, 0))
+            else:
+                inning_img = render_text(status_text, (140, 140, 140), STATUS_FONT)
+
+            if w >= 196:
+                outs_img = render_text(outs_text, (140, 140, 140), STATUS_FONT)
+                gap = 8
+                total_w = inning_img.width + gap + outs_img.width
+                sx = cx - total_w // 2
+                mid_y = h - STATUS_H // 2
+                _paste(img, inning_img, sx, mid_y, "lm")
+                _paste(img, outs_img, sx + inning_img.width + gap, mid_y, "lm")
             else:
                 diamond = _make_diamond_img(
                     bool(situation.get("onFirst")),
@@ -597,7 +643,7 @@ class SportsApp(DisplayApp):
     ) -> None:
         """Logo fills height. Team info + score beside each logo; 3-line layout for large format."""
         STATUS_H  = 12
-        logo_size = (h - 4) if w >= 256 else max(28, h - 22)
+        logo_size = (h - 10) if w >= 256 else max(20, h - 32)
         content_h = h - STATUS_H
         _MARGIN   = 2
         block_avail = content_h - 2 * _MARGIN
@@ -608,10 +654,10 @@ class SportsApp(DisplayApp):
             city_font     = 12
             team_font     = 12
             name_gap      = 2
-            score_gap     = 4
+            score_gap     = 2
             probe_city_h  = render_text("A", (255, 255, 255), city_font).height
             probe_team_h  = render_text("A", (255, 255, 255), team_font).height
-            score_font    = max(22, block_avail - probe_city_h - name_gap - probe_team_h - score_gap)
+            score_font    = max(32, block_avail - probe_city_h - name_gap - probe_team_h - score_gap)
             probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
 
             block_h = probe_city_h + name_gap + probe_team_h + score_gap + probe_score_h
@@ -633,23 +679,23 @@ class SportsApp(DisplayApp):
             home_city_color = _team_color(game.get("home_alt_color", ""), game.get("home_color", ""))
 
             # Away (left)
-            ax = 2
+            ax = 1
             a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
             if a_logo:
                 r, g, b, a = a_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
-                ax += a_logo.size[0] + 3
+                ax += a_logo.size[0] + 2
             _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,  "lt")
             _paste(img, render_text(away_team_text, away_color,      team_font),          ax, team_y,  "lt")
             _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
 
             # Home (right)
-            rx = w - 2
+            rx = w - 1
             h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
             if h_logo:
                 r, g, b, a = h_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
-                rx -= h_logo.size[0] + 3
+                rx -= h_logo.size[0] + 2
             _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,  "rt")
             _paste(img, render_text(home_team_text, home_color,      team_font),          rx, team_y,  "rt")
             _paste(img, render_text(home_score,     home_color,      score_font, bold=True), rx, score_y, "rt")
@@ -659,7 +705,7 @@ class SportsApp(DisplayApp):
             score_font = max(22, block_avail * 13 // 20)
             abbr_font  = max(12, block_avail * 6  // 20)
 
-            ax = 2 + logo_size + 3
+            ax = 1 + logo_size + 2
             per_team_px = (w - 2 * ax) // 2
             while score_font > 22:
                 if render_text("000", (255, 255, 255), score_font, bold=True).width <= per_team_px:
@@ -674,46 +720,41 @@ class SportsApp(DisplayApp):
             score_y       = abbr_y + probe_abbr_h + text_gap
 
             # Away (left)
-            ax = 2
+            ax = 1
             a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
             if a_logo:
                 r, g, b, a = a_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
-                ax += a_logo.size[0] + 3
+                ax += a_logo.size[0] + 2
             _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
             _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
 
             # Home (right)
-            rx = w - 2
+            rx = w - 1
             h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
             if h_logo:
                 r, g, b, a = h_logo.split()
                 img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
-                rx -= h_logo.size[0] + 3
+                rx -= h_logo.size[0] + 2
             _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
             _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
 
-        # ── Baseball situation (large format only) ─────────────────────────
-        if w >= 256 and game.get("state") == "in" and game.get("sport") == "baseball":
+        # ── Baseball situation (M and larger) ──────────────────────────────
+        if w >= 196 and game.get("state") == "in" and game.get("sport") == "baseball":
             situation = game.get("situation") or {}
-            outs = int(situation.get("outs") or 0)
-            outs_img = render_text(
-                "1 out" if outs == 1 else f"{outs} outs",
-                (140, 140, 140), 12,
-            )
-            gap = 3
-            diamond_size = max(18, content_h - outs_img.height - gap - 4)
+            diamond_size = max(18, content_h - 4)
             diamond_img = _make_diamond_img(
                 bool(situation.get("onFirst")),
                 bool(situation.get("onSecond")),
                 bool(situation.get("onThird")),
                 size=diamond_size,
             )
-            block_h = outs_img.height + gap + diamond_img.height
-            block_y = (content_h - block_h) // 2
+            # Anchor so the bottom points of 1B/3B sit just above the status bar.
+            # Within the diamond image, 1B/3B bottom = size//2 + max(2, size//5).
+            base_bottom = diamond_size // 2 + max(2, diamond_size // 5)
+            diamond_y = max(0, content_h - 2 - base_bottom)
             cx = w // 2
-            _paste(img, outs_img, cx, block_y, "mt")
-            img.paste(diamond_img, (cx - diamond_img.width // 2, block_y + outs_img.height + gap))
+            img.paste(diamond_img, (cx - diamond_img.width // 2, diamond_y))
 
         # ── Status ─────────────────────────────────────────────────────────
         self._draw_status_bar(img, game, w, h, status_text)
@@ -729,37 +770,97 @@ class SportsApp(DisplayApp):
         status_text: str,
     ) -> None:
         """Away top / home bottom. Logo left; abbr+score block centred on the logo."""
-        STATUS_H = 12
+        is_xs       = h <= 64
+        is_baseball = game.get("sport") == "baseball"
+        hide_logo   = is_xs  # no logos at XS for any sport
+
+        STATUS_H = 24 if is_xs else 12
 
         team_h    = (h - STATUS_H) // 2
         logo_size = max(6, team_h - 4)
-        # Single font for inline name + score; snap to largest LoRes size that fits the row
         text_font = max(12, team_h)
 
         for i, (logo_key, abbr, score, color) in enumerate([
             ("away_logo_url", away_abbr, away_score, away_color),
             ("home_logo_url", home_abbr, home_score, home_color),
         ]):
-            y_top = i * team_h
-            lx    = 2
+            y_top   = i * team_h
+            lx      = 2
+            logo_cy = y_top + team_h // 2
 
-            logo = self._get_logo(game.get(logo_key), logo_size)
-            actual_logo_h = logo.size[1] if logo is not None else logo_size
-            logo_y  = y_top + (team_h - actual_logo_h) // 2  # centred on actual height
-            logo_cy = logo_y + actual_logo_h // 2             # vertical midpoint
+            if not hide_logo:
+                logo = self._get_logo(game.get(logo_key), logo_size)
+                actual_logo_h = logo.size[1] if logo is not None else logo_size
+                logo_y  = y_top + (team_h - actual_logo_h) // 2
+                logo_cy = logo_y + actual_logo_h // 2
+                if logo:
+                    r, g, b, a = logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (lx, logo_y), a)
+                    lx += logo.size[0] + 3
 
-            if logo:
-                r, g, b, a = logo.split()
-                img.paste(Image.merge("RGB", (r, g, b)), (lx, logo_y), a)
-                lx += logo.size[0] + 3
-
-            # Render name and score inline, both centred on the logo's vertical midpoint
             abbr_img  = render_text(abbr,  color, text_font)
             score_img = render_text(score, color, text_font, bold=True)
-            _paste(img, abbr_img,  lx,                        logo_cy, "lm")
-            _paste(img, score_img, lx + abbr_img.width + 3,   logo_cy, "lm")
+            _paste(img, abbr_img,  lx,                       logo_cy, "lm")
+            _paste(img, score_img, lx + abbr_img.width + 3,  logo_cy, "lm")
 
-        self._draw_status_bar(img, game, w, h, status_text)
+        if is_xs:
+            # ── XS two-line footer ────────────────────────────────────────────
+            FONT      = 12
+            _DIM      = (140, 140, 140)
+            _GRAY     = (100, 100, 100)
+            mid_top   = h - 18   # vertical centre of top footer line (h-24 … h-12)
+            mid_bot   = h - 6    # vertical centre of bottom footer line (h-12 … h)
+
+            # Top line: game info, right-aligned
+            if is_baseball and game.get("state") == "in":
+                situation = game.get("situation") or {}
+                low = status_text.lower()
+                if low.startswith("top "):
+                    half_up, inning_part = True,  status_text[4:]
+                elif low.startswith("bottom "):
+                    half_up, inning_part = False, status_text[7:]
+                elif low.startswith("bot "):
+                    half_up, inning_part = False, status_text[4:]
+                else:
+                    half_up, inning_part = None,  status_text
+
+                if half_up is not None:
+                    txt = render_text(inning_part, _DIM, FONT)
+                    arr = arrow_img(half_up, max(3, txt.height * 2 // 3), _DIM)
+                    inning_img = Image.new("RGB", (arr.width + 2 + txt.width, txt.height), (0, 0, 0))
+                    inning_img.paste(arr, (0, (txt.height - arr.height) // 2))
+                    inning_img.paste(txt, (arr.width + 2, 0))
+                else:
+                    inning_img = render_text(status_text, _DIM, FONT)
+
+                outs        = int(situation.get("outs") or 0)
+                outs_img    = render_text("1 out" if outs == 1 else f"{outs} outs", _DIM, FONT)
+                diamond_img = _make_diamond_img(
+                    bool(situation.get("onFirst")),
+                    bool(situation.get("onSecond")),
+                    bool(situation.get("onThird")),
+                )
+                gap    = 3
+                row_h  = max(inning_img.height, diamond_img.height, outs_img.height)
+                row_w  = inning_img.width + gap + diamond_img.width + gap + outs_img.width
+                row    = Image.new("RGB", (row_w, row_h), (0, 0, 0))
+                x = 0
+                row.paste(inning_img, (x, (row_h - inning_img.height) // 2))
+                x += inning_img.width + gap
+                row.paste(diamond_img, (x, (row_h - diamond_img.height) // 2))
+                x += diamond_img.width + gap
+                row.paste(outs_img, (x, (row_h - outs_img.height) // 2))
+                _paste(img, row, w - 2, mid_top, "rm")
+            else:
+                _paste(img, render_text(status_text, _DIM, FONT), w - 2, mid_top, "rm")
+
+            # Bottom line: league label, left-aligned
+            league_id    = game.get("league", "")
+            league_label = _LEAGUE_LABELS.get(league_id, league_id.upper())
+            if league_label:
+                _paste(img, render_text(league_label, _GRAY, FONT), 2, mid_bot, "lm")
+        else:
+            self._draw_status_bar(img, game, w, h, status_text)
 
     def _draw_minimal(
         self,
