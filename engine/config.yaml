@@ -1,5 +1,7 @@
 # 4x HUB75 P5 panels, each physically 64 wide x 32 tall (landscape).
-# Mounted in portrait (rotated 90°) and arranged in a 1x4 horizontal row -> 128 wide, 64 tall.
+# Mounted in portrait (rotation 270) in a single horizontal row (chain_length=4, parallel=1).
+# display.width  = chain_length × rows = 4 × 32 = 128
+# display.height = parallel    × cols = 1 × 64 = 64
 display:
   width: 128
   height: 64
@@ -20,9 +22,12 @@ playlist:
     duration: 30
 
 hardware:
-  rows: 32 # physical height of each panel in landscape orientation
-  cols: 64 # physical width of each panel in landscape orientation
-  chain_length: 4
-  rotation: 90  # panels are mounted portrait; rotate content to match
-  gpio_slowdown: 4 # tuned for Pi 4
+  rows: 32            # physical panel height (landscape orientation)
+  cols: 64            # physical panel width  (landscape orientation)
+  chain_length: 4     # panels per row
+  parallel: 1         # rows of panels (parallel chains); >1 requires separate GPIO wiring
+  rotation: 270           # per-panel rotation: 0=landscape, 90/270=portrait, 180=upside-down landscape
+  alternate_rotation: true # odd panels rotate +180° (270→90→270→…) — workaround for short cables
+  pixel_mapper: ""        # extra library mapper, e.g. "U-mapper" for zigzag chain wiring
+  gpio_slowdown: 4    # tuned for Pi 4
   hardware_mapping: adafruit-hat
