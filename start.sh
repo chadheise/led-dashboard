@@ -43,14 +43,19 @@ npm install
 log "Building UI..."
 npm run build
 
-# Hardware mode requires rgbmatrix, which must be compiled and installed manually
-if $HARDWARE_MODE && ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
-    log "ERROR: rgbmatrix is not installed. Build and install it from source:"
-    log "  git clone https://github.com/hzeller/rpi-rgb-led-matrix.git"
-    log "  cd rpi-rgb-led-matrix/bindings/python"
-    log "  make build-python PYTHON=$VENV_DIR/bin/python3"
-    log "  make install-python PYTHON=$VENV_DIR/bin/python3"
-    exit 1
+# Hardware mode requires rgbmatrix — install automatically if missing
+if $HARDWARE_MODE && ! sudo -E "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
+    log "rgbmatrix not found — installing from source..."
+    TMP_DIR="$(mktemp -d)"
+    trap 'rm -rf "$TMP_DIR"' EXIT
+    git clone --depth=1 https://github.com/hzeller/rpi-rgb-led-matrix.git "$TMP_DIR/rpi-rgb-led-matrix"
+    "$VENV_DIR/bin/pip3" install "$TMP_DIR/rpi-rgb-led-matrix/bindings/python"
+    if ! sudo -E "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
+        log "ERROR: rgbmatrix installation failed. Ensure gcc and python3-dev are installed:"
+        log "  sudo apt-get install -y gcc python3-dev"
+        exit 1
+    fi
+    log "rgbmatrix installed successfully."
 fi
 
 # Start engine

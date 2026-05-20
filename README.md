@@ -17,13 +17,28 @@ python3 -m venv .venv
 
 #### Hardware mode (Raspberry Pi + HUB75)
 
-Set `CANVAS=hardware` to drive the physical LED panels instead of broadcasting to the WebSocket simulator. The `rpi-rgb-led-matrix` library requires root, so use `sudo -E` to preserve the environment variable:
+Hardware mode requires the `rpi-rgb-led-matrix` Python bindings, which are not on PyPI and must be compiled from source. `start.sh` handles this automatically — if the module is missing it clones the repo, builds, and installs it into the venv before starting the engine.
+
+If the auto-install fails, it usually means the build tools are missing. Install them first:
 
 ```bash
-CANVAS=hardware sudo -E .venv/bin/python main.py
+sudo apt-get install -y gcc python3-dev
 ```
 
-Or use `start.sh`, which defaults to hardware mode:
+Then re-run `start.sh` and it will retry the install.
+
+> **Note:** `start.sh` uses `sudo -E` to run the engine (required for GPIO access). If `sudo` prompts for a password non-interactively, add a `NOPASSWD` entry via `sudo visudo`:
+> ```
+> chadheise ALL=(ALL) NOPASSWD: ALL
+> ```
+
+Set `CANVAS=hardware` to drive the physical LED panels instead of broadcasting to the WebSocket simulator. The library requires root, so use `sudo -E` to preserve the environment variable:
+
+```bash
+CANVAS=hardware sudo -E .venv/bin/python3 main.py
+```
+
+Or use `start.sh`, which defaults to hardware mode and handles `sudo` automatically:
 
 ```bash
 ./start.sh
