@@ -1,3 +1,9 @@
+# Hardware canvas dependency (not on PyPI — must be built from source on the Pi):
+#   git clone https://github.com/hzeller/rpi-rgb-led-matrix.git
+#   cd rpi-rgb-led-matrix/bindings/python
+#   make build-python PYTHON=<venv>/bin/python3
+#   make install-python PYTHON=<venv>/bin/python3
+
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 watchfiles>=0.20.0
