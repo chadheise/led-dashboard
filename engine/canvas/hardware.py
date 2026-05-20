@@ -1,10 +1,19 @@
+import struct
+from collections.abc import Awaitable, Callable
+
 from .base import Canvas
 
 
 class HardwareCanvas(Canvas):
-    """Drives a physical HUB75 panel via rpi-rgb-led-matrix."""
+    """Drives a physical HUB75 panel via rpi-rgb-led-matrix, with WebSocket broadcast for UI preview."""
 
-    def __init__(self, width: int, height: int, hw_cfg: dict) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        hw_cfg: dict,
+        broadcast: Callable[[bytes], Awaitable[None]],
+    ) -> None:
         super().__init__(width, height)
         from rgbmatrix import RGBMatrix, RGBMatrixOptions  # type: ignore[import]
 
@@ -18,13 +27,22 @@ class HardwareCanvas(Canvas):
 
         self._matrix = RGBMatrix(options=options)
         self._canvas = self._matrix.CreateFrameCanvas()
+        self._pixels = bytearray(width * height * 3)
+        self._broadcast = broadcast
 
     def set_pixel(self, x: int, y: int, r: int, g: int, b: int) -> None:
         if 0 <= x < self.width and 0 <= y < self.height:
             self._canvas.SetPixel(x, y, r & 0xFF, g & 0xFF, b & 0xFF)
+            idx = (y * self.width + x) * 3
+            self._pixels[idx] = r & 0xFF
+            self._pixels[idx + 1] = g & 0xFF
+            self._pixels[idx + 2] = b & 0xFF
 
     def clear(self) -> None:
         self._canvas.Clear()
+        self._pixels = bytearray(self.width * self.height * 3)
 
     async def render(self) -> None:
         self._canvas = self._matrix.SwapOnVSync(self._canvas)
+        frame = struct.pack(">HH", self.width, self.height) + bytes(self._pixels)
+        await self._broadcast(frame)

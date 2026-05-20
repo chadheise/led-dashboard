@@ -4,10 +4,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$REPO_DIR/.venv"
 HARDWARE_MODE=true
+PREVIEW_ENABLED=true
 
 for arg in "$@"; do
     case "$arg" in
-        --simulator) HARDWARE_MODE=false ;;
+        --simulator)   HARDWARE_MODE=false ;;
+        --no-preview)  PREVIEW_ENABLED=false ;;
     esac
 done
 
@@ -16,6 +18,7 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 log "=== LED Dashboard Startup ==="
 log "Repo: $REPO_DIR"
 log "Canvas mode: $( $HARDWARE_MODE && echo hardware || echo simulator )"
+log "Preview: $( $PREVIEW_ENABLED && echo enabled || echo disabled )"
 
 # Pull latest code
 log "Pulling latest code from GitHub..."
@@ -44,7 +47,7 @@ npm run build
 log "Starting engine on :8000..."
 cd "$REPO_DIR/engine"
 if $HARDWARE_MODE; then
-    CANVAS=hardware sudo -E "$VENV_DIR/bin/python3" main.py &
+    CANVAS=hardware PREVIEW_ENABLED=$PREVIEW_ENABLED sudo -E "$VENV_DIR/bin/python3" main.py &
 else
     "$VENV_DIR/bin/python3" main.py &
 fi

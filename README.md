@@ -35,7 +35,7 @@ To run in simulator mode instead (e.g. for local development without panels):
 ./start.sh --simulator
 ```
 
-Hardware parameters (chain length, GPIO slowdown, HAT mapping) are read from the `hardware:` block in `config.yaml`. The simulator WebSocket preview will not show frames in hardware mode — pixels go directly to the panels.
+Hardware parameters (chain length, GPIO slowdown, HAT mapping) are read from the `hardware:` block in `config.yaml`. In hardware mode the engine writes pixels to both the physical panels and the WebSocket stream, so the UI preview continues to work.
 
 #### Hot-reload (development)
 

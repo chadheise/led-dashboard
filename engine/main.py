@@ -86,8 +86,14 @@ def main() -> None:
     server_cfg = cfg["server"]
 
     if os.environ.get("CANVAS", "").lower() == "hardware":
+        preview_enabled = os.environ.get("PREVIEW_ENABLED", "true").lower() != "false"
+
+        async def _noop(_: bytes) -> None:
+            pass
+
+        broadcast = manager.broadcast if preview_enabled else _noop
         canvas = HardwareCanvas(
-            display_cfg["width"], display_cfg["height"], cfg.get("hardware", {})
+            display_cfg["width"], display_cfg["height"], cfg.get("hardware", {}), broadcast
         )
     else:
         canvas = SimulatorCanvas(
