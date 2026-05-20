@@ -27,15 +27,15 @@ class HardwareCanvas(Canvas):
         This is necessary because pixel_mapper_config applies to the whole chained canvas
         as a single surface, which collapses all panels into one panel-width of content.
 
-    alternate_rotation — zigzag cable workaround
+    alternate_rotation -- zigzag cable workaround
         When cables are too short to wire panels in the same direction, set
         alternate_rotation: true. Even-indexed panels use `rotation`; odd-indexed panels
-        use rotation + 180°. The pattern repeats: 270, 90, 270, 90, …
+        use rotation + 180 deg. The pattern repeats: 270, 90, 270, 90, ...
 
     display dimensions vs hardware config
     --------------------------------------
-    rotation 0 / 180:  display.width = chain_length × cols,  display.height = parallel × rows
-    rotation 90 / 270: display.width = chain_length × rows,  display.height = parallel × cols
+    rotation 0 / 180:  display.width = chain_length x cols,  display.height = parallel x rows
+    rotation 90 / 270: display.width = chain_length x rows,  display.height = parallel x cols
     """
 
     def __init__(
@@ -69,9 +69,9 @@ class HardwareCanvas(Canvas):
         self._rotation = hw_cfg.get("rotation", 0)
         self._alternate_rotation = hw_cfg.get("alternate_rotation", False)
 
-        alt_note = f", alternating {self._rotation}°/{(self._rotation + 180) % 360}°" if self._alternate_rotation else ""
+        alt_note = f", alternating {self._rotation}/{(self._rotation + 180) % 360} deg" if self._alternate_rotation else ""
         logger.info(
-            "HardwareCanvas: logical %dx%d, grid %dx%d panels (%dx%d physical each, rotation %d°%s%s)",
+            "HardwareCanvas: logical %dx%d, grid %dx%d panels (%dx%d physical each, rotation %d deg%s%s)",
             width, height,
             options.chain_length, options.parallel,
             options.cols, options.rows,
