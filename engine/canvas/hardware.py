@@ -11,26 +11,28 @@ class HardwareCanvas(Canvas):
     """
     Drives HUB75 panels via rpi-rgb-led-matrix.
 
-    Supports arbitrary panel grid layouts (chain_length × parallel), per-panel rotation
+    Supports arbitrary panel grid layouts (chain_length x parallel), per-panel rotation
     (0 / 90 / 180 / 270), and pass-through pixel_mapper strings for special wiring
     arrangements such as U-mapper zigzag chains.
 
     Layout reference
     ----------------
-    rotation 0 / 180  — panels are in landscape orientation
+    rotation 0 / 180  -- panels are in landscape orientation.
         rotation 180 flips each panel individually.
 
-    rotation 90 / 270 — panels are in portrait orientation (rotated from landscape)
-        Each panel occupies (hw_rows) logical pixels wide × (hw_cols) logical pixels tall.
+    rotation 90 / 270 -- panels are in portrait orientation (rotated from landscape).
+        Each panel occupies hw_rows logical pixels wide x hw_cols logical pixels tall.
         _logical_to_physical transforms coordinates per-panel before calling SetPixel,
         so every panel in the chain gets its own correctly-rotated slice of the display.
         This is necessary because pixel_mapper_config applies to the whole chained canvas
         as a single surface, which collapses all panels into one panel-width of content.
 
-    alternate_rotation -- zigzag cable workaround
+    alternate_rotation -- zigzag cable workaround.
         When cables are too short to wire panels in the same direction, set
-        alternate_rotation: true. Even-indexed panels use `rotation`; odd-indexed panels
-        use rotation + 180 deg. The pattern repeats: 270, 90, 270, 90, ...
+        alternate_rotation: true. Even-indexed logical panels use `rotation`; odd-indexed
+        panels use rotation + 180 deg. The pattern repeats: 270, 90, 270, 90, ...
+        Because zigzag wiring also reverses the physical panel order, the chain is
+        mirrored so that logical col 0 remains the leftmost visible panel.
 
     display dimensions vs hardware config
     --------------------------------------
@@ -66,10 +68,14 @@ class HardwareCanvas(Canvas):
 
         self._hw_rows = options.rows
         self._hw_cols = options.cols
+        self._chain_length = options.chain_length
         self._rotation = hw_cfg.get("rotation", 0)
         self._alternate_rotation = hw_cfg.get("alternate_rotation", False)
 
-        alt_note = f", alternating {self._rotation}/{(self._rotation + 180) % 360} deg" if self._alternate_rotation else ""
+        alt_note = (
+            f", alternating {self._rotation}/{(self._rotation + 180) % 360} deg"
+            if self._alternate_rotation else ""
+        )
         logger.info(
             "HardwareCanvas: logical %dx%d, grid %dx%d panels (%dx%d physical each, rotation %d deg%s%s)",
             width, height,
@@ -83,36 +89,45 @@ class HardwareCanvas(Canvas):
         self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast
 
-    def _panel_rotation(self, panel_col: int) -> int:
-        if self._alternate_rotation and panel_col % 2 == 1:
+    def _panel_rotation(self, logical_col: int) -> int:
+        if self._alternate_rotation and logical_col % 2 == 1:
             return (self._rotation + 180) % 360
         return self._rotation
+
+    def _phys_panel_col(self, logical_col: int) -> int:
+        # Zigzag wiring reverses the physical panel order relative to the visual order.
+        # Mirror the column index so logical col 0 is always the leftmost visible panel.
+        if self._alternate_rotation:
+            return self._chain_length - 1 - logical_col
+        return logical_col
 
     def _logical_to_physical(self, x: int, y: int) -> tuple[int, int]:
         hw_rows = self._hw_rows
         hw_cols = self._hw_cols
 
         if self._rotation in (90, 270):
-            # Portrait panels: hw_rows logical px wide × hw_cols logical px tall each
-            panel_col = x // hw_rows
+            # Portrait panels: hw_rows logical px wide x hw_cols logical px tall each
+            logical_col = x // hw_rows
             panel_row = y // hw_cols
-            px = x % hw_rows  # 0 … hw_rows-1
-            py = y % hw_cols  # 0 … hw_cols-1
-            rotation = self._panel_rotation(panel_col)
+            px = x % hw_rows  # 0 ... hw_rows-1
+            py = y % hw_cols  # 0 ... hw_cols-1
+            rotation = self._panel_rotation(logical_col)
+            phys_col = self._phys_panel_col(logical_col)
             if rotation == 90:
-                return panel_col * hw_cols + py, panel_row * hw_rows + (hw_rows - 1 - px)
+                return phys_col * hw_cols + py, panel_row * hw_rows + (hw_rows - 1 - px)
             else:  # 270
-                return panel_col * hw_cols + (hw_cols - 1 - py), panel_row * hw_rows + px
+                return phys_col * hw_cols + (hw_cols - 1 - py), panel_row * hw_rows + px
 
         # Landscape panels (rotation 0 or 180)
-        panel_col = x // hw_cols
+        logical_col = x // hw_cols
         panel_row = y // hw_rows
         px = x % hw_cols
         py = y % hw_rows
-        rotation = self._panel_rotation(panel_col)
+        rotation = self._panel_rotation(logical_col)
+        phys_col = self._phys_panel_col(logical_col)
         if rotation == 180:
-            return panel_col * hw_cols + (hw_cols - 1 - px), panel_row * hw_rows + (hw_rows - 1 - py)
-        return x, y
+            return phys_col * hw_cols + (hw_cols - 1 - px), panel_row * hw_rows + (hw_rows - 1 - py)
+        return phys_col * hw_cols + px, panel_row * hw_rows + py
 
     def set_pixel(self, x: int, y: int, r: int, g: int, b: int) -> None:
         if 0 <= x < self.width and 0 <= y < self.height:
