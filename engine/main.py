@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from api.preview import PreviewManager, SizesPreviewManager
 from api.server import create_app
 from api.websocket import manager
+from canvas.hardware import HardwareCanvas
 from canvas.simulator import SimulatorCanvas
 from apps import APP_REGISTRY
 from scene_manager import PlaylistEntry, SceneManager
@@ -84,9 +85,14 @@ def main() -> None:
     display_cfg = cfg["display"]
     server_cfg = cfg["server"]
 
-    canvas = SimulatorCanvas(
-        display_cfg["width"], display_cfg["height"], manager.broadcast
-    )
+    if os.environ.get("CANVAS", "").lower() == "hardware":
+        canvas = HardwareCanvas(
+            display_cfg["width"], display_cfg["height"], cfg.get("hardware", {})
+        )
+    else:
+        canvas = SimulatorCanvas(
+            display_cfg["width"], display_cfg["height"], manager.broadcast
+        )
     store = StateStore()
     scene_manager = SceneManager(canvas, APP_REGISTRY)
     preview_manager = PreviewManager(

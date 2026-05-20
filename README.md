@@ -2,7 +2,7 @@
 
 RGB LED wall display controller — Raspberry Pi 4 driving a configurable number of HUB75 panels (e.g. 10× P5 panels for a 320×64 px display).
 
-The system renders display apps (stocks, sports, flights, text) to a virtual canvas and streams the frames over WebSocket to a browser-based simulator. The same canvas abstraction will drive real LED panels via the `rpi-rgb-led-matrix` library in a later phase.
+The system renders display apps (stocks, sports, flights, text) to a canvas. In simulator mode it streams frames over WebSocket to a browser-based preview; in hardware mode it drives real HUB75 LED panels via the `rpi-rgb-led-matrix` library.
 
 ## Quickstart
 
@@ -12,8 +12,30 @@ The system renders display apps (stocks, sports, flights, text) to a virtual can
 cd engine
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
-.venv/bin/python main.py          # starts FastAPI on :8000
+.venv/bin/python main.py          # starts FastAPI on :8000 (simulator mode)
 ```
+
+#### Hardware mode (Raspberry Pi + HUB75)
+
+Set `CANVAS=hardware` to drive the physical LED panels instead of broadcasting to the WebSocket simulator. The `rpi-rgb-led-matrix` library requires root, so use `sudo -E` to preserve the environment variable:
+
+```bash
+CANVAS=hardware sudo -E .venv/bin/python main.py
+```
+
+Or use `start.sh`, which defaults to hardware mode:
+
+```bash
+./start.sh
+```
+
+To run in simulator mode instead (e.g. for local development without panels):
+
+```bash
+./start.sh --simulator
+```
+
+Hardware parameters (chain length, GPIO slowdown, HAT mapping) are read from the `hardware:` block in `config.yaml`. The simulator WebSocket preview will not show frames in hardware mode — pixels go directly to the panels.
 
 #### Hot-reload (development)
 
@@ -66,7 +88,7 @@ The system is split into a Python **engine** and a React **UI** that communicate
 
 ### Data flow
 
-1. `main.py` loads `config.yaml`, creates a `SimulatorCanvas` and a `SceneManager`, then starts a FastAPI server.
+1. `main.py` loads `config.yaml`, creates a `SimulatorCanvas` (or `HardwareCanvas` when `CANVAS=hardware`) and a `SceneManager`, then starts a FastAPI server.
 2. The render loop calls `scene_manager.render_frame()` at the configured FPS (default 30).
 3. `SceneManager` rotates through a playlist of `DisplayApp` instances, calling each app's `render_frame()` in turn.
 4. Each `DisplayApp` independently fetches external data on its own `refresh_interval` (e.g. every 60 s), then draws to the shared `Canvas`.
@@ -88,7 +110,8 @@ led-dashboard/
 │   │
 │   ├── canvas/
 │   │   ├── base.py          # Canvas ABC (set_pixel / clear / render)
-│   │   └── simulator.py     # SimulatorCanvas — broadcasts frames over WebSocket
+│   │   ├── simulator.py     # SimulatorCanvas — broadcasts frames over WebSocket
+│   │   └── hardware.py      # HardwareCanvas — drives HUB75 panels via rpi-rgb-led-matrix
 │   │
 │   ├── api/
 │   │   ├── server.py        # FastAPI app factory
@@ -177,7 +200,7 @@ Persists application state to `data/state.json` using atomic write (write to `.t
 
 `SimulatorCanvas` stores pixels in a flat `bytearray` and on `render()` packs a binary frame (`>HH` header + raw RGB) and broadcasts it to all WebSocket clients.
 
-A future `HardwareCanvas` will write the same pixel buffer to the `rpi-rgb-led-matrix` library for real LED panels.
+`HardwareCanvas` writes pixels to an `rpi-rgb-led-matrix` off-screen canvas and calls `SwapOnVSync` on each `render()` to push the frame to the physical panels. It is selected by setting `CANVAS=hardware` at startup.
 
 ### `api/` — FastAPI server
 
@@ -438,6 +461,13 @@ playlist:         # optional seed playlist (used only on first run)
       message: "LED Wall Display"
       scroll: true
     duration: 30
+
+hardware:         # used only when CANVAS=hardware
+  rows: 64
+  cols: 320
+  chain_length: 10
+  gpio_slowdown: 4          # tuned for Pi 4; lower for Pi 5
+  hardware_mapping: adafruit-hat
 ```
 
 After first run, all state is stored in `data/state.json` and managed through the UI.
@@ -447,5 +477,5 @@ After first run, all state is stored in `data/state.json` and managed through th
 1. **Simulator + WebSocket preview** ✓
 2. **Plugin system + starter apps** (Stocks, Sports, Flights, Text) ✓
 3. **Display helpers + font rendering** ✓
-4. **Hardware integration** — swap `SimulatorCanvas` for `HardwareCanvas` (`rpi-rgb-led-matrix`)
+4. **Hardware integration** — `HardwareCanvas` via `rpi-rgb-led-matrix`; select with `CANVAS=hardware` ✓
 5. **Polish** — config persistence, hot-reload ✓, systemd service, API auth
