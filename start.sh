@@ -49,9 +49,9 @@ if $HARDWARE_MODE && ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
     git clone --depth=1 https://github.com/hzeller/rpi-rgb-led-matrix.git "$TMP_DIR/rpi-rgb-led-matrix"
-    # build-python and install-python must run from the repo root, not bindings/python
-    make -C "$TMP_DIR/rpi-rgb-led-matrix" build-python PYTHON="$VENV_DIR/bin/python3"
-    make -C "$TMP_DIR/rpi-rgb-led-matrix" install-python PYTHON="$VENV_DIR/bin/python3"
+    # --no-build-isolation required: setup.py references C sources via relative paths
+    # that break when pip copies files to a temporary build directory
+    "$VENV_DIR/bin/pip3" install --no-build-isolation "$TMP_DIR/rpi-rgb-led-matrix/bindings/python"
     if ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
         log "ERROR: rgbmatrix installation failed. Ensure build tools are installed:"
         log "  sudo apt-get install -y gcc python3-dev"
