@@ -27,16 +27,20 @@ class HardwareCanvas(Canvas):
         options.gpio_slowdown = hw_cfg.get("gpio_slowdown", 4)
         options.hardware_mapping = hw_cfg.get("hardware_mapping", "regular")
         options.drop_privileges = False
+        rotation = hw_cfg.get("rotation", 0)
+        if rotation:
+            options.pixel_mapper_config = f"Rotate:{rotation}"
 
         self._matrix = RGBMatrix(options=options)
         self._canvas = self._matrix.CreateFrameCanvas()
         logger.info(
-            "HardwareCanvas: %dx%d (panel %dx%d, chain %d)",
+            "HardwareCanvas: %dx%d (panel %dx%d, chain %d, rotation %d°)",
             options.cols * options.chain_length,
             options.rows,
             options.cols,
             options.rows,
             options.chain_length,
+            rotation,
         )
         self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast

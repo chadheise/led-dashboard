@@ -1,7 +1,7 @@
-# 10x HUB75 P5 panels (64x32 each).
-# Arranged in a 1x10 horizontal row -> 320 wide, 64 tall.
+# 4x HUB75 P5 panels, each physically 64 wide x 32 tall (landscape).
+# Mounted in portrait (rotated 90°) and arranged in a 1x4 horizontal row -> 128 wide, 64 tall.
 display:
-  width: 320
+  width: 128
   height: 64
   fps: 30
   brightness: 80
@@ -20,8 +20,9 @@ playlist:
     duration: 30
 
 hardware:
-  rows: 64
-  cols: 32      # width of a single panel; total = cols * chain_length
-  chain_length: 10
-  gpio_slowdown: 4 # tuned for Pi 4
+  rows: 32          # physical height of each panel in landscape orientation
+  cols: 64          # physical width of each panel in landscape orientation
+  chain_length: 4
+  rotation: 90      # panels are mounted portrait; rotate content to match
+  gpio_slowdown: 4  # tuned for Pi 4
   hardware_mapping: adafruit-hat
