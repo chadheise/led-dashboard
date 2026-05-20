@@ -23,6 +23,7 @@ log "Preview: $( $PREVIEW_ENABLED && echo enabled || echo disabled )"
 # Pull latest code
 log "Pulling latest code from GitHub..."
 cd "$REPO_DIR"
+git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
 git pull origin main
 
 # Python virtual environment
@@ -38,20 +39,22 @@ pip install -r engine/requirements.txt
 # Build UI
 log "Installing UI dependencies..."
 cd "$REPO_DIR/ui"
-npm install
+npm install --unsafe-perm
 
 log "Building UI..."
 npm run build
 
 # Hardware mode requires rgbmatrix — install automatically if missing
-if $HARDWARE_MODE && ! sudo -E "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
+if $HARDWARE_MODE && ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
     log "rgbmatrix not found — installing from source..."
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
     git clone --depth=1 https://github.com/hzeller/rpi-rgb-led-matrix.git "$TMP_DIR/rpi-rgb-led-matrix"
-    "$VENV_DIR/bin/pip3" install "$TMP_DIR/rpi-rgb-led-matrix/bindings/python"
-    if ! sudo -E "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
-        log "ERROR: rgbmatrix installation failed. Ensure gcc and python3-dev are installed:"
+    # build-python and install-python must run from the repo root, not bindings/python
+    make -C "$TMP_DIR/rpi-rgb-led-matrix" build-python PYTHON="$VENV_DIR/bin/python3"
+    make -C "$TMP_DIR/rpi-rgb-led-matrix" install-python PYTHON="$VENV_DIR/bin/python3"
+    if ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
+        log "ERROR: rgbmatrix installation failed. Ensure build tools are installed:"
         log "  sudo apt-get install -y gcc python3-dev"
         exit 1
     fi
@@ -62,7 +65,7 @@ fi
 log "Starting engine on :8000..."
 cd "$REPO_DIR/engine"
 if $HARDWARE_MODE; then
-    CANVAS=hardware PREVIEW_ENABLED=$PREVIEW_ENABLED sudo -E "$VENV_DIR/bin/python3" main.py &
+    CANVAS=hardware PREVIEW_ENABLED=$PREVIEW_ENABLED "$VENV_DIR/bin/python3" main.py &
 else
     "$VENV_DIR/bin/python3" main.py &
 fi
