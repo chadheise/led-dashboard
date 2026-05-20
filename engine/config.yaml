@@ -18,3 +18,10 @@ playlist:
       font_size: 16
       color: "#00FFAA"
     duration: 30
+
+hardware:
+  rows: 64
+  cols: 320
+  chain_length: 10
+  gpio_slowdown: 4 # tuned for Pi 4
+  hardware_mapping: adafruit-hat
