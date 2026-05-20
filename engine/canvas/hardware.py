@@ -27,27 +27,47 @@ class HardwareCanvas(Canvas):
         options.gpio_slowdown = hw_cfg.get("gpio_slowdown", 4)
         options.hardware_mapping = hw_cfg.get("hardware_mapping", "regular")
         options.drop_privileges = False
-        rotation = hw_cfg.get("rotation", 0)
-        if rotation:
-            options.pixel_mapper_config = f"Rotate:{rotation}"
 
         self._matrix = RGBMatrix(options=options)
         self._canvas = self._matrix.CreateFrameCanvas()
+
+        # Per-panel rotation is applied in set_pixel rather than via pixel_mapper_config.
+        # pixel_mapper_config rotates the entire chained canvas as one surface, which maps
+        # all panels into a single panel-width slice. Doing it per-panel in software lets
+        # each panel render its own rotated slice of the logical display independently.
+        self._hw_rows = options.rows
+        self._hw_cols = options.cols
+        self._rotation = hw_cfg.get("rotation", 0)
+
         logger.info(
-            "HardwareCanvas: %dx%d (panel %dx%d, chain %d, rotation %d°)",
-            options.cols * options.chain_length,
-            options.rows,
+            "HardwareCanvas: logical %dx%d from %d panels (%dx%d physical, rotation %d°)",
+            width, height,
+            options.chain_length,
             options.cols,
             options.rows,
-            options.chain_length,
-            rotation,
+            self._rotation,
         )
         self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast
 
+    def _logical_to_physical(self, x: int, y: int) -> tuple[int, int]:
+        if self._rotation == 90:
+            # Portrait panel: hw_rows wide, hw_cols tall logically
+            panel_idx = x // self._hw_rows
+            px = x % self._hw_rows
+            py = y
+            return panel_idx * self._hw_cols + py, self._hw_rows - 1 - px
+        if self._rotation == 270:
+            panel_idx = x // self._hw_rows
+            px = x % self._hw_rows
+            py = y
+            return panel_idx * self._hw_cols + (self._hw_cols - 1 - py), px
+        return x, y
+
     def set_pixel(self, x: int, y: int, r: int, g: int, b: int) -> None:
         if 0 <= x < self.width and 0 <= y < self.height:
-            self._canvas.SetPixel(x, y, r & 0xFF, g & 0xFF, b & 0xFF)
+            phys_x, phys_y = self._logical_to_physical(x, y)
+            self._canvas.SetPixel(phys_x, phys_y, r & 0xFF, g & 0xFF, b & 0xFF)
             idx = (y * self.width + x) * 3
             self._pixels[idx] = r & 0xFF
             self._pixels[idx + 1] = g & 0xFF

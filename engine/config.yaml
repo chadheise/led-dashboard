@@ -20,9 +20,9 @@ playlist:
     duration: 30
 
 hardware:
-  rows: 32          # physical height of each panel in landscape orientation
-  cols: 64          # physical width of each panel in landscape orientation
+  rows: 32 # physical height of each panel in landscape orientation
+  cols: 64 # physical width of each panel in landscape orientation
   chain_length: 4
-  rotation: 270     # panels are mounted portrait; rotate content to match
-  gpio_slowdown: 4  # tuned for Pi 4
+  rotation: 90  # panels are mounted portrait; rotate content to match
+  gpio_slowdown: 4 # tuned for Pi 4
   hardware_mapping: adafruit-hat
