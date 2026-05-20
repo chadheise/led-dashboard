@@ -20,11 +20,10 @@ log "Repo: $REPO_DIR"
 log "Canvas mode: $( $HARDWARE_MODE && echo hardware || echo simulator )"
 log "Preview: $( $PREVIEW_ENABLED && echo enabled || echo disabled )"
 
-# Pull latest code
+# Pull latest code (run as chadheise so their SSH key and known_hosts are used)
 log "Pulling latest code from GitHub..."
 cd "$REPO_DIR"
-git config --global --add safe.directory "$REPO_DIR" 2>/dev/null || true
-git pull origin main
+sudo -u chadheise git pull origin main
 
 # Python virtual environment
 if [ ! -d "$VENV_DIR" ]; then
