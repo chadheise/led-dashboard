@@ -21,7 +21,7 @@ playlist:
 
 hardware:
   rows: 64
-  cols: 320
+  cols: 32      # width of a single panel; total = cols * chain_length
   chain_length: 10
   gpio_slowdown: 4 # tuned for Pi 4
   hardware_mapping: adafruit-hat

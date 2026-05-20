@@ -1,7 +1,10 @@
+import logging
 import struct
 from collections.abc import Awaitable, Callable
 
 from .base import Canvas
+
+logger = logging.getLogger(__name__)
 
 
 class HardwareCanvas(Canvas):
@@ -27,6 +30,14 @@ class HardwareCanvas(Canvas):
 
         self._matrix = RGBMatrix(options=options)
         self._canvas = self._matrix.CreateFrameCanvas()
+        logger.info(
+            "HardwareCanvas: %dx%d (panel %dx%d, chain %d)",
+            options.cols * options.chain_length,
+            options.rows,
+            options.cols,
+            options.rows,
+            options.chain_length,
+        )
         self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast
 
