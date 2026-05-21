@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 from typing import Any, ClassVar
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from PIL import Image, ImageDraw
 
@@ -14,6 +15,7 @@ from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, arrow_img
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
+from libraries.location.library import LocationLibrary
 
 
 _LEAGUE_IDS = [e["id"] for e in _LEAGUES]
@@ -132,7 +134,7 @@ class SportsApp(DisplayApp):
         '<line x1="12" y1="16" x2="12" y2="20"/>'
         '<line x1="9" y1="20" x2="15" y2="20"/></svg>'
     )
-    libraries: ClassVar[list[str]] = ["espn_sports"]
+    libraries: ClassVar[list[str]] = ["espn_sports", "location"]
     size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=64)
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -231,6 +233,8 @@ class SportsApp(DisplayApp):
     ) -> None:
         super().__init__(config, canvas, global_config, library_configs)
         self._espn = ESPNSportsLibrary(self.library_configs.get("espn_sports", {}))
+        self._user_tz: ZoneInfo | None = None
+        self._user_tz_key: tuple[float, float] | None = None  # cached (lat, lon) → tz
         self._games: list[dict[str, Any]] = []
         self._logos: dict[str, Image.Image | None] = {}
 
@@ -245,6 +249,28 @@ class SportsApp(DisplayApp):
         # Staggered state
         self._stagger_slot_idx: list[int] = []
         self._stagger_slot_counter: list[int] = []
+
+    def _get_user_tz(self) -> ZoneInfo | None:
+        """Return the user's timezone, re-computing only when the stored location changes."""
+        loc_cfg = self.library_configs.get("location", {}).get("location", {})
+        lat = float(loc_cfg.get("latitude", 0.0))
+        lon = float(loc_cfg.get("longitude", 0.0))
+        key = (lat, lon)
+        if key == self._user_tz_key:
+            return self._user_tz
+        self._user_tz_key = key
+        if lat == 0.0 and lon == 0.0:
+            self._user_tz = None
+            return None
+        tz_str = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
+        if not tz_str:
+            self._user_tz = None
+            return None
+        try:
+            self._user_tz = ZoneInfo(tz_str)
+        except ZoneInfoNotFoundError:
+            self._user_tz = None
+        return self._user_tz
 
     def _get_leagues(self) -> list[str]:
         raw = self.config.get("leagues", self.config.get("league", []))
@@ -549,6 +575,22 @@ class SportsApp(DisplayApp):
             match_note = game.get("match_note", "")
             if match_note:
                 status_text = f"{status_text} | {match_note}"
+
+        elif state == "pre" and not game.get("series_summary"):
+            user_tz = self._get_user_tz()
+            if user_tz is not None:
+                start_raw = game.get("start_time")
+                if start_raw:
+                    try:
+                        start_utc = datetime.datetime.fromisoformat(
+                            start_raw.replace("Z", "+00:00")
+                        )
+                        local = start_utc.astimezone(user_tz)
+                        h = local.hour % 12 or 12
+                        ampm = "AM" if local.hour < 12 else "PM"
+                        status_text = f"{h}:{local.minute:02d} {ampm}"
+                    except Exception:
+                        pass
 
         # Select layout tier based on available pixel width
         if w >= 128:
