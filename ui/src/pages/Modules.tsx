@@ -43,6 +43,7 @@ interface Schema {
       items?: { type: string; enum?: string[] };
       properties?: Record<string, { type: string; default?: unknown }>;
       "x-input-type"?: string;
+      "x-default-from-library"?: { library: string; path: string };
     }
   >;
   required?: string[];
@@ -271,11 +272,32 @@ export default function Modules() {
     else setEditing(null);
   };
 
-  const handleAppSelect = (id: string) => {
+  const handleAppSelect = async (id: string) => {
     if (id !== fAppId) {
       setFAppId(id);
       const schema = apps.find((a) => a.id === id)?.schema;
-      if (schema) setFConfig(defaultsFromSchema(schema));
+      if (schema) {
+        const defaults = defaultsFromSchema(schema);
+        const overrides: Record<string, unknown> = {};
+        for (const [key, prop] of Object.entries(schema.properties ?? {})) {
+          const libDefault = prop["x-default-from-library"];
+          if (libDefault) {
+            try {
+              const libConfig: Record<string, unknown> = await fetch(
+                `/api/libraries/${libDefault.library}/config`
+              ).then((r) => r.json());
+              const libValue = libConfig[libDefault.path];
+              if (libValue !== undefined && typeof libValue === "object") {
+                overrides[key] = {
+                  ...(defaults[key] as Record<string, unknown> | undefined ?? {}),
+                  ...(libValue as Record<string, unknown>),
+                };
+              }
+            } catch {}
+          }
+        }
+        setFConfig({ ...defaults, ...overrides });
+      }
     }
     setStep(2);
   };

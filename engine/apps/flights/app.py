@@ -87,7 +87,7 @@ class FlightsApp(DisplayApp):
         '<path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 00-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22'
         "l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z\"/></svg>"
     )
-    libraries: ClassVar[list[str]] = ["opensky", "flightaware"]
+    libraries: ClassVar[list[str]] = ["opensky", "flightaware", "location"]
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
@@ -99,6 +99,7 @@ class FlightsApp(DisplayApp):
                 "x-input-type": "location",
                 "x-radius-min": 1,
                 "x-radius-max": 100,
+                "x-default-from-library": {"library": "location", "path": "location"},
                 "default": {"latitude": 0.0, "longitude": 0.0, "radius_km": 50.0},
                 "properties": {
                     "latitude": {"type": "number", "default": 0.0},
@@ -203,6 +204,12 @@ class FlightsApp(DisplayApp):
             loc.get("radius_km", self.config.get("radius_km", 50.0))
             if isinstance(loc, dict) else self.config.get("radius_km", 50.0)
         )
+
+        if lat == 0.0 and lon == 0.0:
+            lib_loc = self.library_configs.get("location", {}).get("location", {})
+            if isinstance(lib_loc, dict):
+                lat = float(lib_loc.get("latitude", 0.0))
+                lon = float(lib_loc.get("longitude", 0.0))
         max_flights = int(self.config.get("max_flights", 10))
 
         now = time.monotonic()

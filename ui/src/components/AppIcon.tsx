@@ -61,6 +61,12 @@ const ICONS: Record<string, React.ReactElement> = {
       <path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z" />
     </svg>
   ),
+  location: (
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 21s-7-7.5-7-12a7 7 0 0114 0c0 4.5-7 12-7 12z" />
+      <circle cx={12} cy={9} r={2.5} />
+    </svg>
+  ),
 }
 
 interface Props {
