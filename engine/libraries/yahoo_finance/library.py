@@ -217,8 +217,14 @@ class YahooFinanceLibrary(Library):
             closes = [c for c in closes if c is not None]
 
             price: float = meta.get("regularMarketPrice", 0.0)
-            prev: float = meta.get("previousClose") or meta.get("chartPreviousClose", price)
-            change_pct = ((price - prev) / prev * 100) if prev else 0.0
+            # Use daily change fields directly; chartPreviousClose is the start of
+            # the chart range and would give aggregate period change instead.
+            change_pct: float = meta.get("regularMarketChangePercent", 0.0)
+            dollar_change: float = meta.get("regularMarketChange", 0.0)
+            if not change_pct and not dollar_change:
+                prev: float = meta.get("previousClose") or meta.get("chartPreviousClose", price)
+                change_pct = ((price - prev) / prev * 100) if prev else 0.0
+                dollar_change = price - prev
 
             payload: dict[str, Any] = {
                 "symbol": symbol,
@@ -226,7 +232,7 @@ class YahooFinanceLibrary(Library):
                 "closes": closes,
                 "current_price": price,
                 "change_pct": change_pct,
-                "dollar_change": price - prev,
+                "dollar_change": dollar_change,
             }
             cache_path.write_text(json.dumps(payload))
             return payload
