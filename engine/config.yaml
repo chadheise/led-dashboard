@@ -1,9 +1,9 @@
-# 4x HUB75 P5 panels, each physically 64 wide x 32 tall (landscape).
-# Mounted in portrait (rotation 270) in a single horizontal row (chain_length=4, parallel=1).
-# display.width  = chain_length x rows = 4 x 32 = 128
+# 10x HUB75 P5 panels, each physically 64 wide x 32 tall (landscape).
+# Mounted in portrait (rotation 270) in a single horizontal row (chain_length=10, parallel=1).
+# display.width  = chain_length x rows = 10 x 32 = 320
 # display.height = parallel    x cols  = 1 x 64 = 64
 display:
-  width: 128
+  width: 320
   height: 64
   fps: 30
   brightness: 80
@@ -24,7 +24,7 @@ playlist:
 hardware:
   rows: 32 # physical panel height (landscape orientation)
   cols: 64 # physical panel width (landscape orientation)
-  chain_length: 4 # panels per row
+  chain_length: 10 # panels per row
   parallel: 1 # rows of panels (parallel chains); >1 requires separate GPIO wiring
   rotation: 90 # per-panel rotation: 0=landscape, 90/270=portrait, 180=upside-down landscape
   alternate_rotation: true # odd panels rotate +180 deg (270->90->270->...) -- workaround for short cables
