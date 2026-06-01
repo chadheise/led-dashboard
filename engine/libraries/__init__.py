@@ -6,6 +6,7 @@ from libraries.espn_sports.library import ESPNSportsLibrary
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
 from libraries.location.library import LocationLibrary
+from libraries.spotify.library import SpotifyLibrary
 
 LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "canvas_utils": CanvasUtilsLibrary,
@@ -15,4 +16,5 @@ LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "opensky": OpenSkyLibrary,
     "flightaware": FlightAwareLibrary,
     "location": LocationLibrary,
+    "spotify": SpotifyLibrary,
 }
