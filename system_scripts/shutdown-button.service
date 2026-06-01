@@ -1,0 +1,11 @@
+[Unit]
+Description=Shutdown button monitor
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/shutdown-button.py
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
