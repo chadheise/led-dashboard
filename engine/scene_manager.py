@@ -53,6 +53,7 @@ class SceneManager:
         self._fetch_tasks: list[asyncio.Task[None]] = []
         self._running = False
         self._paused = False
+        self._display_on = True
 
     @property
     def current_entry(self) -> PlaylistEntry | None:
@@ -164,6 +165,13 @@ class SceneManager:
         if not paused:
             self._last_switch = time.monotonic()  # reset timer on resume
 
+    @property
+    def display_on(self) -> bool:
+        return self._display_on
+
+    def set_display_on(self, on: bool) -> None:
+        self._display_on = on
+
     async def prev_scene(self) -> None:
         if not self._scenes:
             return
@@ -197,6 +205,10 @@ class SceneManager:
 
     async def render_frame(self) -> None:
         await self._maybe_rotate()
+        if not self._display_on:
+            self._canvas.clear()
+            await self._canvas.render()
+            return
         if self._paused:
             return  # keep last broadcast frame frozen in the browser
         self._canvas.clear()
@@ -257,4 +269,5 @@ class SceneManager:
             "current_idx": self._current_idx,
             "scene_count": len(self._scenes),
             "paused": self._paused,
+            "display_on": self._display_on,
         }

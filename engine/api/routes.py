@@ -370,6 +370,13 @@ async def toggle_playpause(request: Request) -> dict[str, Any]:
     return {"paused": sm.paused}
 
 
+@router.post("/display/power")
+async def toggle_display_power(request: Request) -> dict[str, Any]:
+    sm = request.app.state.scene_manager
+    sm.set_display_on(not sm.display_on)
+    return {"display_on": sm.display_on}
+
+
 @router.get("/status")
 def get_status(request: Request) -> dict[str, Any]:
     store = request.app.state.store

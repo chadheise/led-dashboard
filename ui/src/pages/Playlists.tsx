@@ -100,6 +100,7 @@ export default function Playlists() {
   const [showSizePreviews, setShowSizePreviews] = useState(import.meta.env.DEV);
   const [paused, setPaused] = useState(false);
   const [editPaused, setEditPaused] = useState(false);
+  const [displayOn, setDisplayOn] = useState(true);
   const [fName, setFName] = useState("");
   const [fItems, setFItems] = useState<EditItem[]>([]);
   const [previewModuleId, setPreviewModuleId] = useState<string | null>(null);
@@ -122,6 +123,7 @@ export default function Playlists() {
       .then((r) => r.json())
       .then((s) => {
         if (typeof s.paused === "boolean") setPaused(s.paused);
+        if (typeof s.display_on === "boolean") setDisplayOn(s.display_on);
         if (s.active_single_module_id) {
           setActiveSingleModuleId(s.active_single_module_id);
           setSelectedModuleId(s.active_single_module_id);
@@ -238,6 +240,11 @@ export default function Playlists() {
     fetch("/api/playlist/playpause", { method: "POST" })
       .then((r) => r.json())
       .then((d) => setPaused(d.paused));
+
+  const toggleDisplay = () =>
+    fetch("/api/display/power", { method: "POST" })
+      .then((r) => r.json())
+      .then((d) => setDisplayOn(d.display_on));
 
   // When editing, play/pause freezes the edit preview, not the live display.
   const toggleEditPlayPause = () =>
@@ -362,6 +369,8 @@ export default function Playlists() {
               onPrev={prev}
               onPlayPause={isEditing ? toggleEditPlayPause : togglePlayPause}
               onNext={next}
+              displayOn={isEditing ? undefined : displayOn}
+              onToggleDisplay={isEditing ? undefined : toggleDisplay}
             />
           }
         />

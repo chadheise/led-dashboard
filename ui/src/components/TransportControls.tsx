@@ -26,10 +26,24 @@ const NextIcon = () => (
     <rect x="16" y="5" width="3" height="14" rx="1" />
   </svg>
 )
+const PowerIcon = () => (
+  <svg {...IS} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round">
+    <path d="M12 3v6" />
+    <path d="M6.34 6.34A8 8 0 1 0 17.66 6.34" />
+  </svg>
+)
 
-function IconButton({ title, onClick, children }: { title: string; onClick: () => void; children: React.ReactNode }) {
+function IconButton({
+  title, onClick, children, activeColor,
+}: {
+  title: string
+  onClick: () => void
+  children: React.ReactNode
+  activeColor?: string
+}) {
   const [hovered, setHovered] = useState(false)
-  const color = hovered ? C.textPrimary : C.textSecondary
+  const base = activeColor ?? (hovered ? C.textPrimary : C.textSecondary)
+  const color = hovered && activeColor ? C.textPrimary : base
   return (
     <button
       onClick={onClick}
@@ -48,16 +62,28 @@ interface Props {
   onPrev: () => void
   onPlayPause: () => void
   onNext: () => void
+  displayOn?: boolean
+  onToggleDisplay?: () => void
   showPrev?: boolean
   showNext?: boolean
 }
 
 export default function TransportControls({
   paused, onPrev, onPlayPause, onNext,
+  displayOn = true, onToggleDisplay,
   showPrev = true, showNext = true,
 }: Props) {
   return (
     <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+      {onToggleDisplay && (
+        <IconButton
+          onClick={onToggleDisplay}
+          title={displayOn ? 'Turn display off' : 'Turn display on'}
+          activeColor={displayOn ? undefined : C.negative}
+        >
+          <PowerIcon />
+        </IconButton>
+      )}
       {showPrev && <IconButton onClick={onPrev} title="Previous"><PrevIcon /></IconButton>}
       <IconButton onClick={onPlayPause} title={paused ? 'Play' : 'Pause'}>
         {paused ? <PlayIcon /> : <PauseIcon />}
