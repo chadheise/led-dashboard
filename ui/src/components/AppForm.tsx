@@ -99,8 +99,8 @@ function ColorInput({ title, value, onChange }: { title: string; value: unknown;
 }
 
 function LocationInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: unknown) => void }) {
-  const loc = (typeof value === 'object' && value !== null ? value : {}) as { latitude?: number; longitude?: number }
-  const set = (field: 'latitude' | 'longitude', n: number) => onChange({ ...loc, [field]: n })
+  const loc = (typeof value === 'object' && value !== null ? value : {}) as { latitude?: number; longitude?: number; name?: string }
+  const set = (field: 'latitude' | 'longitude', n: number) => onChange({ ...loc, [field]: n, name: '' })
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <span style={{ ...labelStyle, display: 'block' }}>{title}</span>

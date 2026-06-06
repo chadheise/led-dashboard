@@ -586,9 +586,14 @@ class SportsApp(DisplayApp):
                             start_raw.replace("Z", "+00:00")
                         )
                         local = start_utc.astimezone(user_tz)
-                        h = local.hour % 12 or 12
-                        ampm = "AM" if local.hour < 12 else "PM"
-                        status_text = f"{h}:{local.minute:02d} {ampm}"
+                        loc_cfg = self.library_configs.get("location", {})
+                        time_fmt = str(loc_cfg.get("time_format", "12h"))
+                        if time_fmt == "24h":
+                            status_text = f"{local.hour}:{local.minute:02d}"
+                        else:
+                            h_val = local.hour % 12 or 12
+                            ampm = "AM" if local.hour < 12 else "PM"
+                            status_text = f"{h_val}:{local.minute:02d} {ampm}"
                     except Exception:
                         pass
 

@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 class LocationLibrary(Library):
     id: ClassVar[str] = "location"
-    name: ClassVar[str] = "Location"
-    description: ClassVar[str] = "Home location shared across apps — provides lat/lon, city, country, and timezone"
+    name: ClassVar[str] = "Location/Time"
+    description: ClassVar[str] = "Home location shared across apps — provides lat/lon, city, country, timezone, and time/date format preferences"
     icon: ClassVar[str] = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">'
         '<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z'
@@ -21,18 +21,38 @@ class LocationLibrary(Library):
     )
     global_config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
-        "title": "Location",
+        "title": "Location/Time",
         "properties": {
             "location": {
                 "type": "object",
                 "title": "Home Location",
                 "x-input-type": "location",
-                "default": {"latitude": 0.0, "longitude": 0.0},
+                "default": {"latitude": 0.0, "longitude": 0.0, "name": ""},
                 "properties": {
                     "latitude": {"type": "number", "default": 0.0},
                     "longitude": {"type": "number", "default": 0.0},
+                    "name": {"type": "string", "default": ""},
                 },
-            }
+            },
+            "time_format": {
+                "type": "string",
+                "title": "Time Format",
+                "enum": ["12h", "24h"],
+                "x-enum-labels": {"12h": "12-hour (3:30 PM)", "24h": "24-hour (15:30)"},
+                "default": "12h",
+            },
+            "date_format": {
+                "type": "string",
+                "title": "Date Format",
+                "enum": ["MM/DD/YYYY", "DD/MM/YYYY", "YYYY-MM-DD", "MMM D, YYYY"],
+                "x-enum-labels": {
+                    "MM/DD/YYYY": "MM/DD/YYYY (06/15/2025)",
+                    "DD/MM/YYYY": "DD/MM/YYYY (15/06/2025)",
+                    "YYYY-MM-DD": "YYYY-MM-DD (2025-06-15)",
+                    "MMM D, YYYY": "MMM D, YYYY (Jun 15, 2025)",
+                },
+                "default": "MM/DD/YYYY",
+            },
         },
     }
 
@@ -45,6 +65,12 @@ class LocationLibrary(Library):
 
     def get_longitude(self) -> float:
         return float(self._config.get("location", {}).get("longitude", 0.0))
+
+    def get_time_format(self) -> str:
+        return str(self._config.get("time_format", "12h"))
+
+    def get_date_format(self) -> str:
+        return str(self._config.get("date_format", "MM/DD/YYYY"))
 
     def get_timezone(self) -> str | None:
         lat, lon = self.get_latitude(), self.get_longitude()

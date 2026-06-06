@@ -23,6 +23,13 @@ export interface LocationValue {
   latitude: number
   longitude: number
   radius_km?: number
+  name?: string
+}
+
+interface Suggestion {
+  lat: string
+  lon: string
+  display_name: string
 }
 
 interface Props {
@@ -48,34 +55,53 @@ export default function LocationMapInput({
   const lat = loc.latitude ?? 0
   const lng = loc.longitude ?? 0
   const radius = loc.radius_km ?? 50
+  const name = loc.name ?? ''
 
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(name)
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const [activeIdx, setActiveIdx] = useState(-1)
 
-  // DOM container for the map
+  const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const wrapperRef   = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-
-  // Leaflet instances — never trigger re-renders
-  const mapRef    = useRef<L.Map | null>(null)
-  const markerRef = useRef<L.Marker | null>(null)
-  const circleRef = useRef<L.Circle | null>(null)
+  const mapRef       = useRef<L.Map | null>(null)
+  const markerRef    = useRef<L.Marker | null>(null)
+  const circleRef    = useRef<L.Circle | null>(null)
 
   // Always-current refs so map event handlers never capture stale values
   const onChangeRef = useRef(onChange)
-  const locRef      = useRef({ lat, lng, radius, showRadius })
+  const locRef      = useRef({ lat, lng, radius, showRadius, name })
   useEffect(() => { onChangeRef.current = onChange })
-  useEffect(() => { locRef.current = { lat, lng, radius, showRadius } })
+  useEffect(() => { locRef.current = { lat, lng, radius, showRadius, name } })
+
+  // ── Click outside to close dropdown ──────────────────────────────────────
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setShowSuggestions(false)
+        setActiveIdx(-1)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   // ── Build the value object to emit ────────────────────────────────────────
 
-  const emit = (patch: Partial<{ latitude: number; longitude: number; radius_km: number }>) => {
-    const { lat: curLat, lng: curLng, radius: curRadius, showRadius: curShow } = locRef.current
+  const emit = (patch: Partial<{ latitude: number; longitude: number; radius_km: number; name: string }>) => {
+    const { lat: curLat, lng: curLng, radius: curRadius, showRadius: curShow, name: curName } = locRef.current
     const next: LocationValue = {
       latitude:  'latitude'  in patch ? patch.latitude!  : curLat,
       longitude: 'longitude' in patch ? patch.longitude! : curLng,
     }
     if (curShow) next.radius_km = 'radius_km' in patch ? patch.radius_km! : curRadius
+    // Preserve the saved name unless the patch explicitly provides one (including '')
+    const nextName = 'name' in patch ? patch.name! : curName
+    if (nextName) next.name = nextName
     onChangeRef.current(next)
   }
 
@@ -100,7 +126,8 @@ export default function LocationMapInput({
     // Click to place / move pin
     map.on('click', (e: L.LeafletMouseEvent) => {
       const { lat: newLat, lng: newLng } = e.latlng
-      emit({ latitude: newLat, longitude: newLng })
+      setSearch('')
+      emit({ latitude: newLat, longitude: newLng, name: '' })
     })
 
     mapRef.current = map
@@ -110,7 +137,8 @@ export default function LocationMapInput({
       const m = L.marker([lat, lng], { icon: DEFAULT_ICON, draggable: true }).addTo(map)
       m.on('dragend', () => {
         const p = m.getLatLng()
-        emit({ latitude: p.lat, longitude: p.lng })
+        setSearch('')
+        emit({ latitude: p.lat, longitude: p.lng, name: '' })
       })
       markerRef.current = m
 
@@ -148,7 +176,8 @@ export default function LocationMapInput({
       const m = L.marker([lat, lng], { icon: DEFAULT_ICON, draggable: true }).addTo(map)
       m.on('dragend', () => {
         const p = m.getLatLng()
-        emit({ latitude: p.lat, longitude: p.lng })
+        setSearch('')
+        emit({ latitude: p.lat, longitude: p.lng, name: '' })
       })
       markerRef.current = m
     }
@@ -185,9 +214,72 @@ export default function LocationMapInput({
     mapRef.current?.flyTo([newLat, newLng], Math.max(mapRef.current.getZoom(), 11))
   }
 
-  // ── Geocoding ─────────────────────────────────────────────────────────────
+  // ── Autocomplete ──────────────────────────────────────────────────────────
+
+  const fetchSuggestions = async (q: string) => {
+    if (q.trim().length < 2) {
+      setSuggestions([])
+      setShowSuggestions(false)
+      return
+    }
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`,
+        { headers: { 'Accept-Language': 'en' } }
+      )
+      const results: Suggestion[] = await resp.json()
+      setSuggestions(results)
+      setShowSuggestions(results.length > 0)
+      setActiveIdx(-1)
+    } catch {
+      setSuggestions([])
+      setShowSuggestions(false)
+    }
+  }
+
+  const handleSearchChange = (val: string) => {
+    setSearch(val)
+    setSearchError('')
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (val.trim().length >= 2) {
+      debounceRef.current = setTimeout(() => fetchSuggestions(val), 300)
+    } else {
+      setSuggestions([])
+      setShowSuggestions(false)
+    }
+  }
+
+  const selectSuggestion = (s: Suggestion) => {
+    const newLat = Number(s.lat)
+    const newLng = Number(s.lon)
+    flyTo(newLat, newLng)
+    // Show first two comma-parts in the input so the field reflects the selection
+    const parts = s.display_name.split(',')
+    const short = parts.length > 1
+      ? `${parts[0].trim()}, ${parts[1].trim()}`
+      : parts[0].trim()
+    setSearch(short)
+    emit({ latitude: newLat, longitude: newLng, name: short })
+    setSuggestions([])
+    setShowSuggestions(false)
+    setActiveIdx(-1)
+    setSearchError('')
+  }
+
+  // ── Geocoding (GO button / Enter with no highlighted suggestion) ──────────
 
   const geocode = async () => {
+    // Apply a keyboard-highlighted suggestion directly
+    if (activeIdx >= 0 && suggestions[activeIdx]) {
+      selectSuggestion(suggestions[activeIdx])
+      return
+    }
+    // Apply the first visible suggestion if the list is open
+    if (showSuggestions && suggestions.length > 0) {
+      selectSuggestion(suggestions[0])
+      return
+    }
+    // Fresh search fallback (e.g. user typed and pressed Enter without waiting)
     const q = search.trim()
     if (!q) return
     setSearching(true)
@@ -197,17 +289,33 @@ export default function LocationMapInput({
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
         { headers: { 'Accept-Language': 'en' } }
       )
-      const results: Array<{ lat: string; lon: string }> = await resp.json()
+      const results: Array<{ lat: string; lon: string; display_name: string }> = await resp.json()
       if (!results.length) { setSearchError('Address not found'); return }
-      const newLat = Number(results[0].lat)
-      const newLng = Number(results[0].lon)
-      flyTo(newLat, newLng)
-      emit({ latitude: newLat, longitude: newLng })
-      setSearch('')
+      selectSuggestion(results[0])
     } catch {
       setSearchError('Geocoding failed')
     } finally {
       setSearching(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showSuggestions || !suggestions.length) {
+      if (e.key === 'Enter') geocode()
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setActiveIdx(i => Math.min(i + 1, suggestions.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setActiveIdx(i => Math.max(i - 1, -1))
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      geocode()
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false)
+      setActiveIdx(-1)
     }
   }
 
@@ -221,31 +329,89 @@ export default function LocationMapInput({
         {title}
       </span>
 
-      {/* Address search */}
-      <div style={{ display: 'flex', gap: 6 }}>
-        <input
-          type="text"
-          value={search}
-          onChange={e => { setSearch(e.target.value); setSearchError('') }}
-          onKeyDown={e => e.key === 'Enter' && geocode()}
-          placeholder="Search address or place…"
-          style={{ ...inputSm, flex: 1 }}
-        />
-        <button
-          type="button"
-          onClick={geocode}
-          disabled={searching}
-          style={{
-            background: C.surface, border: `1px solid ${C.border}`,
-            color: searching ? C.textDim : C.textSecondary,
-            padding: '5px 12px', cursor: searching ? 'default' : 'pointer',
-            borderRadius: 3, fontFamily: F.family, fontSize: F.size.sm,
-            letterSpacing: F.tracking.wide, flexShrink: 0,
-          }}
-        >
-          {searching ? '…' : 'GO'}
-        </button>
+      {/* Address search with autocomplete */}
+      <div ref={wrapperRef} style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            type="text"
+            value={search}
+            onChange={e => handleSearchChange(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
+            placeholder="Search city, address, or place…"
+            style={{ ...inputSm, flex: 1 }}
+            autoComplete="off"
+          />
+          <button
+            type="button"
+            onClick={geocode}
+            disabled={searching}
+            style={{
+              background: C.surface, border: `1px solid ${C.border}`,
+              color: searching ? C.textDim : C.textSecondary,
+              padding: '5px 12px', cursor: searching ? 'default' : 'pointer',
+              borderRadius: 3, fontFamily: F.family, fontSize: F.size.sm,
+              letterSpacing: F.tracking.wide, flexShrink: 0,
+            }}
+          >
+            {searching ? '…' : 'GO'}
+          </button>
+        </div>
+
+        {/* Autocomplete dropdown */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            right: 0,
+            zIndex: 1000,
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            borderTop: 'none',
+            borderRadius: '0 0 4px 4px',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+            overflow: 'hidden',
+          }}>
+            {suggestions.map((s, i) => {
+              const parts = s.display_name.split(',')
+              const primary   = parts[0].trim()
+              const secondary = parts.slice(1).join(',').trim()
+              const isActive  = i === activeIdx
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onMouseDown={e => { e.preventDefault(); selectSuggestion(s) }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 2,
+                    width: '100%',
+                    padding: '8px 10px',
+                    background: isActive ? C.surfaceHover : 'transparent',
+                    border: 'none',
+                    borderBottom: i < suggestions.length - 1 ? `1px solid ${C.border}` : 'none',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ color: C.textPrimary, fontFamily: F.family, fontSize: F.size.sm }}>
+                    {primary}
+                  </span>
+                  {secondary && (
+                    <span style={{ color: C.textDim, fontFamily: F.family, fontSize: F.size.xs }}>
+                      {secondary}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        )}
       </div>
+
       {searchError && (
         <span style={{ color: C.negative, fontSize: F.size.xs, fontFamily: F.family }}>
           {searchError}
@@ -267,7 +433,8 @@ export default function LocationMapInput({
             onChange={e => {
               const v = Number(e.target.value)
               flyTo(v, lng)
-              emit({ latitude: v })
+              setSearch('')
+              emit({ latitude: v, name: '' })
             }}
             style={inputSm}
           />
@@ -279,7 +446,8 @@ export default function LocationMapInput({
             onChange={e => {
               const v = Number(e.target.value)
               flyTo(lat, v)
-              emit({ longitude: v })
+              setSearch('')
+              emit({ longitude: v, name: '' })
             }}
             style={inputSm}
           />
