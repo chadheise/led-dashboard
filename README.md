@@ -15,7 +15,27 @@ python3 -m venv .venv
 .venv/bin/python main.py          # starts FastAPI on :8000 (simulator mode)
 ```
 
-#### Hardware mode (Raspberry Pi + HUB75)
+#### Hot-reload (development)
+
+To avoid restarting the engine on every code change, set `HOT_RELOAD=true`. The engine watches `apps/` and `libraries/` for `.py` file changes and automatically reloads the affected code within about one second of saving.
+
+```bash
+HOT_RELOAD=true .venv/bin/python main.py
+```
+
+The server stays running, the WebSocket connection is preserved, and the display updates immediately with the new code. Syntax errors are logged without crashing the engine — fix and save to retry.
+
+### UI (React)
+
+```bash
+cd ui
+npm install
+npm run dev             # starts Vite on :5173, proxies /api and /ws to :8000
+```
+
+Open `http://localhost:3000` to see the live simulator preview.
+
+## Hardware mode (Raspberry Pi + HUB75)
 
 Hardware mode requires the `rpi-rgb-led-matrix` Python bindings, which are not on PyPI and must be compiled from source. `start.sh` handles this automatically — if the module is missing it clones the repo, builds, and installs it into the venv before starting the engine.
 
@@ -28,6 +48,7 @@ sudo apt-get install -y gcc python3-dev
 Then re-run `start.sh` and it will retry the install.
 
 > **Note:** `start.sh` uses `sudo -E` to run the engine (required for GPIO access). If `sudo` prompts for a password non-interactively, add a `NOPASSWD` entry via `sudo visudo`:
+>
 > ```
 > chadheise ALL=(ALL) NOPASSWD: ALL
 > ```
@@ -51,26 +72,6 @@ To run in simulator mode instead (e.g. for local development without panels):
 ```
 
 Hardware parameters (chain length, GPIO slowdown, HAT mapping) are read from the `hardware:` block in `config.yaml`. In hardware mode the engine writes pixels to both the physical panels and the WebSocket stream, so the UI preview continues to work.
-
-#### Hot-reload (development)
-
-To avoid restarting the engine on every code change, set `HOT_RELOAD=true`. The engine watches `apps/` and `libraries/` for `.py` file changes and automatically reloads the affected code within about one second of saving.
-
-```bash
-HOT_RELOAD=true .venv/bin/python main.py
-```
-
-The server stays running, the WebSocket connection is preserved, and the display updates immediately with the new code. Syntax errors are logged without crashing the engine — fix and save to retry.
-
-### UI (React)
-
-```bash
-cd ui
-npm install
-npm run dev             # starts Vite on :5173, proxies /api and /ws to :8000
-```
-
-Open `http://localhost:5173` to see the live simulator preview.
 
 ## Architecture
 
@@ -219,20 +220,20 @@ Persists application state to `data/state.json` using atomic write (write to `.t
 
 ### `api/` — FastAPI server
 
-| Path | Description |
-|---|---|
-| `GET /api/apps` | List available display apps and their config schemas |
-| `GET/POST /api/modules` | Create / list saved modules |
-| `PUT/DELETE /api/modules/{id}` | Update or delete a module |
-| `GET/POST /api/playlists` | Create / list playlists |
-| `PUT/DELETE /api/playlists/{id}` | Update or delete a playlist |
-| `POST /api/playlists/{id}/activate` | Set a playlist as active |
-| `GET /api/status` | Current scene index, paused state, scene count |
-| `POST /api/control` | Pause, resume, prev, next |
-| `GET/PUT /api/settings/apps/{id}` | Per-app global config |
-| `GET/PUT /api/settings/libraries/{id}` | Per-library config (API keys, etc.) |
-| `POST/DELETE /api/preview` | Start / stop an ephemeral edit preview |
-| `WS /ws/preview` | WebSocket — streams binary LED frames to the browser |
+| Path                                   | Description                                          |
+| -------------------------------------- | ---------------------------------------------------- |
+| `GET /api/apps`                        | List available display apps and their config schemas |
+| `GET/POST /api/modules`                | Create / list saved modules                          |
+| `PUT/DELETE /api/modules/{id}`         | Update or delete a module                            |
+| `GET/POST /api/playlists`              | Create / list playlists                              |
+| `PUT/DELETE /api/playlists/{id}`       | Update or delete a playlist                          |
+| `POST /api/playlists/{id}/activate`    | Set a playlist as active                             |
+| `GET /api/status`                      | Current scene index, paused state, scene count       |
+| `POST /api/control`                    | Pause, resume, prev, next                            |
+| `GET/PUT /api/settings/apps/{id}`      | Per-app global config                                |
+| `GET/PUT /api/settings/libraries/{id}` | Per-library config (API keys, etc.)                  |
+| `POST/DELETE /api/preview`             | Start / stop an ephemeral edit preview               |
+| `WS /ws/preview`                       | WebSocket — streams binary LED frames to the browser |
 
 ## Display apps
 
@@ -351,15 +352,15 @@ class MyApp(DisplayApp):
 
 Class-variable reference:
 
-| Attribute | Type | Required | Notes |
-|---|---|---|---|
-| `id` | `str` | yes | Unique slug; used in `state.json`, URL paths, and `APP_REGISTRY` |
-| `name` | `str` | yes | Human-readable label shown in the UI |
-| `description` | `str` | no | Short sentence shown in the app browser |
-| `icon` | `str` | no | Inline SVG string; uses `currentColor` so the UI can theme it |
-| `libraries` | `list[str]` | no | Library IDs the app uses; the UI shows a warning if any are unconfigured |
-| `config_schema` | `dict` | yes | JSON Schema for per-module config; drives the auto-generated form in the UI |
-| `global_config_schema` | `dict` | no | JSON Schema for app-level settings (API keys, defaults) stored once per app |
+| Attribute              | Type        | Required | Notes                                                                       |
+| ---------------------- | ----------- | -------- | --------------------------------------------------------------------------- |
+| `id`                   | `str`       | yes      | Unique slug; used in `state.json`, URL paths, and `APP_REGISTRY`            |
+| `name`                 | `str`       | yes      | Human-readable label shown in the UI                                        |
+| `description`          | `str`       | no       | Short sentence shown in the app browser                                     |
+| `icon`                 | `str`       | no       | Inline SVG string; uses `currentColor` so the UI can theme it               |
+| `libraries`            | `list[str]` | no       | Library IDs the app uses; the UI shows a warning if any are unconfigured    |
+| `config_schema`        | `dict`      | yes      | JSON Schema for per-module config; drives the auto-generated form in the UI |
+| `global_config_schema` | `dict`      | no       | JSON Schema for app-level settings (API keys, defaults) stored once per app |
 
 **Using a library inside an app**
 
@@ -461,27 +462,27 @@ The library now appears on the Settings page. Any app that lists `"mylib"` in it
 
 ```yaml
 display:
-  width: 320      # total pixel width (e.g. 10 × 32 px panels)
-  height: 64      # total pixel height
+  width: 320 # total pixel width (e.g. 10 × 32 px panels)
+  height: 64 # total pixel height
   fps: 30
-  brightness: 80  # 0–100; used by hardware canvas
+  brightness: 80 # 0–100; used by hardware canvas
 
 server:
   host: "0.0.0.0"
   port: 8000
 
-playlist:         # optional seed playlist (used only on first run)
+playlist: # optional seed playlist (used only on first run)
   - app_id: text
     config:
       message: "LED Wall Display"
       scroll: true
     duration: 30
 
-hardware:         # used only when CANVAS=hardware
+hardware: # used only when CANVAS=hardware
   rows: 64
   cols: 320
   chain_length: 10
-  gpio_slowdown: 4          # tuned for Pi 4; lower for Pi 5
+  gpio_slowdown: 4 # tuned for Pi 4; lower for Pi 5
   hardware_mapping: adafruit-hat
 ```
 
