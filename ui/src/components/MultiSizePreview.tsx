@@ -94,7 +94,7 @@ export default function MultiSizePreview({ appId, config, live }: Props) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       {rows.map(row => (
-        <div key={row[0].height} style={{ display: 'flex', gap: 16, alignItems: 'flex-end' }}>
+        <div key={row[0].height} style={{ display: 'flex', gap: 16, alignItems: 'flex-end', justifyContent: 'center' }}>
           {row.map(({ width, height }) => (
             <div
               key={`${width}x${height}`}

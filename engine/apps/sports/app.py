@@ -765,18 +765,19 @@ class SportsApp(DisplayApp):
         sport    = game.get("sport", "")
         mid_y    = h - footer_h // 2
 
-        # Left/right zones
-        if sport == "soccer":
-            away_label = f"{game['away_points']} PTS" if game.get("away_points") is not None else None
-            home_label = f"{game['home_points']} PTS" if game.get("home_points") is not None else None
-        else:
-            away_label = game.get("away_record") or None
-            home_label = game.get("home_record") or None
+        # Left/right zones — hidden on narrow screens where there's no room
+        if w >= 128:
+            if sport == "soccer":
+                away_label = f"{game['away_points']} PTS" if game.get("away_points") is not None else None
+                home_label = f"{game['home_points']} PTS" if game.get("home_points") is not None else None
+            else:
+                away_label = game.get("away_record") or None
+                home_label = game.get("home_record") or None
 
-        if away_label:
-            _paste(img, render_text(away_label, _GRAY, FONT_PTS), 2, mid_y, "lm")
-        if home_label:
-            _paste(img, render_text(home_label, _GRAY, FONT_PTS), w - 2, mid_y, "rm")
+            if away_label:
+                _paste(img, render_text(away_label, _GRAY, FONT_PTS), 2, mid_y, "lm")
+            if home_label:
+                _paste(img, render_text(home_label, _GRAY, FONT_PTS), w - 2, mid_y, "rm")
 
         # Center zone
         if sport == "soccer" and state in ("in", "post"):
