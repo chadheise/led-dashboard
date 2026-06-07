@@ -13,7 +13,7 @@ from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_text, arrow_img
+from libraries.text_renderer.library import render_text, arrow_img, _resolve_font
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 from libraries.location.library import LocationLibrary
 
@@ -41,9 +41,11 @@ _DEBUG_GAME_LABELS: dict[str, str] = {g["id"]: g["label"] for g in _DEBUG_GAMES}
 
 
 def _abbrev_round(note: str, w: int) -> str:
-    """Shorten knockout round labels for narrow displays (w < 256)."""
+    """Shorten round labels for narrow displays."""
     if w < 256:
         note = note.replace("Quarter-Final", "Qtr-Fnl").replace("Semi-Final", "Sem-Fnl")
+    if w <= 128:
+        note = note.replace("Group ", "Grp ")
     return note
 
 
@@ -51,7 +53,8 @@ def _soccer_status_img(status_text: str, font_size: int) -> Image.Image:
     """Yellow game minute + gray context for in-progress soccer status bars.
 
     Splits on ' | ' so '67\' | Group C' renders the minute in yellow and the
-    rest in gray, with each piece vertically centred in the combined image.
+    rest in gray. Pieces are baseline-aligned so descenders (e.g. 'p' in
+    'Group') don't push shorter pieces like '67\'' down.
     """
     _YELLOW = (255, 210, 0)
     _GRAY   = (140, 140, 140)
@@ -61,11 +64,19 @@ def _soccer_status_img(status_text: str, font_size: int) -> Image.Image:
         return minute_img
     sep_img  = render_text(" | ", _GRAY, font_size)
     rest_img = render_text(parts[1], _GRAY, font_size)
-    bar_h = max(minute_img.height, sep_img.height, rest_img.height)
+
+    # Baseline-align: paste each piece at bbox[1] - min_top so the
+    # font's drawing origin sits at the same y in the composite image.
+    font  = _resolve_font(font_size)
+    dummy = ImageDraw.Draw(Image.new("L", (1, 1)))
+    bboxes  = [dummy.textbbox((0, 0), t, font=font) for t in (parts[0], " | ", parts[1])]
+    min_top = min(b[1] for b in bboxes)
+    bar_h   = max(max(b[3] for b in bboxes) - min_top, 1)
+
     out = Image.new("RGB", (minute_img.width + sep_img.width + rest_img.width, bar_h), (0, 0, 0))
     x = 0
-    for piece in (minute_img, sep_img, rest_img):
-        out.paste(piece, (x, (bar_h - piece.height) // 2))
+    for piece, bbox in zip((minute_img, sep_img, rest_img), bboxes):
+        out.paste(piece, (x, bbox[1] - min_top))
         x += piece.width
     return out
 
@@ -635,6 +646,9 @@ class SportsApp(DisplayApp):
                             h_val = local.hour % 12 or 12
                             ampm = "AM" if local.hour < 12 else "PM"
                             status_text = f"{h_val}:{local.minute:02d} {ampm}"
+                        now_utc = datetime.datetime.now(datetime.timezone.utc)
+                        if start_utc - now_utc > datetime.timedelta(hours=20):
+                            status_text = f"{local.month}/{local.day} {status_text}"
                     except Exception:
                         pass
             if sport == "soccer":
@@ -727,6 +741,58 @@ class SportsApp(DisplayApp):
                 _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
                        cx, h - 2, "mb")
 
+    def _draw_footer(
+        self,
+        img: Image.Image,
+        game: dict[str, Any],
+        w: int,
+        h: int,
+        status_text: str,
+    ) -> None:
+        """3-zone footer for all sports and screen heights.
+
+        Left  zone: soccer group-stage points ("N PTS") or non-soccer win-loss record.
+        Center zone: game info — yellow for soccer active/completed, gray otherwise.
+        Right  zone: same as left but for home team.
+        Footer height and font sizes scale with screen height.
+        """
+        footer_h = 12 if h >= 64 else 9
+        FONT_CTR = 9 if h >= 64 else 7  # LoRes9 large screens; m6x11plus small screens
+        FONT_PTS = 7  # m6x11plus at load_size=9 → crisp 7px (6 snaps to 7 anyway)
+        _YELLOW  = (255, 210, 0)
+        _GRAY    = (140, 140, 140)
+        state    = game.get("state", "pre")
+        sport    = game.get("sport", "")
+        mid_y    = h - footer_h // 2
+
+        # Left/right zones
+        if sport == "soccer":
+            away_label = f"{game['away_points']} PTS" if game.get("away_points") is not None else None
+            home_label = f"{game['home_points']} PTS" if game.get("home_points") is not None else None
+        else:
+            away_label = game.get("away_record") or None
+            home_label = game.get("home_record") or None
+
+        if away_label:
+            _paste(img, render_text(away_label, _GRAY, FONT_PTS), 2, mid_y, "lm")
+        if home_label:
+            _paste(img, render_text(home_label, _GRAY, FONT_PTS), w - 2, mid_y, "rm")
+
+        # Center zone
+        if sport == "soccer" and state in ("in", "post"):
+            parts  = status_text.split(" | ", 1)
+            minute = parts[0]
+            if state == "post":
+                minute = "Final"
+            elif minute.upper() == "HT":
+                minute = "Half"
+            center_text = f"{minute} | {parts[1]}" if len(parts) == 2 else minute
+            center_img  = _soccer_status_img(center_text, FONT_CTR)
+        else:
+            center_img = render_text(status_text, _GRAY, FONT_CTR)
+
+        _paste(img, center_img, w // 2, mid_y, "mm")
+
     def _draw_wide(
         self,
         img: Image.Image,
@@ -738,7 +804,7 @@ class SportsApp(DisplayApp):
         status_text: str,
     ) -> None:
         """Logo fills height. Team info + score beside each logo; 3-line layout for large format."""
-        STATUS_H  = 12
+        STATUS_H  = 12 if h >= 64 else 9
         logo_size = (h - 10) if w >= 256 else max(20, h - 32)
         content_h = h - STATUS_H
         _MARGIN   = 2
@@ -942,7 +1008,7 @@ class SportsApp(DisplayApp):
             img.paste(diamond_img, (cx - diamond_img.width // 2, diamond_y))
 
         # ── Status ─────────────────────────────────────────────────────────
-        self._draw_status_bar(img, game, w, h, status_text)
+        self._draw_footer(img, game, w, h, status_text)
 
     def _draw_stacked(
         self,
@@ -957,7 +1023,7 @@ class SportsApp(DisplayApp):
         """Away top / home bottom. Logo left; abbr+score block centred on the logo."""
         # ── 32px ultra-compact layout ─────────────────────────────────────────
         if h <= 32:
-            STATUS_H    = 10
+            STATUS_H    = 9
             content_h   = h - STATUS_H
             team_h      = content_h // 2
             font        = max(6, team_h)
@@ -984,49 +1050,13 @@ class SportsApp(DisplayApp):
                 )
                 _paste(img, diamond_img, w - 2, content_h // 2, "rm")
 
-                # Footer: directional arrow + inning + outs
-                low = status_text.lower()
-                if low.startswith("top "):
-                    half_up, inning_part = True,  status_text[4:]
-                elif low.startswith("bottom "):
-                    half_up, inning_part = False, status_text[7:]
-                elif low.startswith("bot "):
-                    half_up, inning_part = False, status_text[4:]
-                else:
-                    half_up, inning_part = None,  status_text
-
-                _C   = (140, 140, 140)
-                outs = int(situation.get("outs") or 0)
-                outs_img = render_text("1 out" if outs == 1 else f"{outs} outs", _C, 9)
-                if half_up is not None:
-                    txt = render_text(inning_part, _C, 9)
-                    arr = arrow_img(half_up, max(3, txt.height * 2 // 3), _C)
-                    inn = Image.new("RGB", (arr.width + 2 + txt.width, txt.height), (0, 0, 0))
-                    inn.paste(arr, (0, (txt.height - arr.height) // 2))
-                    inn.paste(txt, (arr.width + 2, 0))
-                else:
-                    inn = render_text(status_text, _C, 9)
-                gap     = 4
-                row_h   = max(inn.height, outs_img.height)
-                row_w   = inn.width + gap + outs_img.width
-                row     = Image.new("RGB", (row_w, row_h), (0, 0, 0))
-                row.paste(inn,      (0,               (row_h - inn.height)      // 2))
-                row.paste(outs_img, (inn.width + gap, (row_h - outs_img.height) // 2))
-                _paste(img, row, w // 2, h - 5, "mm")
-            else:
-                if game.get("sport") == "soccer" and game.get("state") == "in":
-                    _paste(img, _soccer_status_img(status_text, 9), w // 2, h - 5, "mm")
-                else:
-                    _paste(img, render_text(status_text, (140, 140, 140), 9), w // 2, h - 5, "mm")
+            self._draw_footer(img, game, w, h, status_text)
             return
 
-        is_xs       = h <= 64
         is_baseball = game.get("sport") == "baseball"
-        hide_logo   = is_xs  # no logos at XS for any sport
+        hide_logo   = h <= 64  # no logos for short displays
 
-        # XS uses a 24px footer (12px league label + 12px breathing room above);
-        # taller displays keep the standard 12px status bar.
-        STATUS_H  = 24 if is_xs else 12
+        STATUS_H  = 9
         content_h = h - STATUS_H
         team_h    = content_h // 2
         logo_size = max(6, team_h - 4)
@@ -1055,68 +1085,7 @@ class SportsApp(DisplayApp):
             _paste(img, abbr_img,  lx,                       logo_cy, "lm")
             _paste(img, score_img, lx + abbr_img.width + 3,  logo_cy, "lm")
 
-        if is_xs:
-            _DIM  = (140, 140, 140)
-            _GRAY = (100, 100, 100)
-            FONT  = 9   # compact font for right-column labels
-
-            # ── Right column: game info, centred in content area, right-aligned ──
-            if is_baseball and game.get("state") == "in":
-                situation = game.get("situation") or {}
-                outs     = int(situation.get("outs") or 0)
-                outs_img = render_text("1 out" if outs == 1 else f"{outs} outs", _DIM, FONT)
-
-                low = status_text.lower()
-                if low.startswith("top "):
-                    half_up, inning_part = True,  status_text[4:]
-                elif low.startswith("bottom "):
-                    half_up, inning_part = False, status_text[7:]
-                elif low.startswith("bot "):
-                    half_up, inning_part = False, status_text[4:]
-                else:
-                    half_up, inning_part = None,  status_text
-
-                if half_up is not None:
-                    txt = render_text(inning_part, _DIM, FONT)
-                    arr = arrow_img(half_up, max(3, txt.height * 2 // 3), _DIM)
-                    inning_img = Image.new("RGB", (arr.width + 2 + txt.width, txt.height), (0, 0, 0))
-                    inning_img.paste(arr, (0, (txt.height - arr.height) // 2))
-                    inning_img.paste(txt, (arr.width + 2, 0))
-                else:
-                    inning_img = render_text(status_text, _DIM, FONT)
-
-                gap          = 3
-                diamond_size = max(11, content_h - outs_img.height - inning_img.height - 2 * gap - 4)
-                diamond_img  = _make_diamond_img(
-                    bool(situation.get("onFirst")),
-                    bool(situation.get("onSecond")),
-                    bool(situation.get("onThird")),
-                    size=diamond_size,
-                )
-
-                col_w = max(diamond_img.width, inning_img.width, outs_img.width)
-                col_h = diamond_img.height + gap + inning_img.height + gap + outs_img.height
-                col   = Image.new("RGB", (col_w, col_h), (0, 0, 0))
-                col.paste(diamond_img, ((col_w - diamond_img.width) // 2, 0))
-                y = diamond_img.height + gap
-                col.paste(inning_img,  ((col_w - inning_img.width)  // 2, y))
-                y += inning_img.height + gap
-                col.paste(outs_img,    ((col_w - outs_img.width)    // 2, y))
-                _paste(img, col, w - 2, content_h // 2, "rm")
-            else:
-                # Non-baseball: status text centred in the top footer line
-                if game.get("sport") == "soccer" and game.get("state") == "in":
-                    _paste(img, _soccer_status_img(status_text, 12), w // 2, h - 18, "mm")
-                else:
-                    _paste(img, render_text(status_text, _DIM, 12), w // 2, h - 18, "mm")
-
-            # ── Footer: league label in bottom line, left-aligned ─────────────
-            league_id    = game.get("league", "")
-            league_label = _LEAGUE_LABELS.get(league_id, league_id.upper())
-            if league_label:
-                _paste(img, render_text(league_label, _GRAY, 12), 2, h - 6, "lm")
-        else:
-            self._draw_status_bar(img, game, w, h, status_text)
+        self._draw_footer(img, game, w, h, status_text)
 
     def _draw_minimal(
         self,

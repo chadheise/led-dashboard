@@ -1,5 +1,30 @@
 [
   {
+    "id": "mlb_pre",
+    "label": "MLB: NYY @ BOS — Scheduled (upcoming)",
+    "game": {
+      "league": "mlb",
+      "sport": "baseball",
+      "away_abbr": "NYY", "home_abbr": "BOS",
+      "away_name": "New York Yankees", "home_name": "Boston Red Sox",
+      "away_location": "New York", "home_location": "Boston",
+      "away_nickname": "Yankees", "home_nickname": "Red Sox",
+      "away_score": "", "home_score": "",
+      "away_color": "003087", "home_color": "bd3039",
+      "away_alt_color": "c4ced4", "home_alt_color": "0d2b56",
+      "away_logo_url": "https://a.espncdn.com/i/teamlogos/mlb/500/nyy.png",
+      "home_logo_url": "https://a.espncdn.com/i/teamlogos/mlb/500/bos.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": null, "home_conf": null,
+      "situation": {},
+      "away_id": "", "home_id": "",
+      "away_record": "55-30", "home_record": "48-37",
+      "match_note": ""
+    }
+  },
+  {
     "id": "mlb_in_progress",
     "label": "MLB: NYY @ BOS — Bot 7th (in-progress)",
     "game": {
@@ -20,7 +45,7 @@
       "away_conf": null, "home_conf": null,
       "situation": {"outs": 1, "onFirst": true, "onSecond": false, "onThird": false},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "55-30", "home_record": "48-37",
       "match_note": ""
     }
   },
@@ -45,7 +70,32 @@
       "away_conf": null, "home_conf": null,
       "situation": {},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "56-30", "home_record": "48-38",
+      "match_note": ""
+    }
+  },
+  {
+    "id": "nfl_pre",
+    "label": "NFL: KC @ NE — Scheduled (upcoming)",
+    "game": {
+      "league": "nfl",
+      "sport": "football",
+      "away_abbr": "KC", "home_abbr": "NE",
+      "away_name": "Kansas City Chiefs", "home_name": "New England Patriots",
+      "away_location": "Kansas City", "home_location": "New England",
+      "away_nickname": "Chiefs", "home_nickname": "Patriots",
+      "away_score": "", "home_score": "",
+      "away_color": "e31837", "home_color": "002244",
+      "away_alt_color": "ffb612", "home_alt_color": "c60c30",
+      "away_logo_url": "https://a.espncdn.com/i/teamlogos/nfl/500/kc.png",
+      "home_logo_url": "https://a.espncdn.com/i/teamlogos/nfl/500/ne.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": "AFC West", "home_conf": "AFC East",
+      "situation": {},
+      "away_id": "12", "home_id": "17",
+      "away_record": "8-3", "home_record": "4-7",
       "match_note": ""
     }
   },
@@ -99,7 +149,32 @@
       "away_conf": "AFC West", "home_conf": "AFC East",
       "situation": {},
       "away_id": "12", "home_id": "17",
-      "away_record": null, "home_record": null,
+      "away_record": "9-3", "home_record": "4-8",
+      "match_note": ""
+    }
+  },
+  {
+    "id": "nba_pre",
+    "label": "NBA: LAL @ BOS — Scheduled (upcoming)",
+    "game": {
+      "league": "nba",
+      "sport": "basketball",
+      "away_abbr": "LAL", "home_abbr": "BOS",
+      "away_name": "Los Angeles Lakers", "home_name": "Boston Celtics",
+      "away_location": "Los Angeles", "home_location": "Boston",
+      "away_nickname": "Lakers", "home_nickname": "Celtics",
+      "away_score": "", "home_score": "",
+      "away_color": "552583", "home_color": "007a33",
+      "away_alt_color": "fdb927", "home_alt_color": "ba9653",
+      "away_logo_url": "https://a.espncdn.com/i/teamlogos/nba/500/lal.png",
+      "home_logo_url": "https://a.espncdn.com/i/teamlogos/nba/500/bos.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": "Western", "home_conf": "Eastern",
+      "situation": {},
+      "away_id": "", "home_id": "",
+      "away_record": "28-15", "home_record": "33-10",
       "match_note": ""
     }
   },
@@ -124,7 +199,7 @@
       "away_conf": "Western", "home_conf": "Eastern",
       "situation": {},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "28-15", "home_record": "33-10",
       "match_note": ""
     }
   },
@@ -149,7 +224,32 @@
       "away_conf": "Western", "home_conf": "Eastern",
       "situation": {},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "29-15", "home_record": "33-11",
+      "match_note": ""
+    }
+  },
+  {
+    "id": "nhl_pre",
+    "label": "NHL: TOR @ MTL — Scheduled (upcoming)",
+    "game": {
+      "league": "nhl",
+      "sport": "hockey",
+      "away_abbr": "TOR", "home_abbr": "MTL",
+      "away_name": "Toronto Maple Leafs", "home_name": "Montreal Canadiens",
+      "away_location": "Toronto", "home_location": "Montréal",
+      "away_nickname": "Maple Leafs", "home_nickname": "Canadiens",
+      "away_score": "", "home_score": "",
+      "away_color": "003e7e", "home_color": "af1e2d",
+      "away_alt_color": "ffffff", "home_alt_color": "003da5",
+      "away_logo_url": "https://a.espncdn.com/i/teamlogos/nhl/500/tor.png",
+      "home_logo_url": "https://a.espncdn.com/i/teamlogos/nhl/500/mtl.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": "Eastern", "home_conf": "Eastern",
+      "situation": {},
+      "away_id": "", "home_id": "",
+      "away_record": "24-18-5", "home_record": "20-22-4",
       "match_note": ""
     }
   },
@@ -174,7 +274,7 @@
       "away_conf": "Eastern", "home_conf": "Eastern",
       "situation": {},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "24-18-5", "home_record": "20-22-4",
       "match_note": ""
     }
   },
@@ -199,8 +299,35 @@
       "away_conf": "Eastern", "home_conf": "Eastern",
       "situation": {},
       "away_id": "", "home_id": "",
-      "away_record": null, "home_record": null,
+      "away_record": "25-18-5", "home_record": "20-23-4",
       "match_note": ""
+    }
+  },
+  {
+    "id": "epl_pre",
+    "label": "EPL: MCI @ ARS — Scheduled (upcoming)",
+    "game": {
+      "league": "eng.1",
+      "sport": "soccer",
+      "away_abbr": "MCI", "home_abbr": "ARS",
+      "away_name": "Manchester City", "home_name": "Arsenal",
+      "away_location": "Manchester", "home_location": "London",
+      "away_nickname": "City", "home_nickname": "Arsenal",
+      "away_score": "", "home_score": "",
+      "away_color": "6cabdd", "home_color": "ef0107",
+      "away_alt_color": "1c2c5b", "home_alt_color": "023474",
+      "away_logo_url": "https://a.espncdn.com/i/teamlogos/soccer/500/382.png",
+      "home_logo_url": "https://a.espncdn.com/i/teamlogos/soccer/500/359.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": null, "home_conf": null,
+      "situation": {},
+      "away_id": "", "home_id": "",
+      "away_record": null, "home_record": null,
+      "match_note": "Matchday 14",
+      "away_goals": [], "home_goals": [],
+      "away_points": null, "home_points": null
     }
   },
   {
@@ -338,6 +465,92 @@
       "home_goals": ["56'"],
       "away_points": null,
       "home_points": null
+    }
+  },
+  {
+    "id": "fifa_wc_halftime",
+    "label": "FIFA WC: BRA @ MEX — HT Group C (half-time)",
+    "game": {
+      "league": "fifa.world",
+      "sport": "soccer",
+      "away_abbr": "BRA", "home_abbr": "MEX",
+      "away_name": "Brazil", "home_name": "Mexico",
+      "away_location": "Brazil", "home_location": "Mexico",
+      "away_nickname": "Brazil", "home_nickname": "Mexico",
+      "away_score": "1", "home_score": "0",
+      "away_color": "009c3b", "home_color": "006847",
+      "away_alt_color": "ffdf00", "home_alt_color": "ce1126",
+      "away_logo_url": "https://flagcdn.com/w80/br.png",
+      "home_logo_url": "https://flagcdn.com/w80/mx.png",
+      "status": "HT", "state": "in",
+      "series_summary": null, "start_time": null,
+      "away_rank": null, "home_rank": null,
+      "away_conf": null, "home_conf": null,
+      "situation": {},
+      "away_id": "bra", "home_id": "mex",
+      "away_record": null, "home_record": null,
+      "match_note": "Group C",
+      "away_goals": ["23'"],
+      "home_goals": [],
+      "away_points": 4,
+      "home_points": 4
+    }
+  },
+  {
+    "id": "fifa_wc_group_pre",
+    "label": "FIFA WC: USA @ POR — Group E (upcoming)",
+    "game": {
+      "league": "fifa.world",
+      "sport": "soccer",
+      "away_abbr": "USA", "home_abbr": "POR",
+      "away_name": "United States", "home_name": "Portugal",
+      "away_location": "United States", "home_location": "Portugal",
+      "away_nickname": "United States", "home_nickname": "Portugal",
+      "away_score": "", "home_score": "",
+      "away_color": "002868", "home_color": "006600",
+      "away_alt_color": "bf0a30", "home_alt_color": "ff0000",
+      "away_logo_url": "https://flagcdn.com/w80/us.png",
+      "home_logo_url": "https://flagcdn.com/w80/pt.png",
+      "status": "Scheduled", "state": "pre",
+      "series_summary": null, "start_time": "2026-07-10T23:00:00Z",
+      "away_rank": null, "home_rank": null,
+      "away_conf": null, "home_conf": null,
+      "situation": {},
+      "away_id": "usa", "home_id": "por",
+      "away_record": null, "home_record": null,
+      "match_note": "Group E",
+      "away_goals": [], "home_goals": [],
+      "away_points": 3,
+      "home_points": 6
+    }
+  },
+  {
+    "id": "fifa_wc_group_post",
+    "label": "FIFA WC: BRA @ MEX — FT Group C (completed)",
+    "game": {
+      "league": "fifa.world",
+      "sport": "soccer",
+      "away_abbr": "BRA", "home_abbr": "MEX",
+      "away_name": "Brazil", "home_name": "Mexico",
+      "away_location": "Brazil", "home_location": "Mexico",
+      "away_nickname": "Brazil", "home_nickname": "Mexico",
+      "away_score": "2", "home_score": "1",
+      "away_color": "009c3b", "home_color": "006847",
+      "away_alt_color": "ffdf00", "home_alt_color": "ce1126",
+      "away_logo_url": "https://flagcdn.com/w80/br.png",
+      "home_logo_url": "https://flagcdn.com/w80/mx.png",
+      "status": "FT", "state": "post",
+      "series_summary": null, "start_time": null,
+      "away_rank": null, "home_rank": null,
+      "away_conf": null, "home_conf": null,
+      "situation": {},
+      "away_id": "bra", "home_id": "mex",
+      "away_record": null, "home_record": null,
+      "match_note": "Group C",
+      "away_goals": ["23'", "61'"],
+      "home_goals": ["45+1'"],
+      "away_points": 7,
+      "home_points": 4
     }
   }
 ]

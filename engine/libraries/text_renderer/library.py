@@ -26,12 +26,17 @@ _LORES_FONTS: dict[int, tuple[str, str]] = {
     28: ("LoRes28OT-Regular.ttf",       "LoRes28OT-Regular.ttf"),
 }
 
-# Daniel Linssen pixel fonts for sizes < 9 and the 11px gap between LoRes 9 and 12.
+# Daniel Linssen pixel fonts keyed by their actual crisp rendered height.
+# Each entry: (regular_filename, bold_filename, native_load_size).
+# native_load_size is the PIL truetype() size that produces pixel-perfect output —
+# it differs from the font's name-size because the internal em-squares don't align
+# with the label dimensions (e.g. "m5x7" renders cleanly only when loaded at 16).
 # No bold variants exist; m6x11plus is the extended-charset edition of m6x11.
-_DANIEL_FONTS: dict[int, tuple[str, str]] = {
-    6:  ("m3x6.ttf",      "m3x6.ttf"),
-    7:  ("m5x7.ttf",      "m5x7.ttf"),
-    11: ("m6x11plus.ttf", "m6x11plus.ttf"),
+# Size 9 is present for documentation but LoRes9 takes priority when snapped to 9.
+_DANIEL_FONTS: dict[int, tuple[str, str, int]] = {
+    7: ("m6x11plus.ttf", "m6x11plus.ttf",  9),  # load_size= 9 → crisp 7px output
+    8: ("m3x6.ttf",      "m3x6.ttf",      16),  # load_size=16 → crisp 8px output
+    9: ("m5x7.ttf",      "m5x7.ttf",      16),  # load_size=16 → crisp 9px output
 }
 
 _LORES_SIZES: list[int] = sorted(_LORES_FONTS)
@@ -40,7 +45,7 @@ _LORES_MAX: int = max(_LORES_SIZES)  # 28
 # Unified pixel-font design sizes across both families (DanielLinssen + LoRes)
 _ALL_PIXEL_SIZES: list[int] = sorted(set(_DANIEL_FONTS) | set(_LORES_FONTS))
 _PIXEL_MAX: int = max(_ALL_PIXEL_SIZES)  # 28
-_PIXEL_MIN: int = min(_ALL_PIXEL_SIZES)  # 6
+_PIXEL_MIN: int = min(_ALL_PIXEL_SIZES)  # 7
 
 # Roboto variable font (OFL licensed) for sizes > _LORES_MAX.
 # Supports named instances "Regular" and "Bold" via set_variation_by_name.
@@ -67,17 +72,18 @@ def _resolve_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | Ima
     """Select the best font for size and bold.
 
     Sizes ≤ _PIXEL_MAX: snap to the nearest supported design size across both
-    DanielLinssen (6, 7, 11) and LoRes (9, 12, 15, 22, 28) pixel-font families,
-    loading each font at its native design size (never scaled).
+    DanielLinssen (7, 8, 9) and LoRes (9, 12, 15, 22, 28) pixel-font families.
+    LoRes takes priority when both families share a design size (currently 9).
+    Daniel Linssen fonts are loaded at their native_load_size for crisp output.
     Sizes > _PIXEL_MAX: use Roboto, falling back to PIL's built-in default.
     """
     if size <= _PIXEL_MAX:
         snapped = _snap_pixel_size(size)
-        if snapped in _DANIEL_FONTS:
-            filename = _DANIEL_FONTS[snapped][1 if bold else 0]
-            return load_font_file(_DANIEL_DIR / filename, snapped)
-        filename = _LORES_FONTS[snapped][1 if bold else 0]
-        return load_font_file(_LORES_DIR / filename, snapped)
+        if snapped in _LORES_FONTS:
+            filename = _LORES_FONTS[snapped][1 if bold else 0]
+            return load_font_file(_LORES_DIR / filename, snapped)
+        regular, bold_f, load_size = _DANIEL_FONTS[snapped]
+        return load_font_file(_DANIEL_DIR / (bold_f if bold else regular), load_size)
     if _ROBOTO_PATH.exists():
         try:
             font = ImageFont.truetype(str(_ROBOTO_PATH), size=size)
