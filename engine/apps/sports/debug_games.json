@@ -352,7 +352,9 @@
       "situation": {},
       "away_id": "", "home_id": "",
       "away_record": null, "home_record": null,
-      "match_note": "Matchday 14"
+      "match_note": "Matchday 14",
+      "home_goals": [], "away_goals": ["23'"],
+      "home_points": null, "away_points": null
     }
   },
   {
@@ -378,7 +380,7 @@
       "away_id": "", "home_id": "",
       "away_record": null, "home_record": null,
       "match_note": "Matchday 14",
-      "home_goals": [], "away_goals": [],
+      "home_goals": ["55'"], "away_goals": ["23'", "71'"],
       "home_points": null, "away_points": null
     }
   },

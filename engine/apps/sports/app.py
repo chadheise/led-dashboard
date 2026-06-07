@@ -794,6 +794,84 @@ class SportsApp(DisplayApp):
 
         _paste(img, center_img, w // 2, mid_y, "mm")
 
+    def _draw_soccer_goals(
+        self,
+        img: Image.Image,
+        game: dict[str, Any],
+        w: int,
+        h: int,
+        away_color: tuple[int, int, int],
+        home_color: tuple[int, int, int],
+    ) -> None:
+        """Render goal times in the center of the screen for wide soccer views.
+
+        128 ≤ w ≤ 160: all goals merged into one chronological vertical list,
+                        centered horizontally, each minute in the scoring team's color.
+        w > 160:        interleaved two-column layout — goals sorted globally by time;
+                        each row shows one goal in the away (left) or home (right) column.
+                        Reading left-to-right across both columns gives chronological order.
+        Both layouts are bottom-aligned just above the footer.
+        """
+        away_goals: list[str] = game.get("away_goals") or []
+        home_goals: list[str] = game.get("home_goals") or []
+        if not away_goals and not home_goals:
+            return
+
+        STATUS_H   = 12 if h >= 64 else 9
+        content_h  = h - STATUS_H
+        FONT       = 9 if w > 160 else 7
+        LINE_GAP   = 1
+        BOTTOM_PAD = 2
+
+        def _sort_key(t: str) -> tuple[int, int]:
+            s = t.rstrip("'").replace("(og)", "").strip()
+            if "+" in s:
+                a, b = s.split("+", 1)
+                try:
+                    return (int(a), int(b))
+                except ValueError:
+                    pass
+            try:
+                return (int(s), 0)
+            except ValueError:
+                return (999, 0)
+
+        probe_h = render_text("0'", (255, 255, 255), FONT).height
+        cx      = w // 2
+
+        if w <= 160:
+            goals = sorted(
+                [(t, away_color) for t in away_goals] + [(t, home_color) for t in home_goals],
+                key=lambda e: _sort_key(e[0]),
+            )
+            total_h = len(goals) * probe_h + max(0, len(goals) - 1) * LINE_GAP
+            y = max(1, content_h - BOTTOM_PAD - total_h)
+            for time_str, color in goals:
+                if y + probe_h > content_h:
+                    break
+                _paste(img, render_text(time_str, color, FONT), cx, y, "mt")
+                y += probe_h + LINE_GAP
+        else:
+            # Interleaved chronological layout: one row per goal in global time order.
+            # Each row renders in the away (left) or home (right) column.
+            sep   = 2
+            x_away = cx - sep
+            x_home = cx + sep
+            rows = sorted(
+                [("away", t) for t in away_goals] + [("home", t) for t in home_goals],
+                key=lambda e: _sort_key(e[1]),
+            )
+            total_h = len(rows) * probe_h + max(0, len(rows) - 1) * LINE_GAP
+            y = max(1, content_h - BOTTOM_PAD - total_h)
+            for side, time_str in rows:
+                if y + probe_h > content_h:
+                    break
+                if side == "away":
+                    _paste(img, render_text(time_str, away_color, FONT), x_away, y, "rt")
+                else:
+                    _paste(img, render_text(time_str, home_color, FONT), x_home, y, "lt")
+                y += probe_h + LINE_GAP
+
     def _draw_wide(
         self,
         img: Image.Image,
@@ -1007,6 +1085,10 @@ class SportsApp(DisplayApp):
             diamond_y = max(0, content_h - 2 - base_bottom)
             cx = w // 2
             img.paste(diamond_img, (cx - diamond_img.width // 2, diamond_y))
+
+        # ── Soccer goal times ──────────────────────────────────────────────
+        if game.get("sport") == "soccer" and h > 32:
+            self._draw_soccer_goals(img, game, w, h, away_color, home_color)
 
         # ── Status ─────────────────────────────────────────────────────────
         self._draw_footer(img, game, w, h, status_text)
