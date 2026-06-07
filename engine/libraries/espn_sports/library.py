@@ -481,6 +481,44 @@ class ESPNSportsLibrary(Library):
             notes = comp.get("notes") or []
             match_note: str = notes[0].get("headline", "") if notes else ""
 
+            # Soccer: goal times from match details and group standings points
+            home_goals: list[str] = []
+            away_goals: list[str] = []
+            home_points: int | None = None
+            away_points: int | None = None
+            if sport == "soccer":
+                ht_id = home_team.get("id", "")
+                at_id = away_team.get("id", "")
+                for detail in comp.get("details") or []:
+                    d_type = ((detail.get("type") or {}).get("text") or "").lower()
+                    if "goal" not in d_type:
+                        continue
+                    clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
+                    scoring_id = ((detail.get("team") or {}).get("id") or "")
+                    is_og = "own" in d_type
+                    if is_og:
+                        if scoring_id == ht_id:
+                            away_goals.append(f"{clock_val}(og)")
+                        elif scoring_id == at_id:
+                            home_goals.append(f"{clock_val}(og)")
+                    else:
+                        if scoring_id == ht_id:
+                            home_goals.append(clock_val)
+                        elif scoring_id == at_id:
+                            away_goals.append(clock_val)
+                for stat in home.get("statistics") or []:
+                    if str(stat.get("name", "")).lower() in ("points", "pts"):
+                        try:
+                            home_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
+                        except (ValueError, TypeError):
+                            pass
+                for stat in away.get("statistics") or []:
+                    if str(stat.get("name", "")).lower() in ("points", "pts"):
+                        try:
+                            away_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
+                        except (ValueError, TypeError):
+                            pass
+
             games.append(
                 {
                     "league": league,
@@ -515,6 +553,10 @@ class ESPNSportsLibrary(Library):
                     "home_record": home_record,
                     "away_record": away_record,
                     "match_note": match_note,
+                    "home_goals": home_goals,
+                    "away_goals": away_goals,
+                    "home_points": home_points,
+                    "away_points": away_points,
                 }
             )
         if filter_mode == "top25":

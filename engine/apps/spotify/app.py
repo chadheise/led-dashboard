@@ -149,7 +149,7 @@ class SpotifyApp(DisplayApp):
         show_progress = bool(self.config.get("show_progress", True))
         bar_h = 3 if show_progress else 0
         text_area_h = h - bar_h
-        line_h = max(self._renderer.base_font_h, text_area_h // 2)
+        line_h = max(self._renderer.min_pixel_font_size, text_area_h // 2)
 
         self._title_img = self._renderer.render_text(
             self._track["title"], white, line_h, bold=True
@@ -189,7 +189,7 @@ class SpotifyApp(DisplayApp):
 
         text_x = self._text_area_x()
         text_w = w - text_x
-        line_h = max(self._renderer.base_font_h, text_area_h // 2)
+        line_h = max(self._renderer.min_pixel_font_size, text_area_h // 2)
 
         # Title scroll
         title_img = self._title_img

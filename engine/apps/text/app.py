@@ -26,7 +26,7 @@ class TextApp(DisplayApp):
                 "type": "integer",
                 "title": "Font size",
                 "default": 16,
-                "minimum": 8,
+                "minimum": 6,
                 "maximum": 64,
             },
         },

@@ -284,7 +284,7 @@ class StocksApp(DisplayApp):
 
         row_h = max(8, h // rows)
         ratio = 0.40 if rows == 1 else 0.65
-        text_h = max(self._renderer.base_font_h, round(row_h * ratio))
+        text_h = max(self._renderer.min_pixel_font_size, round(row_h * ratio))
         arrow_size = text_h
         icon_size = text_h if (show_icons and text_h >= 12) else 0
 
@@ -473,7 +473,7 @@ class StocksApp(DisplayApp):
         color = _COLOR_UP if up else _COLOR_DOWN
 
         # Text size driven by slot height only; layout adapts to slot width below
-        base = self._renderer.base_font_h
+        base = self._renderer.min_pixel_font_size
         text_h = max(base, slot_h // 5)
         show_icons = bool(self.config.get("show_icons", True))
         icon_size = text_h if (show_icons and text_h >= 12) else 0
@@ -698,12 +698,12 @@ class StocksApp(DisplayApp):
         bold: bool = True,
     ) -> Image.Image:
         """Render text, shrinking size proportionally until it fits max_w."""
-        th = max(self._renderer.base_font_h, max_h)
+        th = max(self._renderer.min_pixel_font_size, max_h)
         while True:
             rendered = self._renderer.render_text(text, color, th, bold=bold)
-            if rendered.width <= max_w or th <= self._renderer.base_font_h:
+            if rendered.width <= max_w or th <= self._renderer.min_pixel_font_size:
                 return rendered
-            th = max(self._renderer.base_font_h, th * max_w // rendered.width)
+            th = max(self._renderer.min_pixel_font_size, th * max_w // rendered.width)
 
     def _render_paginate_slot(
         self,
@@ -715,7 +715,7 @@ class StocksApp(DisplayApp):
         slot_h: int,
     ) -> None:
         show_icons = bool(self.config.get("show_icons", True))
-        base = self._renderer.base_font_h
+        base = self._renderer.min_pixel_font_size
         up = q["change_pct"] >= 0
         color = _quote_color(q["change_pct"])
         white = (255, 255, 255)

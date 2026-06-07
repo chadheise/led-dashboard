@@ -40,6 +40,36 @@ _DEBUG_GAME_IDS: list[str] = [g["id"] for g in _DEBUG_GAMES]
 _DEBUG_GAME_LABELS: dict[str, str] = {g["id"]: g["label"] for g in _DEBUG_GAMES}
 
 
+def _abbrev_round(note: str, w: int) -> str:
+    """Shorten knockout round labels for narrow displays (w < 256)."""
+    if w < 256:
+        note = note.replace("Quarter-Final", "Qtr-Fnl").replace("Semi-Final", "Sem-Fnl")
+    return note
+
+
+def _soccer_status_img(status_text: str, font_size: int) -> Image.Image:
+    """Yellow game minute + gray context for in-progress soccer status bars.
+
+    Splits on ' | ' so '67\' | Group C' renders the minute in yellow and the
+    rest in gray, with each piece vertically centred in the combined image.
+    """
+    _YELLOW = (255, 210, 0)
+    _GRAY   = (140, 140, 140)
+    parts   = status_text.split(" | ", 1)
+    minute_img = render_text(parts[0], _YELLOW, font_size)
+    if len(parts) < 2:
+        return minute_img
+    sep_img  = render_text(" | ", _GRAY, font_size)
+    rest_img = render_text(parts[1], _GRAY, font_size)
+    bar_h = max(minute_img.height, sep_img.height, rest_img.height)
+    out = Image.new("RGB", (minute_img.width + sep_img.width + rest_img.width, bar_h), (0, 0, 0))
+    x = 0
+    for piece in (minute_img, sep_img, rest_img):
+        out.paste(piece, (x, (bar_h - piece.height) // 2))
+        x += piece.width
+    return out
+
+
 def _duration_to_seconds(d: Any) -> float:
     if isinstance(d, (int, float)):
         return float(d) * 3600  # backwards-compat: bare number treated as hours
@@ -538,12 +568,18 @@ class SportsApp(DisplayApp):
 
         away_abbr = f"{away_prefix}{game['away_abbr']}"
         home_abbr = f"{game['home_abbr']}{home_suffix}"
-        away_score = str(game.get("away_score", "-"))
-        home_score = str(game.get("home_score", "-"))
         status_text = game.get("series_summary") or str(game.get("status", ""))
 
         state = game.get("state", "pre")
         sport = game.get("sport", "")
+
+        # Don't show scores for games that haven't started
+        if state == "pre":
+            away_score = ""
+            home_score = ""
+        else:
+            away_score = str(game.get("away_score", "-"))
+            home_score = str(game.get("home_score", "-"))
         situation = game.get("situation") or {}
 
         if state == "in" and sport == "football":
@@ -574,7 +610,12 @@ class SportsApp(DisplayApp):
         elif state == "in" and sport == "soccer":
             match_note = game.get("match_note", "")
             if match_note:
-                status_text = f"{status_text} | {match_note}"
+                status_text = f"{status_text} | {_abbrev_round(match_note, w)}"
+
+        elif state == "post" and sport == "soccer":
+            match_note = game.get("match_note", "")
+            if match_note:
+                status_text = f"{status_text} | {_abbrev_round(match_note, w)}"
 
         elif state == "pre" and not game.get("series_summary"):
             user_tz = self._get_user_tz()
@@ -596,6 +637,11 @@ class SportsApp(DisplayApp):
                             status_text = f"{h_val}:{local.minute:02d} {ampm}"
                     except Exception:
                         pass
+            if sport == "soccer":
+                match_note = game.get("match_note", "")
+                if match_note:
+                    note = _abbrev_round(match_note, w)
+                    status_text = f"{status_text} | {note}" if status_text else note
 
         # Select layout tier based on available pixel width
         if w >= 128:
@@ -675,8 +721,11 @@ class SportsApp(DisplayApp):
                 sx += diamond.width + gap
                 _paste(img, outs_img, sx, mid_y, "lm")
         else:
-            _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
-                   cx, h - 2, "mb")
+            if game.get("sport") == "soccer" and game.get("state") == "in":
+                _paste(img, _soccer_status_img(status_text, STATUS_FONT), cx, h - 2, "mb")
+            else:
+                _paste(img, render_text(status_text, (140, 140, 140), STATUS_FONT),
+                       cx, h - 2, "mb")
 
     def _draw_wide(
         self,
@@ -766,26 +815,40 @@ class SportsApp(DisplayApp):
                 home_team_text = (game.get("home_nickname") or home_abbr) \
                                  + (f" #{home_rank_v}" if home_rank_v and home_rank_v <= 25 else "")
 
+                # When location and nickname are identical (common in soccer), show only one label
+                away_dupe = away_city_text.lower() == (game.get("away_nickname") or away_abbr).lower()
+                home_dupe = home_city_text.lower() == (game.get("home_nickname") or home_abbr).lower()
+                name_mid_y = city_y + (probe_city_h + name_gap + probe_team_h) // 2
+
                 # Away (left)
                 ax = 1
                 a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
                 if a_logo:
-                    r, g, b, a = a_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
+                    logo_top = max(0, (content_h - a_logo.size[1]) // 2)
+                    r, g, b, a_ch = a_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_top), a_ch)
                     ax += a_logo.size[0] + 2
-                _paste(img, render_text(away_city_text, away_city_color, city_font),            ax, city_y,  "lt")
-                _paste(img, render_text(away_team_text, away_color,      team_font),             ax, team_y,  "lt")
+                if away_dupe:
+                    _paste(img, render_text(away_team_text, away_color, team_font),              ax, name_mid_y, "lt")
+                else:
+                    _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,     "lt")
+                    _paste(img, render_text(away_team_text, away_color,      team_font),          ax, team_y,     "lt")
                 _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
 
                 # Home (right)
                 rx = w - 1
                 h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
                 if h_logo:
-                    r, g, b, a = h_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
+                    logo_top = max(0, (content_h - h_logo.size[1]) // 2)
+                    flag_left = rx - h_logo.size[0]
+                    r, g, b, h_ch = h_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (flag_left, logo_top), h_ch)
                     rx -= h_logo.size[0] + 2
-                _paste(img, render_text(home_city_text, home_city_color, city_font),            rx, city_y,  "rt")
-                _paste(img, render_text(home_team_text, home_color,      team_font),             rx, team_y,  "rt")
+                if home_dupe:
+                    _paste(img, render_text(home_team_text, home_color, team_font),              rx, name_mid_y, "rt")
+                else:
+                    _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,     "rt")
+                    _paste(img, render_text(home_team_text, home_color,      team_font),         rx, team_y,     "rt")
                 _paste(img, render_text(home_score,     home_color,      score_font, bold=True), rx, score_y, "rt")
 
         else:
@@ -897,7 +960,7 @@ class SportsApp(DisplayApp):
             STATUS_H    = 10
             content_h   = h - STATUS_H
             team_h      = content_h // 2
-            font        = max(9, team_h)
+            font        = max(6, team_h)
             is_baseball = game.get("sport") == "baseball"
             situation   = game.get("situation") or {}
 
@@ -951,7 +1014,10 @@ class SportsApp(DisplayApp):
                 row.paste(outs_img, (inn.width + gap, (row_h - outs_img.height) // 2))
                 _paste(img, row, w // 2, h - 5, "mm")
             else:
-                _paste(img, render_text(status_text, (140, 140, 140), 9), w // 2, h - 5, "mm")
+                if game.get("sport") == "soccer" and game.get("state") == "in":
+                    _paste(img, _soccer_status_img(status_text, 9), w // 2, h - 5, "mm")
+                else:
+                    _paste(img, render_text(status_text, (140, 140, 140), 9), w // 2, h - 5, "mm")
             return
 
         is_xs       = h <= 64
@@ -1039,7 +1105,10 @@ class SportsApp(DisplayApp):
                 _paste(img, col, w - 2, content_h // 2, "rm")
             else:
                 # Non-baseball: status text centred in the top footer line
-                _paste(img, render_text(status_text, _DIM, 12), w // 2, h - 18, "mm")
+                if game.get("sport") == "soccer" and game.get("state") == "in":
+                    _paste(img, _soccer_status_img(status_text, 12), w // 2, h - 18, "mm")
+                else:
+                    _paste(img, render_text(status_text, _DIM, 12), w // 2, h - 18, "mm")
 
             # ── Footer: league label in bottom line, left-aligned ─────────────
             league_id    = game.get("league", "")
@@ -1059,7 +1128,7 @@ class SportsApp(DisplayApp):
     ) -> None:
         """Scores only — used for very narrow slots where no other content fits."""
         row_h = h // 2
-        font = max(9, min(row_h - 2, 22))
+        font = max(6, min(row_h - 2, 22))
         _paste(img, render_text(away_score, away_color, font, bold=True),
                w // 2, row_h // 2, "mm")
         _paste(img, render_text(home_score, home_color, font, bold=True),

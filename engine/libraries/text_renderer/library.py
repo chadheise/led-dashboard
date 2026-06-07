@@ -13,6 +13,7 @@ from libraries.canvas_utils.library import blit
 
 FONTS_DIR = Path(__file__).parent / "fonts"
 _LORES_DIR: Path = FONTS_DIR / "LoRes"
+_DANIEL_DIR: Path = FONTS_DIR / "DanielLinssen"
 
 # Explicit LoRes font table keyed by design size.
 # Each entry is (regular_filename, bold_filename).
@@ -24,8 +25,22 @@ _LORES_FONTS: dict[int, tuple[str, str]] = {
     22: ("LoRes22OTNarrow-Regular.ttf", "LoRes22OTOakland-Bold.ttf"),
     28: ("LoRes28OT-Regular.ttf",       "LoRes28OT-Regular.ttf"),
 }
+
+# Daniel Linssen pixel fonts for sizes < 9 and the 11px gap between LoRes 9 and 12.
+# No bold variants exist; m6x11plus is the extended-charset edition of m6x11.
+_DANIEL_FONTS: dict[int, tuple[str, str]] = {
+    6:  ("m3x6.ttf",      "m3x6.ttf"),
+    7:  ("m5x7.ttf",      "m5x7.ttf"),
+    11: ("m6x11plus.ttf", "m6x11plus.ttf"),
+}
+
 _LORES_SIZES: list[int] = sorted(_LORES_FONTS)
 _LORES_MAX: int = max(_LORES_SIZES)  # 28
+
+# Unified pixel-font design sizes across both families (DanielLinssen + LoRes)
+_ALL_PIXEL_SIZES: list[int] = sorted(set(_DANIEL_FONTS) | set(_LORES_FONTS))
+_PIXEL_MAX: int = max(_ALL_PIXEL_SIZES)  # 28
+_PIXEL_MIN: int = min(_ALL_PIXEL_SIZES)  # 6
 
 # Roboto variable font (OFL licensed) for sizes > _LORES_MAX.
 # Supports named instances "Regular" and "Bold" via set_variation_by_name.
@@ -43,20 +58,24 @@ _BITMAP_THRESHOLD: int = 80  # grayscale cutoff for pixel-on/off in bitmap_text_
 # ── Module-level utility functions ─────────────────────────────────────────────
 
 
-def _snap_lores_size(size: int) -> int:
-    """Return the nearest supported LoRes design size."""
-    return min(_LORES_SIZES, key=lambda s: abs(s - size))
+def _snap_pixel_size(size: int) -> int:
+    """Return the nearest supported design size across all pixel-font families."""
+    return min(_ALL_PIXEL_SIZES, key=lambda s: abs(s - size))
 
 
 def _resolve_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     """Select the best font for size and bold.
 
-    Sizes ≤ _LORES_MAX: snap to the nearest LoRes design size and load the
-    matching pixel font at that design size (never scaled).
-    Sizes > _LORES_MAX: use Helvetica, falling back to PIL's built-in default.
+    Sizes ≤ _PIXEL_MAX: snap to the nearest supported design size across both
+    DanielLinssen (6, 7, 11) and LoRes (9, 12, 15, 22, 28) pixel-font families,
+    loading each font at its native design size (never scaled).
+    Sizes > _PIXEL_MAX: use Roboto, falling back to PIL's built-in default.
     """
-    if size <= _LORES_MAX:
-        snapped = _snap_lores_size(size)
+    if size <= _PIXEL_MAX:
+        snapped = _snap_pixel_size(size)
+        if snapped in _DANIEL_FONTS:
+            filename = _DANIEL_FONTS[snapped][1 if bold else 0]
+            return load_font_file(_DANIEL_DIR / filename, snapped)
         filename = _LORES_FONTS[snapped][1 if bold else 0]
         return load_font_file(_LORES_DIR / filename, snapped)
     if _ROBOTO_PATH.exists():
@@ -210,8 +229,9 @@ def render_text(
     """Render text with automatic font selection and configurable aliasing.
 
     Font selection (default path):
-        size ≤ 28 → nearest LoRes design size (9, 12, 15, 22, 28), bold variant if bold=True.
-        size > 28 → Helvetica (falls back to PIL built-in if not found on the system).
+        size ≤ 28 → nearest pixel-font design size: DanielLinssen (6, 7, 11) or
+                    LoRes (9, 12, 15, 22, 28), bold variant if bold=True.
+        size > 28 → Roboto (falls back to PIL built-in if not found on the system).
 
     aliasing=True  → smooth anti-aliased render.
     aliasing=False → pixel-perfect: every pixel is either full color or black.
@@ -410,6 +430,10 @@ class TextRendererLibrary(Library):
     @property
     def base_font_h(self) -> int:
         return _BASE_FONT_H
+
+    @property
+    def min_pixel_font_size(self) -> int:
+        return _PIXEL_MIN
 
     @property
     def default_size_threshold(self) -> int:
