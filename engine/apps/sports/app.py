@@ -947,7 +947,7 @@ class SportsApp(DisplayApp):
                 probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
 
                 block_h = probe_city_h + name_gap + probe_team_h + score_gap + probe_score_h
-                city_y  = (content_h - block_h) // 2
+                city_y  = _MARGIN
                 team_y  = city_y + probe_city_h + name_gap
                 score_y = team_y + probe_team_h + score_gap
 
@@ -963,7 +963,6 @@ class SportsApp(DisplayApp):
                 # When location and nickname are identical (common in soccer), show only one label
                 away_dupe = away_city_text.lower() == (game.get("away_nickname") or away_abbr).lower()
                 home_dupe = home_city_text.lower() == (game.get("home_nickname") or home_abbr).lower()
-                name_mid_y = city_y + (probe_city_h + name_gap + probe_team_h) // 2
 
                 # Away (left)
                 ax = 1
@@ -974,7 +973,7 @@ class SportsApp(DisplayApp):
                     img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_top), a_ch)
                     ax += a_logo.size[0] + 2
                 if away_dupe:
-                    _paste(img, render_text(away_team_text, away_color, team_font),              ax, name_mid_y, "lt")
+                    _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,     "lt")
                 else:
                     _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,     "lt")
                     _paste(img, render_text(away_team_text, away_color,      team_font),          ax, team_y,     "lt")
@@ -990,7 +989,7 @@ class SportsApp(DisplayApp):
                     img.paste(Image.merge("RGB", (r, g, b)), (flag_left, logo_top), h_ch)
                     rx -= h_logo.size[0] + 2
                 if home_dupe:
-                    _paste(img, render_text(home_team_text, home_color, team_font),              rx, name_mid_y, "rt")
+                    _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,     "rt")
                 else:
                     _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,     "rt")
                     _paste(img, render_text(home_team_text, home_color,      team_font),         rx, team_y,     "rt")
