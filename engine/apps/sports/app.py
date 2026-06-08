@@ -13,7 +13,7 @@ from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_text, arrow_img, _resolve_font
+from libraries.text_renderer.library import render_text, arrow_img, _resolve_font, fit_text, can_fit_text
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 from libraries.location.library import LocationLibrary
 
@@ -40,13 +40,22 @@ _DEBUG_GAME_IDS: list[str] = [g["id"] for g in _DEBUG_GAMES]
 _DEBUG_GAME_LABELS: dict[str, str] = {g["id"]: g["label"] for g in _DEBUG_GAMES}
 
 
-def _abbrev_round(note: str, w: int) -> str:
-    """Shorten round labels for narrow displays."""
-    if w < 256:
-        note = note.replace("Quarter-Final", "Qtr-Fnl").replace("Semi-Final", "Sem-Fnl")
-    if w <= 128:
-        note = note.replace("Group ", "Grp ")
-    return note
+def _fit_status_with_note(base: str, match_note: str, w: int, h: int) -> str:
+    """Return 'base | match_note', abbreviating match_note if needed to fit center zone.
+
+    Tries the full note first, then progressively abbreviated forms.  The center
+    zone available-width estimate subtracts space for the left/right record zones.
+    """
+    font_ctr = 9 if h >= 64 else 7
+    # Conservative center-zone width: subtract ~60px for left+right record zones on wide screens
+    center_avail = max(10, w - 60) if w >= 128 else max(10, w - 4)
+    abbrev = (match_note
+              .replace("Quarter-Final", "Qtr-Fnl")
+              .replace("Semi-Final",    "Sem-Fnl")
+              .replace("Group ",        "Grp "))
+    full  = f"{base} | {match_note}" if base else match_note
+    short = f"{base} | {abbrev}"     if base else abbrev
+    return fit_text(center_avail, font_ctr, full, short)
 
 
 def _soccer_status_img(status_text: str, font_size: int) -> Image.Image:
@@ -621,12 +630,12 @@ class SportsApp(DisplayApp):
         elif state == "in" and sport == "soccer":
             match_note = game.get("match_note", "")
             if match_note:
-                status_text = f"{status_text} | {_abbrev_round(match_note, w)}"
+                status_text = _fit_status_with_note(status_text, match_note, w, h)
 
         elif state == "post" and sport == "soccer":
             match_note = game.get("match_note", "")
             if match_note:
-                status_text = f"{status_text} | {_abbrev_round(match_note, w)}"
+                status_text = _fit_status_with_note(status_text, match_note, w, h)
 
         elif state == "pre" and not game.get("series_summary"):
             user_tz = self._get_user_tz()
@@ -654,8 +663,7 @@ class SportsApp(DisplayApp):
             if sport == "soccer":
                 match_note = game.get("match_note", "")
                 if match_note:
-                    note = _abbrev_round(match_note, w)
-                    status_text = f"{status_text} | {note}" if status_text else note
+                    status_text = _fit_status_with_note(status_text, match_note, w, h)
 
         # Select layout tier based on available pixel width
         if w >= 128:
@@ -904,36 +912,53 @@ class SportsApp(DisplayApp):
                 cy_bot    = row_h + row_h // 2      # centre of bottom text row
                 cy_mid    = content_h // 2          # vertical centre for logo/score
 
-                away_nick = game.get("away_nickname") or away_abbr
-                home_nick = game.get("home_nickname") or home_abbr
-
-                # Away (left): logo → [abbr / name] → score
+                # Place both logos first, then compute shared two-row decision
                 ax = 1
                 a_logo = self._get_logo(game.get("away_logo_url"), logo_sz)
                 if a_logo:
-                    r, g, b, a = a_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (ax, (content_h - a_logo.size[1]) // 2), a)
+                    r, g, b, a_ch = a_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (ax, (content_h - a_logo.size[1]) // 2), a_ch)
                     ax += a_logo.size[0] + 2
-                a_abbr = render_text(away_abbr, away_city_color, TEXT_FONT)
-                a_nick = render_text(away_nick,  away_color,      TEXT_FONT)
-                _paste(img, a_abbr, ax, cy_top, "lm")
-                _paste(img, a_nick, ax, cy_bot, "lm")
-                ax += max(a_abbr.width, a_nick.width) + 2
-                _paste(img, render_text(away_score, away_color, score_fnt, bold=True), ax, cy_mid, "lm")
+                ax_base = ax
 
-                # Home (right): score → [abbr / name] → logo
                 rx = w - 1
                 h_logo = self._get_logo(game.get("home_logo_url"), logo_sz)
                 if h_logo:
-                    r, g, b, a = h_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], (content_h - h_logo.size[1]) // 2), a)
+                    r, g, b, h_ch = h_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], (content_h - h_logo.size[1]) // 2), h_ch)
                     rx -= h_logo.size[0] + 2
+                rx_base = rx
+
+                a_score_img  = render_text(away_score, away_color, score_fnt, bold=True)
+                h_score_img  = render_text(home_score, home_color, score_fnt, bold=True)
+                nick_avail_a = max(1, w // 2 - ax_base - a_score_img.width - 4)
+                nick_avail_h = max(1, rx_base - w // 2 - h_score_img.width - 4)
+                away_nick_r  = game.get("away_nickname") or ""
+                home_nick_r  = game.get("home_nickname") or ""
+                use_two_rows = (
+                    bool(away_nick_r) and can_fit_text(nick_avail_a, TEXT_FONT, away_nick_r) and
+                    bool(home_nick_r) and can_fit_text(nick_avail_h, TEXT_FONT, home_nick_r)
+                )
+
+                a_abbr = render_text(away_abbr, away_city_color, TEXT_FONT)
+                if use_two_rows:
+                    a_nick = render_text(away_nick_r, away_color, TEXT_FONT)
+                    _paste(img, a_abbr, ax_base, cy_top, "lm")
+                    _paste(img, a_nick, ax_base, cy_bot, "lm")
+                    _paste(img, a_score_img, ax_base + max(a_abbr.width, a_nick.width) + 2, cy_mid, "lm")
+                else:
+                    _paste(img, a_abbr, ax_base, cy_mid, "lm")
+                    _paste(img, a_score_img, ax_base + a_abbr.width + 2, cy_mid, "lm")
+
                 h_abbr = render_text(home_abbr, home_city_color, TEXT_FONT)
-                h_nick = render_text(home_nick,  home_color,      TEXT_FONT)
-                _paste(img, h_abbr, rx, cy_top, "rm")
-                _paste(img, h_nick, rx, cy_bot, "rm")
-                rx -= max(h_abbr.width, h_nick.width) + 2
-                _paste(img, render_text(home_score, home_color, score_fnt, bold=True), rx, cy_mid, "rm")
+                if use_two_rows:
+                    h_nick = render_text(home_nick_r, home_color, TEXT_FONT)
+                    _paste(img, h_abbr, rx_base, cy_top, "rm")
+                    _paste(img, h_nick, rx_base, cy_bot, "rm")
+                    _paste(img, h_score_img, rx_base - max(h_abbr.width, h_nick.width) - 2, cy_mid, "rm")
+                else:
+                    _paste(img, h_abbr, rx_base, cy_mid, "rm")
+                    _paste(img, h_score_img, rx_base - h_abbr.width - 2, cy_mid, "rm")
 
             else:
                 # ── Large format: city / team name / score (3 lines) ───────
@@ -951,20 +976,10 @@ class SportsApp(DisplayApp):
                 team_y  = city_y + probe_city_h + name_gap
                 score_y = team_y + probe_team_h + score_gap
 
-                away_rank_v    = game.get("away_rank")
-                home_rank_v    = game.get("home_rank")
-                away_city_text = game.get("away_location") or away_abbr
-                home_city_text = game.get("home_location") or home_abbr
-                away_team_text = (f"#{away_rank_v} " if away_rank_v and away_rank_v <= 25 else "") \
-                                 + (game.get("away_nickname") or away_abbr)
-                home_team_text = (game.get("home_nickname") or home_abbr) \
-                                 + (f" #{home_rank_v}" if home_rank_v and home_rank_v <= 25 else "")
+                away_rank_v = game.get("away_rank")
+                home_rank_v = game.get("home_rank")
 
-                # When location and nickname are identical (common in soccer), show only one label
-                away_dupe = away_city_text.lower() == (game.get("away_nickname") or away_abbr).lower()
-                home_dupe = home_city_text.lower() == (game.get("home_nickname") or home_abbr).lower()
-
-                # Away (left)
+                # Place both logos first so text widths are known for consistent name decisions
                 ax = 1
                 a_logo = self._get_logo(game.get("away_logo_url"), logo_size)
                 if a_logo:
@@ -972,27 +987,58 @@ class SportsApp(DisplayApp):
                     r, g, b, a_ch = a_logo.split()
                     img.paste(Image.merge("RGB", (r, g, b)), (ax, logo_top), a_ch)
                     ax += a_logo.size[0] + 2
-                if away_dupe:
-                    _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,     "lt")
-                else:
-                    _paste(img, render_text(away_city_text, away_city_color, city_font),         ax, city_y,     "lt")
-                    _paste(img, render_text(away_team_text, away_color,      team_font),          ax, team_y,     "lt")
-                _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
 
-                # Home (right)
                 rx = w - 1
                 h_logo = self._get_logo(game.get("home_logo_url"), logo_size)
                 if h_logo:
-                    logo_top = max(0, (content_h - h_logo.size[1]) // 2)
+                    logo_top  = max(0, (content_h - h_logo.size[1]) // 2)
                     flag_left = rx - h_logo.size[0]
                     r, g, b, h_ch = h_logo.split()
                     img.paste(Image.merge("RGB", (r, g, b)), (flag_left, logo_top), h_ch)
                     rx -= h_logo.size[0] + 2
-                if home_dupe:
-                    _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,     "rt")
+
+                away_text_w   = w // 2 - ax - 2
+                away_city_raw = game.get("away_location") or away_abbr
+                away_nick_raw = game.get("away_nickname") or away_abbr
+                away_rank_pfx = f"#{away_rank_v} " if away_rank_v and away_rank_v <= 25 else ""
+                away_dupe     = away_city_raw.lower() == away_nick_raw.lower()
+
+                home_text_w   = rx - w // 2 - 2
+                home_city_raw = game.get("home_location") or home_abbr
+                home_nick_raw = game.get("home_nickname") or home_abbr
+                home_rank_sfx = f" #{home_rank_v}" if home_rank_v and home_rank_v <= 25 else ""
+                home_dupe     = home_city_raw.lower() == home_nick_raw.lower()
+
+                # Consistent city-row: if either team's full city doesn't fit, both abbreviate
+                city_fits = (
+                    can_fit_text(away_text_w, city_font, away_city_raw) and
+                    can_fit_text(home_text_w, city_font, home_city_raw)
+                )
+                away_city_text = away_city_raw if city_fits else away_abbr
+                home_city_text = home_city_raw if city_fits else home_abbr
+
+                # Consistent team-row: same logic for nicknames
+                team_fits = (
+                    can_fit_text(away_text_w, team_font, away_rank_pfx + away_nick_raw) and
+                    can_fit_text(home_text_w, team_font, home_nick_raw + home_rank_sfx)
+                )
+                away_team_text = (away_rank_pfx + away_nick_raw) if team_fits else away_abbr
+                home_team_text = (home_nick_raw + home_rank_sfx) if team_fits else home_abbr
+
+                if away_dupe:
+                    _paste(img, render_text(away_abbr,      away_city_color, city_font),          ax, city_y,  "lt")
+                    _paste(img, render_text(away_city_text, away_color,      team_font),           ax, team_y,  "lt")
                 else:
-                    _paste(img, render_text(home_city_text, home_city_color, city_font),         rx, city_y,     "rt")
-                    _paste(img, render_text(home_team_text, home_color,      team_font),         rx, team_y,     "rt")
+                    _paste(img, render_text(away_city_text, away_city_color, city_font),           ax, city_y,  "lt")
+                    _paste(img, render_text(away_team_text, away_color,      team_font),           ax, team_y,  "lt")
+                _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
+
+                if home_dupe:
+                    _paste(img, render_text(home_abbr,      home_city_color, city_font),          rx, city_y,  "rt")
+                    _paste(img, render_text(home_city_text, home_color,      team_font),           rx, team_y,  "rt")
+                else:
+                    _paste(img, render_text(home_city_text, home_city_color, city_font),           rx, city_y,  "rt")
+                    _paste(img, render_text(home_team_text, home_color,      team_font),           rx, team_y,  "rt")
                 _paste(img, render_text(home_score,     home_color,      score_font, bold=True), rx, score_y, "rt")
 
         else:
@@ -1009,63 +1055,147 @@ class SportsApp(DisplayApp):
 
             cy = content_h // 2  # vertical centre for inline layout
 
+            # Build preferred (full) display strings — rank prefix preserved, fallback to abbr
+            _away_rank = game.get("away_rank")
+            _home_rank = game.get("home_rank")
+            _away_rank_pfx = f"#{_away_rank} " if _away_rank and _away_rank <= 25 else ""
+            _home_rank_sfx = f" #{_home_rank}" if _home_rank and _home_rank <= 25 else ""
+            away_full = _away_rank_pfx + (game.get("away_nickname") or game["away_abbr"])
+            home_full = (game.get("home_nickname") or game["home_abbr"]) + _home_rank_sfx
+
             if h <= 32:
-                # ── Inline layout for 32px: logo | abbr | score on one row ──
+                # ── Inline layout for 32px: logo | name | score on one row ──
                 # Basketball uses a non-bold narrow font for scores (numbers are wider when bold)
                 score_bold = game.get("sport") != "basketball"
+                # Sub-row geometry for two-row name display
+                sub_font = max(7, content_h // 2 - 2)
+                row_h_s  = content_h // 2
+                cy_top_s = row_h_s // 2
+                cy_bot_s = row_h_s + row_h_s // 2
 
-                # Away (left)
+                # Place both logos first, then compute shared two-row decision
                 ax = 1
                 a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
                 if a_logo:
-                    r, g, b, a = a_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
+                    r, g, b, a_ch = a_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a_ch)
                     ax += a_logo.size[0] + 2
-                a_img = render_text(away_abbr, away_color, abbr_font)
-                _paste(img, a_img, ax, cy, "lm")
-                ax += a_img.width + 2
-                _paste(img, render_text(away_score, away_color, score_font, bold=score_bold), ax, cy, "lm")
+                ax_base = ax
 
-                # Home (right)
                 rx = w - 1
                 h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
                 if h_logo:
-                    r, g, b, a = h_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
+                    r, g, b, h_ch = h_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), h_ch)
                     rx -= h_logo.size[0] + 2
-                a_img = render_text(home_abbr, home_color, abbr_font)
-                _paste(img, a_img, rx, cy, "rm")
-                rx -= a_img.width + 2
-                _paste(img, render_text(home_score, home_color, score_font, bold=score_bold), rx, cy, "rm")
+                rx_base = rx
+
+                a_score_img = render_text(away_score, away_color, score_font, bold=score_bold)
+                h_score_img = render_text(home_score, home_color, score_font, bold=score_bold)
+                away_name_w = max(1, w // 2 - ax_base - a_score_img.width - 4)
+                home_name_w = max(1, rx_base - w // 2 - h_score_img.width - 4)
+                away_nick   = game.get("away_nickname") or ""
+                home_nick   = game.get("home_nickname") or ""
+                use_two_rows = (
+                    bool(away_nick) and can_fit_text(away_name_w, sub_font, away_nick) and
+                    bool(home_nick) and can_fit_text(home_name_w, sub_font, home_nick)
+                )
+                use_full_32w = (
+                    can_fit_text(away_name_w, abbr_font, away_full) and
+                    can_fit_text(home_name_w, abbr_font, home_full)
+                )
+
+                if use_two_rows:
+                    a_abbr_s = render_text(away_abbr, away_color, sub_font)
+                    a_nick_s = render_text(away_nick,  away_color, sub_font)
+                    a_name_blk = max(a_abbr_s.width, a_nick_s.width)
+                    _paste(img, a_abbr_s,    ax_base, cy_top_s, "lm")
+                    _paste(img, a_nick_s,    ax_base, cy_bot_s, "lm")
+                    _paste(img, a_score_img, ax_base + a_name_blk + 2, cy, "lm")
+                else:
+                    a_img = render_text(away_full if use_full_32w else away_abbr, away_color, abbr_font)
+                    _paste(img, a_img,       ax_base, cy, "lm")
+                    _paste(img, a_score_img, ax_base + a_img.width + 2, cy, "lm")
+
+                if use_two_rows:
+                    h_abbr_s = render_text(home_abbr, home_color, sub_font)
+                    h_nick_s = render_text(home_nick,  home_color, sub_font)
+                    h_name_blk = max(h_abbr_s.width, h_nick_s.width)
+                    _paste(img, h_abbr_s,    rx_base, cy_top_s, "rm")
+                    _paste(img, h_nick_s,    rx_base, cy_bot_s, "rm")
+                    _paste(img, h_score_img, rx_base - h_name_blk - 2, cy, "rm")
+                else:
+                    h_img = render_text(home_full if use_full_32w else home_abbr, home_color, abbr_font)
+                    _paste(img, h_img,       rx_base, cy, "rm")
+                    _paste(img, h_score_img, rx_base - h_img.width - 2, cy, "rm")
 
             else:
-                # ── Stacked layout for taller displays: abbr over score ──────
+                # ── Stacked layout for taller displays: name over score ──────
+                NICK_FONT     = 9   # fixed smaller font for optional nickname row
                 probe_abbr_h  = render_text("A", (255, 255, 255), abbr_font).height
+                probe_nick_h  = render_text("A", (255, 255, 255), NICK_FONT).height
                 probe_score_h = render_text("0", (255, 255, 255), score_font, bold=True).height
                 text_gap      = 4
+                nick_gap      = 2
                 block_h       = probe_abbr_h + text_gap + probe_score_h
-                abbr_y        = (content_h - block_h) // 2
+                abbr_y        = _MARGIN
                 score_y       = abbr_y + probe_abbr_h + text_gap
+                three_rows_fit = (block_avail >= probe_abbr_h + nick_gap + probe_nick_h + text_gap + probe_score_h)
+                away_city_color = _team_color(game.get("away_alt_color", ""), game.get("away_color", ""))
+                home_city_color = _team_color(game.get("home_alt_color", ""), game.get("home_color", ""))
 
-                # Away (left)
+                # Place both logos first to get true available text widths
                 ax = 1
                 a_logo = self._get_logo(game.get("away_logo_url"), logo_size, max_width=logo_max_w)
                 if a_logo:
-                    r, g, b, a = a_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a)
+                    r, g, b, a_ch = a_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (ax, max(0, (content_h - a_logo.size[1]) // 2)), a_ch)
                     ax += a_logo.size[0] + 2
-                _paste(img, render_text(away_abbr,  away_color, abbr_font),             ax, abbr_y,  "lt")
-                _paste(img, render_text(away_score, away_color, score_font, bold=True), ax, score_y, "lt")
+                ax_base = ax
 
-                # Home (right)
                 rx = w - 1
                 h_logo = self._get_logo(game.get("home_logo_url"), logo_size, max_width=logo_max_w)
                 if h_logo:
-                    r, g, b, a = h_logo.split()
-                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), a)
+                    r, g, b, h_ch = h_logo.split()
+                    img.paste(Image.merge("RGB", (r, g, b)), (rx - h_logo.size[0], max(0, (content_h - h_logo.size[1]) // 2)), h_ch)
                     rx -= h_logo.size[0] + 2
-                _paste(img, render_text(home_abbr,  home_color, abbr_font),             rx, abbr_y,  "rt")
-                _paste(img, render_text(home_score, home_color, score_font, bold=True), rx, score_y, "rt")
+                rx_base = rx
+
+                away_name_w = max(1, w // 2 - ax_base - 2)
+                home_name_w = max(1, rx_base - w // 2 - 2)
+                away_nick   = game.get("away_nickname") or ""
+                home_nick   = game.get("home_nickname") or ""
+                use_three_rows = (
+                    three_rows_fit and
+                    bool(away_nick) and can_fit_text(away_name_w, NICK_FONT, away_nick) and
+                    bool(home_nick) and can_fit_text(home_name_w, NICK_FONT, home_nick)
+                )
+                use_full_wide = (
+                    can_fit_text(away_name_w, abbr_font, away_full) and
+                    can_fit_text(home_name_w, abbr_font, home_full)
+                )
+
+                if use_three_rows:
+                    nick_y_a  = abbr_y + probe_abbr_h + nick_gap
+                    score_y_a = nick_y_a + probe_nick_h + text_gap
+                    _paste(img, render_text(away_abbr,  away_city_color, abbr_font),         ax_base, abbr_y,    "lt")
+                    _paste(img, render_text(away_nick,  away_color,      NICK_FONT),          ax_base, nick_y_a,  "lt")
+                    _paste(img, render_text(away_score, away_color,      score_font, bold=True), ax_base, score_y_a, "lt")
+                else:
+                    away_display = away_full if use_full_wide else away_abbr
+                    _paste(img, render_text(away_display, away_color, abbr_font),             ax_base, abbr_y,  "lt")
+                    _paste(img, render_text(away_score,   away_color, score_font, bold=True), ax_base, score_y, "lt")
+
+                if use_three_rows:
+                    nick_y_h  = abbr_y + probe_abbr_h + nick_gap
+                    score_y_h = nick_y_h + probe_nick_h + text_gap
+                    _paste(img, render_text(home_abbr,  home_city_color, abbr_font),         rx_base, abbr_y,    "rt")
+                    _paste(img, render_text(home_nick,  home_color,      NICK_FONT),          rx_base, nick_y_h,  "rt")
+                    _paste(img, render_text(home_score, home_color,      score_font, bold=True), rx_base, score_y_h, "rt")
+                else:
+                    home_display = home_full if use_full_wide else home_abbr
+                    _paste(img, render_text(home_display, home_color, abbr_font),             rx_base, abbr_y,  "rt")
+                    _paste(img, render_text(home_score,   home_color, score_font, bold=True), rx_base, score_y, "rt")
 
         # ── Baseball situation (S and larger) ──────────────────────────────
         if w >= 128 and game.get("state") == "in" and game.get("sport") == "baseball":
@@ -1103,6 +1233,14 @@ class SportsApp(DisplayApp):
         status_text: str,
     ) -> None:
         """Away top / home bottom. Logo left; abbr+score block centred on the logo."""
+        # Full display names — rank prefix preserved, abbreviated fallback
+        _away_rank = game.get("away_rank")
+        _home_rank = game.get("home_rank")
+        away_full = (f"#{_away_rank} " if _away_rank and _away_rank <= 25 else "") \
+                    + (game.get("away_nickname") or game["away_abbr"])
+        home_full = (game.get("home_nickname") or game["home_abbr"]) \
+                    + (f" #{_home_rank}" if _home_rank and _home_rank <= 25 else "")
+
         # ── 32px ultra-compact layout ─────────────────────────────────────────
         if h <= 32:
             STATUS_H    = 9
@@ -1112,13 +1250,20 @@ class SportsApp(DisplayApp):
             is_baseball = game.get("sport") == "baseball"
             situation   = game.get("situation") or {}
 
-            for i, (abbr, score, color) in enumerate([
-                (away_abbr, away_score, away_color),
-                (home_abbr, home_score, home_color),
+            _s32 = [render_text(s, c, font, bold=True) for s, c in [(away_score, away_color), (home_score, home_color)]]
+            _nw32 = [max(1, w - 2 - _s32[j].width - 3 - 2) for j in range(2)]
+            use_full_32s = (
+                can_fit_text(_nw32[0], font, away_full) and
+                can_fit_text(_nw32[1], font, home_full)
+            )
+
+            for i, (abbr, full, score, color) in enumerate([
+                (away_abbr, away_full, away_score, away_color),
+                (home_abbr, home_full, home_score, home_color),
             ]):
                 cy = i * team_h + team_h // 2
-                a  = render_text(abbr,  color, font)
-                s  = render_text(score, color, font, bold=True)
+                s  = _s32[i]
+                a  = render_text(full if use_full_32s else abbr, color, font)
                 _paste(img, a, 2,               cy, "lm")
                 _paste(img, s, 2 + a.width + 3, cy, "lm")
 
@@ -1144,9 +1289,36 @@ class SportsApp(DisplayApp):
         logo_size = max(6, team_h - 4)
         text_font = max(12, team_h)
 
-        for i, (logo_key, abbr, score, color) in enumerate([
-            ("away_logo_url", away_abbr, away_score, away_color),
-            ("home_logo_url", home_abbr, home_score, home_color),
+        # Sub-row dimensions for two-row name display (abbr top, nickname bottom)
+        row_h_sub   = team_h // 2
+        NICK_FONT_S = max(7, row_h_sub - 2)
+        away_city_color_s = _team_color(game.get("away_alt_color", ""), game.get("away_color", ""))
+        home_city_color_s = _team_color(game.get("home_alt_color", ""), game.get("home_color", ""))
+
+        # Pre-compute consistent two-row decision for both teams before rendering
+        _pre_logos = [
+            self._get_logo(game.get(k), logo_size)
+            for k in ("away_logo_url", "home_logo_url")
+        ]
+        _pre_lx = [2 + (_pre_logos[i].size[0] + 3 if not hide_logo and _pre_logos[i] else 0) for i in range(2)]
+        _pre_score_ws = [
+            render_text(s, c, text_font, bold=True).width
+            for s, c in [(away_score, away_color), (home_score, home_color)]
+        ]
+        _pre_name_ws = [max(1, w - _pre_lx[i] - _pre_score_ws[i] - 5) for i in range(2)]
+        _pre_nicks   = [game.get("away_nickname") or "", game.get("home_nickname") or ""]
+        use_two_rows_s = all(
+            nick and can_fit_text(nw, NICK_FONT_S, nick)
+            for nick, nw in zip(_pre_nicks, _pre_name_ws)
+        )
+        use_full_stacked = (
+            can_fit_text(_pre_name_ws[0], text_font, away_full) and
+            can_fit_text(_pre_name_ws[1], text_font, home_full)
+        )
+
+        for i, (logo_key, nick_key, abbr, full, score, color, city_color) in enumerate([
+            ("away_logo_url", "away_nickname", away_abbr, away_full, away_score, away_color, away_city_color_s),
+            ("home_logo_url", "home_nickname", home_abbr, home_full, home_score, home_color, home_city_color_s),
         ]):
             y_top   = i * team_h
             lx      = 2
@@ -1162,10 +1334,22 @@ class SportsApp(DisplayApp):
                     img.paste(Image.merge("RGB", (r, g, b)), (lx, logo_y), a)
                     lx += logo.size[0] + 3
 
-            abbr_img  = render_text(abbr,  color, text_font)
             score_img = render_text(score, color, text_font, bold=True)
-            _paste(img, abbr_img,  lx,                       logo_cy, "lm")
-            _paste(img, score_img, lx + abbr_img.width + 3,  logo_cy, "lm")
+            nick      = game.get(nick_key) or ""
+            if use_two_rows_s:
+                cy_top_r   = y_top + row_h_sub // 2
+                cy_bot_r   = y_top + row_h_sub + row_h_sub // 2
+                abbr_r     = render_text(abbr, city_color, NICK_FONT_S)
+                nick_r     = render_text(nick, color,      NICK_FONT_S)
+                name_blk_w = max(abbr_r.width, nick_r.width)
+                _paste(img, abbr_r,    lx,                  cy_top_r, "lm")
+                _paste(img, nick_r,    lx,                  cy_bot_r, "lm")
+                _paste(img, score_img, lx + name_blk_w + 3, logo_cy,  "lm")
+            else:
+                display  = full if use_full_stacked else abbr
+                abbr_img = render_text(display, color, text_font)
+                _paste(img, abbr_img,  lx,                       logo_cy, "lm")
+                _paste(img, score_img, lx + abbr_img.width + 3,  logo_cy, "lm")
 
         self._draw_footer(img, game, w, h, status_text)
 

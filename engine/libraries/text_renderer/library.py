@@ -179,6 +179,28 @@ def measure_text(
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 
+def can_fit_text(max_width: int, size: int, text: str, bold: bool = False) -> bool:
+    """Return True if text renders within max_width pixels at the given font size."""
+    font  = _resolve_font(size, bold)
+    dummy = ImageDraw.Draw(Image.new("L", (1, 1)))
+    bbox  = dummy.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0] <= max_width
+
+
+def fit_text(max_width: int, size: int, *candidates: str, bold: bool = False) -> str:
+    """Return the first candidate whose rendered pixel width fits within max_width.
+
+    Try candidates in order (longest/preferred first). Return the last candidate
+    if none fit. Return "" if no candidates are given.
+    """
+    if not candidates:
+        return ""
+    for text in candidates:
+        if can_fit_text(max_width, size, text, bold=bold):
+            return text
+    return candidates[-1]
+
+
 def draw_text_centered(
     canvas: Canvas,
     text: str,
@@ -427,6 +449,8 @@ class TextRendererLibrary(Library):
     load_font_file = staticmethod(load_font_file)
     select_font = staticmethod(select_font)
     measure_text = staticmethod(measure_text)
+    can_fit_text = staticmethod(can_fit_text)
+    fit_text = staticmethod(fit_text)
     draw_text_centered = staticmethod(draw_text_centered)
     render_text = staticmethod(render_text)
     render_lores = staticmethod(render_lores)
