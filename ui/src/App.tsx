@@ -40,7 +40,10 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Playlists />} />
           <Route path="/modules" element={<Modules />} />
+          <Route path="/modules/:id" element={<Modules />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/settings/app/:appId" element={<Settings />} />
+          <Route path="/settings/library/:libId" element={<Settings />} />
         </Routes>
       </div>
     </div>
