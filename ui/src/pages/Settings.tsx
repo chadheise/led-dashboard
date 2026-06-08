@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppForm from "../components/AppForm";
 import AppIcon from "../components/AppIcon";
 import {
@@ -45,9 +46,16 @@ type NavState =
   | { kind: "library"; id: string; fromApp?: string };
 
 export default function Settings() {
+  const { appId, libId } = useParams<{ appId?: string; libId?: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [apps, setApps] = useState<AppInfo[]>([]);
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
-  const [nav, setNav] = useState<NavState>(null);
+  const nav: NavState = appId
+    ? { kind: "app", id: appId }
+    : libId
+      ? { kind: "library", id: libId, fromApp: (location.state as { fromApp?: string } | null)?.fromApp }
+      : null;
   const [appConfigs, setAppConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [libConfigs, setLibConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [saved, setSaved] = useState(false);
@@ -70,11 +78,18 @@ export default function Settings() {
     });
   }, []);
 
+  // Redirect to /settings if the URL points at an app/library that doesn't exist
+  useEffect(() => {
+    if (apps.length === 0 && libraries.length === 0) return;
+    if (appId && !apps.some((a) => a.id === appId)) navigate("/settings", { replace: true });
+    if (libId && !libraries.some((l) => l.id === libId)) navigate("/settings", { replace: true });
+  }, [appId, libId, apps, libraries, navigate]);
+
   const goBack = () => {
     if (nav?.kind === "library" && nav.fromApp) {
-      setNav({ kind: "app", id: nav.fromApp });
+      navigate(`/settings/app/${nav.fromApp}`);
     } else {
-      setNav(null);
+      navigate("/settings");
     }
     setSaved(false);
   };
@@ -187,21 +202,21 @@ export default function Settings() {
               <div style={{ marginTop: 28, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
                 <div style={sectionLabelStyle}>LIBRARIES USED</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-                  {selectedApp.libraries.map((libId) => {
-                    const lib = libraries.find((l) => l.id === libId);
+                  {selectedApp.libraries.map((id) => {
+                    const lib = libraries.find((l) => l.id === id);
                     return (
                       <button
-                        key={libId}
+                        key={id}
                         type="button"
-                        onClick={() => { setSaved(false); setNav({ kind: "library", id: libId, fromApp: nav.id }); }}
-                        onMouseEnter={() => setHovered(libId)}
+                        onClick={() => { setSaved(false); navigate(`/settings/library/${id}`, { state: { fromApp: nav.id } }); }}
+                        onMouseEnter={() => setHovered(id)}
                         onMouseLeave={() => setHovered(null)}
                         style={{
                           display: "flex",
                           alignItems: "center",
                           gap: 6,
                           padding: "6px 12px",
-                          background: hovered === libId ? C.surfaceHover : C.surface,
+                          background: hovered === id ? C.surfaceHover : C.surface,
                           border: `1px solid ${C.border}`,
                           borderRadius: 4,
                           cursor: "pointer",
@@ -211,8 +226,8 @@ export default function Settings() {
                           transition: "background 0.15s",
                         }}
                       >
-                        <AppIcon appId={libId} size={14} />
-                        {lib?.name ?? libId}
+                        <AppIcon appId={id} size={14} />
+                        {lib?.name ?? id}
                         <span style={{ color: C.textMuted, fontSize: "0.9em" }}>→</span>
                       </button>
                     );
@@ -284,10 +299,10 @@ export default function Settings() {
             </p>
 
             <div style={sectionLabelStyle}>APP TYPE</div>
-            {cardGrid(apps, (id) => setNav({ kind: "app", id }))}
+            {cardGrid(apps, (id) => navigate(`/settings/app/${id}`))}
 
             <div style={{ ...sectionLabelStyle, marginTop: 24 }}>LIBRARIES</div>
-            {cardGrid(libraries, (id) => setNav({ kind: "library", id }))}
+            {cardGrid(libraries, (id) => navigate(`/settings/library/${id}`))}
           </>
         )}
 

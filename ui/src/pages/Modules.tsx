@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import AppForm from "../components/AppForm";
 import AppIcon, { PencilIcon, TrashIcon } from "../components/AppIcon";
 import DisplayPreview from "../components/DisplayPreview";
@@ -171,9 +172,11 @@ function AppCardGrid({
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export default function Modules() {
+  const { id: routeId } = useParams<{ id?: string }>();
+  const navigate = useNavigate();
+  const editing = routeId ?? null;
   const [modules, setModules] = useState<Module[]>([]);
   const [apps, setApps] = useState<AppInfo[]>([]);
-  const [editing, setEditing] = useState<string | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
   const [fName, setFName] = useState("");
   const [fAppId, setFAppId] = useState("");
@@ -250,26 +253,41 @@ export default function Modules() {
   useEffect(() => { if (!editing) setShowSizePreviews(false); }, [editing]);
 
   // ── Navigation ─────────────────────────────────────────────────────────────
-  const openNew = () => {
-    setFName("");
-    setFAppId("");
-    setFConfig({});
-    setStep(1);
-    setEditing("new");
-  };
-  const openEdit = (m: Module) => {
-    setFName(m.name);
-    setFAppId(m.app_id);
-    setFConfig(m.config);
-    setOrigName(m.name);
-    setOrigAppId(m.app_id);
-    setOrigConfig(m.config);
-    setStep(2);
-    setEditing(m.id);
-  };
+  // Sync form state from the URL — covers clicks (openNew/openEdit navigate)
+  // as well as direct loads/back-forward navigation to /modules/new or /modules/:id
+  const syncedEditing = useRef<string | null>(null);
+  useEffect(() => {
+    if (editing === syncedEditing.current) return;
+    if (editing === "new") {
+      setFName("");
+      setFAppId("");
+      setFConfig({});
+      setStep(1);
+      syncedEditing.current = "new";
+    } else if (editing) {
+      const m = modules.find((mod) => mod.id === editing);
+      if (!m) {
+        if (modules.length > 0) navigate("/modules", { replace: true });
+        return;
+      }
+      setFName(m.name);
+      setFAppId(m.app_id);
+      setFConfig(m.config);
+      setOrigName(m.name);
+      setOrigAppId(m.app_id);
+      setOrigConfig(m.config);
+      setStep(2);
+      syncedEditing.current = editing;
+    } else {
+      syncedEditing.current = null;
+    }
+  }, [editing, modules, navigate]);
+
+  const openNew = () => navigate("/modules/new");
+  const openEdit = (m: Module) => navigate(`/modules/${m.id}`);
   const goBack = () => {
     if (editing === "new" && step === 2) setStep(1);
-    else setEditing(null);
+    else navigate("/modules");
   };
 
   const handleAppSelect = async (id: string) => {
@@ -322,13 +340,13 @@ export default function Modules() {
         prev.map((m) => (m.id === editing ? { ...m, ...body } : m)),
       );
     }
-    setEditing(null);
+    navigate("/modules");
   };
 
   const remove = async (id: string) => {
     await fetch(`/api/modules/${id}`, { method: "DELETE" });
     setModules((prev) => prev.filter((m) => m.id !== id));
-    if (editing === id) setEditing(null);
+    if (editing === id) navigate("/modules");
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
