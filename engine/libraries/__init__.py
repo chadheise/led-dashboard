@@ -7,6 +7,7 @@ from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
 from libraries.location.library import LocationLibrary
 from libraries.spotify.library import SpotifyLibrary
+from libraries.open_meteo.library import OpenMeteoLibrary
 
 LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "canvas_utils": CanvasUtilsLibrary,
@@ -17,4 +18,5 @@ LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "flightaware": FlightAwareLibrary,
     "location": LocationLibrary,
     "spotify": SpotifyLibrary,
+    "open_meteo": OpenMeteoLibrary,
 }

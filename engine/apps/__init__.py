@@ -3,6 +3,7 @@ from apps.sports.app import SportsApp
 from apps.spotify.app import SpotifyApp
 from apps.stocks.app import StocksApp
 from apps.text.app import TextApp
+from apps.weather.app import WeatherApp
 
 APP_REGISTRY: dict[str, type] = {
     TextApp.id: TextApp,
@@ -10,4 +11,5 @@ APP_REGISTRY: dict[str, type] = {
     SportsApp.id: SportsApp,
     FlightsApp.id: FlightsApp,
     SpotifyApp.id: SpotifyApp,
+    WeatherApp.id: WeatherApp,
 }
