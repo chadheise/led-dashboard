@@ -603,12 +603,6 @@ class SportsApp(DisplayApp):
         situation = game.get("situation") or {}
 
         if state == "in" and sport == "football":
-            # Append record to each abbreviation
-            if game.get("away_record"):
-                away_abbr = f"{away_abbr} ({game['away_record']})"
-            if game.get("home_record"):
-                home_abbr = f"{home_abbr} ({game['home_record']})"
-
             # Possession indicator — ESPN ref looks like ".../teams/{id}"
             pos_ref = (situation.get("possession") or {}).get("$ref", "") \
                 if isinstance(situation.get("possession"), dict) \
