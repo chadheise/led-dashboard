@@ -1,3 +1,4 @@
+from apps.countdown.app import CountdownApp
 from apps.flights.app import FlightsApp
 from apps.sports.app import SportsApp
 from apps.spotify.app import SpotifyApp
@@ -11,6 +12,7 @@ APP_REGISTRY: dict[str, type] = {
     StocksApp.id: StocksApp,
     SportsApp.id: SportsApp,
     FlightsApp.id: FlightsApp,
+    CountdownApp.id: CountdownApp,
     SpotifyApp.id: SpotifyApp,
     WeatherApp.id: WeatherApp,
     WorldClockApp.id: WorldClockApp,

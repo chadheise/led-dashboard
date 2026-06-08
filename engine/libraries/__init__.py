@@ -9,6 +9,7 @@ from libraries.location.library import LocationLibrary
 from libraries.spotify.library import SpotifyLibrary
 from libraries.open_meteo.library import OpenMeteoLibrary
 from libraries.timezones.library import TimezonesLibrary
+from libraries.holidays.library import HolidaysLibrary
 
 LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "canvas_utils": CanvasUtilsLibrary,
@@ -21,4 +22,5 @@ LIBRARY_REGISTRY: dict[str, type[Library]] = {
     "spotify": SpotifyLibrary,
     "open_meteo": OpenMeteoLibrary,
     "timezones": TimezonesLibrary,
+    "holidays": HolidaysLibrary,
 }
