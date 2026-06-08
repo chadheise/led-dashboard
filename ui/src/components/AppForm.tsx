@@ -27,6 +27,8 @@ interface SchemaProperty {
    *   'float'        Decimal number input
    *   'boolean'      Checkbox toggle (default for type:boolean)
    *   'color'        Native color picker + hex field
+   *   'datetime'     Native date+time picker; value is an ISO-ish "YYYY-MM-DDTHH:MM"
+   *                  string, directly `datetime.fromisoformat`-parseable
    *   'location'     Paired latitude / longitude fields (value: {latitude,longitude})
    *   'multi-select' Checkbox group built from items.enum
    *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
@@ -94,6 +96,20 @@ function ColorInput({ title, value, onChange }: { title: string; value: unknown;
           style={{ ...fieldStyle, flex: 1 }}
         />
       </div>
+    </label>
+  )
+}
+
+function DateTimeInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: string) => void }) {
+  return (
+    <label style={labelStyle}>
+      {title}
+      <input
+        type="datetime-local"
+        value={typeof value === 'string' ? value : ''}
+        onChange={e => onChange(e.target.value)}
+        style={fieldStyle}
+      />
     </label>
   )
 }
@@ -189,6 +205,17 @@ export default function AppForm({ schema, value, onChange }: Props) {
               title={title}
               value={v}
               onChange={hex => onChange({ ...value, [key]: hex })}
+            />
+          )
+        }
+
+        if (xType === 'datetime') {
+          return (
+            <DateTimeInput
+              key={key}
+              title={title}
+              value={v}
+              onChange={dt => onChange({ ...value, [key]: dt })}
             />
           )
         }
