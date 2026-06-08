@@ -940,23 +940,25 @@ class SportsApp(DisplayApp):
                     bool(home_nick_r) and can_fit_text(nick_avail_h, TEXT_FONT, home_nick_r)
                 )
 
-                a_abbr = render_text(away_abbr, away_city_color, TEXT_FONT)
                 if use_two_rows:
-                    a_nick = render_text(away_nick_r, away_color, TEXT_FONT)
+                    a_abbr = render_text(away_abbr,   away_city_color, TEXT_FONT)
+                    a_nick = render_text(away_nick_r,  away_color,      TEXT_FONT)
                     _paste(img, a_abbr, ax_base, cy_top, "lm")
                     _paste(img, a_nick, ax_base, cy_bot, "lm")
                     _paste(img, a_score_img, ax_base + max(a_abbr.width, a_nick.width) + 2, cy_mid, "lm")
                 else:
+                    a_abbr = render_text(away_abbr, away_color, TEXT_FONT)
                     _paste(img, a_abbr, ax_base, cy_mid, "lm")
                     _paste(img, a_score_img, ax_base + a_abbr.width + 2, cy_mid, "lm")
 
-                h_abbr = render_text(home_abbr, home_city_color, TEXT_FONT)
                 if use_two_rows:
-                    h_nick = render_text(home_nick_r, home_color, TEXT_FONT)
+                    h_abbr = render_text(home_abbr,   home_city_color, TEXT_FONT)
+                    h_nick = render_text(home_nick_r,  home_color,      TEXT_FONT)
                     _paste(img, h_abbr, rx_base, cy_top, "rm")
                     _paste(img, h_nick, rx_base, cy_bot, "rm")
                     _paste(img, h_score_img, rx_base - max(h_abbr.width, h_nick.width) - 2, cy_mid, "rm")
                 else:
+                    h_abbr = render_text(home_abbr, home_color, TEXT_FONT)
                     _paste(img, h_abbr, rx_base, cy_mid, "rm")
                     _paste(img, h_score_img, rx_base - h_abbr.width - 2, cy_mid, "rm")
 
@@ -1025,17 +1027,23 @@ class SportsApp(DisplayApp):
                 away_team_text = (away_rank_pfx + away_nick_raw) if team_fits else away_abbr
                 home_team_text = (home_nick_raw + home_rank_sfx) if team_fits else home_abbr
 
-                if away_dupe:
-                    _paste(img, render_text(away_abbr,      away_city_color, city_font),          ax, city_y,  "lt")
-                    _paste(img, render_text(away_city_text, away_color,      team_font),           ax, team_y,  "lt")
+                if away_dupe and away_city_text != away_abbr:
+                    # Two rows: abbr in secondary, full city name in primary
+                    _paste(img, render_text(away_abbr,      away_city_color, city_font), ax, city_y, "lt")
+                    _paste(img, render_text(away_city_text, away_color,      team_font), ax, team_y, "lt")
+                elif away_dupe:
+                    # Single row (city == abbr): primary color, consistent with all other single-row paths
+                    _paste(img, render_text(away_abbr, away_color, city_font), ax, city_y, "lt")
                 else:
                     _paste(img, render_text(away_city_text, away_city_color, city_font),           ax, city_y,  "lt")
                     _paste(img, render_text(away_team_text, away_color,      team_font),           ax, team_y,  "lt")
                 _paste(img, render_text(away_score,     away_color,      score_font, bold=True), ax, score_y, "lt")
 
-                if home_dupe:
-                    _paste(img, render_text(home_abbr,      home_city_color, city_font),          rx, city_y,  "rt")
-                    _paste(img, render_text(home_city_text, home_color,      team_font),           rx, team_y,  "rt")
+                if home_dupe and home_city_text != home_abbr:
+                    _paste(img, render_text(home_abbr,      home_city_color, city_font), rx, city_y, "rt")
+                    _paste(img, render_text(home_city_text, home_color,      team_font), rx, team_y, "rt")
+                elif home_dupe:
+                    _paste(img, render_text(home_abbr, home_color, city_font), rx, city_y, "rt")
                 else:
                     _paste(img, render_text(home_city_text, home_city_color, city_font),           rx, city_y,  "rt")
                     _paste(img, render_text(home_team_text, home_color,      team_font),           rx, team_y,  "rt")
@@ -1096,6 +1104,8 @@ class SportsApp(DisplayApp):
                 home_name_w = max(1, rx_base - w // 2 - h_score_img.width - 4)
                 away_nick   = game.get("away_nickname") or ""
                 home_nick   = game.get("home_nickname") or ""
+                away_city_color_32w = _team_color(game.get("away_alt_color", ""), game.get("away_color", ""))
+                home_city_color_32w = _team_color(game.get("home_alt_color", ""), game.get("home_color", ""))
                 use_two_rows = (
                     bool(away_nick) and can_fit_text(away_name_w, sub_font, away_nick) and
                     bool(home_nick) and can_fit_text(home_name_w, sub_font, home_nick)
@@ -1106,8 +1116,8 @@ class SportsApp(DisplayApp):
                 )
 
                 if use_two_rows:
-                    a_abbr_s = render_text(away_abbr, away_color, sub_font)
-                    a_nick_s = render_text(away_nick,  away_color, sub_font)
+                    a_abbr_s = render_text(away_abbr, away_city_color_32w, sub_font)
+                    a_nick_s = render_text(away_nick,  away_color,          sub_font)
                     a_name_blk = max(a_abbr_s.width, a_nick_s.width)
                     _paste(img, a_abbr_s,    ax_base, cy_top_s, "lm")
                     _paste(img, a_nick_s,    ax_base, cy_bot_s, "lm")
@@ -1118,8 +1128,8 @@ class SportsApp(DisplayApp):
                     _paste(img, a_score_img, ax_base + a_img.width + 2, cy, "lm")
 
                 if use_two_rows:
-                    h_abbr_s = render_text(home_abbr, home_color, sub_font)
-                    h_nick_s = render_text(home_nick,  home_color, sub_font)
+                    h_abbr_s = render_text(home_abbr, home_city_color_32w, sub_font)
+                    h_nick_s = render_text(home_nick,  home_color,          sub_font)
                     h_name_blk = max(h_abbr_s.width, h_nick_s.width)
                     _paste(img, h_abbr_s,    rx_base, cy_top_s, "rm")
                     _paste(img, h_nick_s,    rx_base, cy_bot_s, "rm")
