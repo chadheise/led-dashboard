@@ -89,6 +89,9 @@ class SpotifyApp(DisplayApp):
         self._title_offset: float = 0.0
         self._artist_offset: float = 0.0
 
+    async def should_display(self) -> bool:
+        return bool(self._track and self._track.get("is_playing"))
+
     async def on_activate(self) -> None:
         self._title_offset = float(self.canvas.width)
         self._artist_offset = float(self.canvas.width)

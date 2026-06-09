@@ -39,6 +39,7 @@ class PlaylistEntry:
     library_configs: dict[str, dict[str, Any]] = field(default_factory=dict)
     entry_id: str = field(default_factory=lambda: str(uuid4()))
     layout: SceneLayout | None = None  # None = single app filling the full canvas
+    skip_if_hidden: bool = False
 
 
 class SceneManager:
@@ -199,7 +200,27 @@ class SceneManager:
             return
         entry = self._entries[self._current_idx]
         if time.monotonic() - self._last_switch >= entry.duration:
-            await self.next_scene()
+            await self._advance_to_next_visible()
+
+    async def _advance_to_next_visible(self) -> None:
+        n = len(self._scenes)
+        for skip in range(1, n + 1):
+            candidate_idx = (self._current_idx + skip) % n
+            entry = self._entries[candidate_idx]
+            if entry.skip_if_hidden:
+                scene = self._scenes[candidate_idx]
+                if scene and not await scene[0][0].should_display():
+                    continue
+            for app, _ in self._current_scene():
+                await app.on_deactivate()
+            self._current_idx = candidate_idx
+            for app, _ in self._current_scene():
+                await app.on_activate()
+            self._last_switch = time.monotonic()
+            self._paused = False
+            return
+        # All scenes hidden — stay on current, reset timer to retry after duration
+        self._last_switch = time.monotonic()
 
     # ── Render ─────────────────────────────────────────────────────────────
 
