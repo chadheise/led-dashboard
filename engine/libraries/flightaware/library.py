@@ -18,10 +18,12 @@ logger = logging.getLogger(__name__)
 
 _AEROAPI_BASE = "https://aeroapi.flightaware.com/aeroapi"
 
-_ENRICHMENT_CACHE_TTL: float = 7 * 24 * 3600  # 7 days; route data is stable week-to-week
 _CACHE_PATH = Path("data/flightaware_cache.json")
 _BUDGET_PATH = Path("data/flightaware_budget.json")
-_MONTHLY_BUDGET = 800  # ~$4 at $0.005/call; hard ceiling for free tier
+
+# Module-level defaults — also used as schema defaults
+_DEFAULT_CACHE_TTL_DAYS: int = 7
+_DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
 
 
 class FlightAwareLibrary(Library):
@@ -43,6 +45,30 @@ class FlightAwareLibrary(Library):
                 "type": "string",
                 "title": "AeroAPI Key (optional)",
                 "default": "",
+                "x-no-reset": True,
+            },
+            "cache_ttl_days": {
+                "type": "number",
+                "title": "Enrichment cache TTL (days)",
+                "description": (
+                    "How long to cache flight route data before re-fetching. "
+                    "Route/airline info rarely changes — longer values save more API calls."
+                ),
+                "default": _DEFAULT_CACHE_TTL_DAYS,
+                "minimum": 1,
+                "maximum": 90,
+            },
+            "monthly_budget": {
+                "type": "integer",
+                "title": "Monthly API call budget",
+                "description": (
+                    "Maximum FlightAware API calls per month. "
+                    "At ~$0.005/call on the free tier, $5 = 1000 calls. "
+                    "Default 800 leaves a $1 safety margin."
+                ),
+                "default": _DEFAULT_MONTHLY_BUDGET,
+                "minimum": 100,
+                "maximum": 10000,
             },
         },
     }
@@ -56,6 +82,18 @@ class FlightAwareLibrary(Library):
         self._load_disk_cache()
         self._load_budget()
 
+    # ── Config properties ─────────────────────────────────────────────────────
+
+    @property
+    def _cache_ttl(self) -> float:
+        """Cache TTL in seconds, read from config."""
+        return float(self._config.get("cache_ttl_days", _DEFAULT_CACHE_TTL_DAYS)) * 24 * 3600
+
+    @property
+    def _budget_limit(self) -> int:
+        """Monthly call budget, read from config."""
+        return int(self._config.get("monthly_budget", _DEFAULT_MONTHLY_BUDGET))
+
     # ── Disk cache ────────────────────────────────────────────────────────────
 
     def _load_disk_cache(self) -> None:
@@ -66,7 +104,7 @@ class FlightAwareLibrary(Library):
                 self._enrichment_cache = {
                     cs: (entry["fetched_at"], entry["data"])
                     for cs, entry in raw.items()
-                    if now - entry["fetched_at"] < _ENRICHMENT_CACHE_TTL
+                    if now - entry["fetched_at"] < self._cache_ttl
                 }
                 logger.info(
                     "FlightAware: loaded %d cached enrichments from disk",
@@ -82,7 +120,7 @@ class FlightAwareLibrary(Library):
             payload = {
                 cs: {"fetched_at": ts, "data": d}
                 for cs, (ts, d) in self._enrichment_cache.items()
-                if now - ts < _ENRICHMENT_CACHE_TTL
+                if now - ts < self._cache_ttl
             }
             tmp = _CACHE_PATH.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload))
@@ -103,14 +141,15 @@ class FlightAwareLibrary(Library):
                     self._budget_calls = int(data.get("calls", 0))
                     logger.info(
                         "FlightAware: %d/%d API calls used this month",
-                        self._budget_calls, _MONTHLY_BUDGET,
+                        self._budget_calls, self._budget_limit,
                     )
         except Exception as exc:
             logger.warning("FlightAware: budget load failed: %s", exc)
 
     @property
     def budget_tier(self) -> str:
-        ratio = self._budget_calls / _MONTHLY_BUDGET
+        limit = self._budget_limit
+        ratio = self._budget_calls / limit
         if ratio >= 1.0:
             return "disabled"
         if ratio >= 0.95:
@@ -128,7 +167,7 @@ class FlightAwareLibrary(Library):
         if new_tier != prev_tier:
             logger.warning(
                 "FlightAware: budget tier changed %s → %s (%d/%d calls this month)",
-                prev_tier, new_tier, self._budget_calls, _MONTHLY_BUDGET,
+                prev_tier, new_tier, self._budget_calls, self._budget_limit,
             )
         try:
             _BUDGET_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -157,7 +196,7 @@ class FlightAwareLibrary(Library):
                 cs: self._enrichment_cache[cs][1]
                 for cs in callsigns
                 if cs in self._enrichment_cache
-                and now - self._enrichment_cache[cs][0] < _ENRICHMENT_CACHE_TTL
+                and now - self._enrichment_cache[cs][0] < self._cache_ttl
             }
 
         now = time.time()
@@ -166,7 +205,7 @@ class FlightAwareLibrary(Library):
 
         for cs in callsigns:
             entry = self._enrichment_cache.get(cs)
-            if entry is not None and (now - entry[0]) < _ENRICHMENT_CACHE_TTL:
+            if entry is not None and (now - entry[0]) < self._cache_ttl:
                 result[cs] = entry[1]  # cache hit — no HTTP call
             else:
                 to_fetch.append(cs)

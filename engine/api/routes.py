@@ -159,6 +159,25 @@ async def save_library_config(
     return body.config
 
 
+@router.post("/libraries/{lib_id}/config/reset")
+async def reset_library_config(request: Request, lib_id: str) -> dict[str, Any]:
+    """Restore all non-credential schema defaults, preserving x-no-reset fields."""
+    from libraries import LIBRARY_REGISTRY
+    _require_library(lib_id)
+    cls = LIBRARY_REGISTRY[lib_id]
+    schema_props = cls.global_config_schema.get("properties", {})
+    current = request.app.state.store.get_library_config(lib_id)
+    restored = dict(current)
+    for key, prop in schema_props.items():
+        if prop.get("x-no-reset"):
+            continue
+        if "default" in prop:
+            restored[key] = prop["default"]
+    request.app.state.store.save_library_config(lib_id, restored)
+    await _maybe_reload(request)
+    return restored
+
+
 class AppConfigBody(BaseModel):
     config: dict[str, Any] = {}
 

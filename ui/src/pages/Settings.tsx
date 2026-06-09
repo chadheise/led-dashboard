@@ -59,6 +59,7 @@ export default function Settings() {
   const [appConfigs, setAppConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [libConfigs, setLibConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [saved, setSaved] = useState(false);
+  const [restored, setRestored] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
 
   useEffect(() => {
@@ -117,6 +118,16 @@ export default function Settings() {
     });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  };
+
+  const restoreLibDefaults = async (libId: string) => {
+    const res = await fetch(`/api/libraries/${libId}/config/reset`, { method: "POST" });
+    if (res.ok) {
+      const defaults = await res.json();
+      setLibConfigs((prev) => ({ ...prev, [libId]: defaults }));
+      setRestored(true);
+      setTimeout(() => setRestored(false), 2000);
+    }
   };
 
   const selectedApp = nav?.kind === "app" ? apps.find((a) => a.id === nav.id) : null;
@@ -272,9 +283,15 @@ export default function Settings() {
                   />
                   <div style={{ marginTop: 20, display: "flex", alignItems: "center", gap: 12 }}>
                     <button onClick={() => saveLib(nav.id)} style={btn("success")}>SAVE</button>
+                    <button onClick={() => restoreLibDefaults(nav.id)} style={btn("ghost")}>RESTORE DEFAULTS</button>
                     {saved && (
                       <span style={{ color: C.positive, fontSize: F.size.sm, fontFamily: F.family }}>
                         Saved ✓
+                      </span>
+                    )}
+                    {restored && !saved && (
+                      <span style={{ color: C.neutral, fontSize: F.size.sm, fontFamily: F.family }}>
+                        Defaults restored ✓
                       </span>
                     )}
                   </div>
