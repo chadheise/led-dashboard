@@ -26,6 +26,7 @@ interface PlaylistItem {
   module_name: string;
   app_id: string | null;
   duration: number;
+  skip_if_hidden: boolean;
 }
 interface Playlist {
   id: string;
@@ -46,6 +47,7 @@ interface AppInfo {
 interface EditItem {
   module_id: string;
   duration: number;
+  skip_if_hidden: boolean;
 }
 
 // ── Local layout styles ───────────────────────────────────────────────────────
@@ -184,6 +186,7 @@ export default function Playlists() {
     const items = pl.items.map((it) => ({
       module_id: it.module_id,
       duration: it.duration,
+      skip_if_hidden: it.skip_if_hidden ?? false,
     }));
     setFName(pl.name);
     setFItems(items);
@@ -260,7 +263,7 @@ export default function Playlists() {
     if (modules.length)
       setFItems((prev) => [
         ...prev,
-        { module_id: modules[0].id, duration: 30 },
+        { module_id: modules[0].id, duration: 30, skip_if_hidden: false },
       ]);
   };
   const updateItem = (idx: number, patch: Partial<EditItem>) =>
@@ -800,6 +803,28 @@ export default function Playlists() {
                     <span style={{ color: C.textMuted, fontSize: F.size.sm }}>
                       s
                     </span>
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 4,
+                        cursor: "pointer",
+                        color: item.skip_if_hidden ? C.textSecondary : C.textDim,
+                        fontSize: F.size.xs,
+                        whiteSpace: "nowrap",
+                        fontFamily: F.family,
+                        letterSpacing: F.tracking.wider,
+                      }}
+                      title="Skip this module when the app reports no data to display"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={item.skip_if_hidden}
+                        onChange={(e) => updateItem(idx, { skip_if_hidden: e.target.checked })}
+                        style={{ accentColor: C.sage, cursor: "pointer" }}
+                      />
+                      AUTO-HIDE
+                    </label>
                     <button
                       onClick={() => removeItem(idx)}
                       style={iconBtn("danger")}

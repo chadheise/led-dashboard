@@ -439,6 +439,9 @@ class SportsApp(DisplayApp):
         self._stagger_slot_idx = list(range(n))
         self._stagger_slot_counter = [i * stagger_offset for i in range(n)]
 
+    async def should_display(self) -> bool:
+        return bool(self._games)
+
     async def on_activate(self) -> None:
         self._page_idx = 0
         self._frame_count = 0

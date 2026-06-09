@@ -29,6 +29,7 @@ class ModuleBody(BaseModel):
 class PlaylistItemBody(BaseModel):
     module_id: str
     duration: float = 30.0
+    skip_if_hidden: bool = False
 
 
 class PlaylistBody(BaseModel):
@@ -271,6 +272,7 @@ def _playlist_view(store: Any, pl: Playlist) -> dict[str, Any]:
                 "module_name": module.name if module else "(deleted)",
                 "app_id": module.app_id if module else None,
                 "duration": it.duration,
+                "skip_if_hidden": it.skip_if_hidden,
             }
         )
     return {
@@ -294,7 +296,7 @@ def create_playlist(request: Request, body: PlaylistBody) -> dict[str, Any]:
         Playlist(
             name=body.name,
             items=[
-                PlaylistItem(module_id=it.module_id, duration=it.duration)
+                PlaylistItem(module_id=it.module_id, duration=it.duration, skip_if_hidden=it.skip_if_hidden)
                 for it in body.items
             ],
         )
@@ -313,7 +315,7 @@ async def update_playlist(
         id=playlist_id,
         name=body.name,
         items=[
-            PlaylistItem(module_id=it.module_id, duration=it.duration)
+            PlaylistItem(module_id=it.module_id, duration=it.duration, skip_if_hidden=it.skip_if_hidden)
             for it in body.items
         ],
     )
@@ -444,6 +446,7 @@ async def _reload_scene_manager(
             duration=e["duration"],
             global_config=e.get("global_config", {}),
             library_configs=e.get("library_configs", {}),
+            skip_if_hidden=e.get("skip_if_hidden", False),
         )
         for e in resolved
     ]

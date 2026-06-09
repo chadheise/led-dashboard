@@ -39,6 +39,9 @@ class DisplayApp(ABC):
     @abstractmethod
     async def render_frame(self) -> None: ...
 
+    async def should_display(self) -> bool:
+        return True
+
     async def on_activate(self) -> None:
         pass
 

@@ -31,6 +31,7 @@ class PlaylistItem(BaseModel):
 
     module_id: str = Field(validation_alias=AliasChoices("module_id", "run_id"))
     duration: float = 30.0
+    skip_if_hidden: bool = False
 
 
 class Playlist(BaseModel):
@@ -150,6 +151,7 @@ class StateStore:
                         "module_name": module.name,
                         "global_config": self._state.app_configs.get(module.app_id, {}),
                         "library_configs": all_library_configs,
+                        "skip_if_hidden": item.skip_if_hidden,
                     }
                 )
         return result

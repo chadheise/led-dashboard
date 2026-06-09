@@ -186,6 +186,9 @@ class FlightsApp(DisplayApp):
         self._unit_ts: float = time.monotonic()
         self._is_active: bool = False
 
+    async def should_display(self) -> bool:
+        return not self._fetched_once or bool(self._flights)
+
     async def on_activate(self) -> None:
         self._is_active = True
 
