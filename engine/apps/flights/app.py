@@ -184,6 +184,13 @@ class FlightsApp(DisplayApp):
         self._card_last_ts: float = 0.0
         self._show_imperial: bool = False
         self._unit_ts: float = time.monotonic()
+        self._is_active: bool = False
+
+    async def on_activate(self) -> None:
+        self._is_active = True
+
+    async def on_deactivate(self) -> None:
+        self._is_active = False
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -214,8 +221,10 @@ class FlightsApp(DisplayApp):
 
         now = time.monotonic()
         min_card_s = float(self.config.get("min_card_seconds", 5.0))
-        self._flights = await self._opensky.fetch_flights(lat, lon, radius_km, max_flights)
+        opensky_result = await self._opensky.fetch_flights(lat, lon, radius_km, max_flights)
         self._fetched_once = True
+        if opensky_result is not None:
+            self._flights = opensky_result  # None means throttled/error — keep stale data
 
         elapsed = now - self._card_last_ts
         if elapsed >= min_card_s or not self._flights:
@@ -225,7 +234,38 @@ class FlightsApp(DisplayApp):
             self._card_idx = min(self._card_idx, len(self._flights) - 1)
 
         callsigns = [f["callsign"] for f in self._flights]
-        self._enriched = await self._flightaware.enrich_flights(callsigns)
+
+        if self._is_active:
+            tier = self._flightaware.budget_tier
+            if tier == "disabled":
+                # Budget exhausted: serve cache only
+                enrich_callsigns: list[str] = []
+            elif tier in ("conservative", "minimal"):
+                # Budget tight: only enrich the currently displayed flight
+                current_cs = (
+                    self._flights[self._card_idx % len(self._flights)]["callsign"]
+                    if self._flights else None
+                )
+                enrich_callsigns = [current_cs] if current_cs else []
+            elif self.config.get("display_mode") == "table":
+                # Table mode: all flights visible, enrich all (cache handles repeats)
+                enrich_callsigns = callsigns
+            else:
+                # Card mode: enrich current card + next 2 (prefetch upcoming)
+                n = len(self._flights)
+                idxs = [(self._card_idx + i) % n for i in range(min(3, n))]
+                enrich_callsigns = [self._flights[i]["callsign"] for i in idxs]
+
+            new_enriched = await self._flightaware.enrich_flights(enrich_callsigns)
+            # Merge: prefer fresh data, retain previously loaded enrichment for the rest
+            self._enriched = {
+                cs: new_enriched.get(cs) or self._enriched.get(cs, {})
+                for cs in callsigns
+            }
+        else:
+            # Off-screen: retain enrichment for flights still in range
+            self._enriched = {cs: self._enriched.get(cs, {}) for cs in callsigns}
+
         await self._fetch_logos()
 
     async def _fetch_logos(self) -> None:
