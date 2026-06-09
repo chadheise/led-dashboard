@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw
 from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints, split_vertical
+from marquee import Marquee
 from libraries.canvas_utils.library import blit
 from libraries.yahoo_finance.library import YahooFinanceLibrary, PRESET_GROUPS
 from libraries.text_renderer.library import TextRendererLibrary
@@ -153,9 +154,7 @@ class StocksApp(DisplayApp):
         # Marquee state (one entry per stream/row)
         self._marquee_pct_rows: list[Image.Image | None] = []
         self._marquee_dol_rows: list[Image.Image | None] = []
-        self._row_widths: list[int] = []
-        self._row_offsets: list[float] = []
-        self._row_speeds: list[float] = []
+        self._row_marquees: list[Marquee] = []
 
         # Paginate state
         self._page_cache: dict[tuple[bool, int], Image.Image] = {}
@@ -191,7 +190,7 @@ class StocksApp(DisplayApp):
         self._page_counter = 0
         self._chart_page = 0
         self._chart_page_counter = 0
-        self._row_offsets = []
+        self._row_marquees = []
         await self.fetch_data()
 
     # ── Data fetching ──────────────────────────────────────────────────────────
@@ -305,15 +304,15 @@ class StocksApp(DisplayApp):
         n_rows = layout["n_rows"]
 
         self._marquee_pct_rows, self._marquee_dol_rows = self._render_both_marquees(layout)
-        self._row_widths = [img.width if img else 0 for img in self._marquee_pct_rows]
 
-        if len(self._row_offsets) != n_rows:
-            self._row_offsets = [0.0 for _ in range(n_rows)]
-
-        if n_rows <= 1:
-            self._row_speeds = [2.0]
-        else:
-            self._row_speeds = [2.0 + 1.5 * i / (n_rows - 1) for i in range(n_rows)]
+        if len(self._row_marquees) != n_rows:
+            if n_rows <= 1:
+                speeds = [2.0]
+            else:
+                speeds = [2.0 + 1.5 * i / (n_rows - 1) for i in range(n_rows)]
+            self._row_marquees = [
+                Marquee(direction="left", speed=s, loop=True) for s in speeds
+            ]
 
         self._page_cache.clear()
 
@@ -671,23 +670,10 @@ class StocksApp(DisplayApp):
         n_rows = len(rows_imgs)
         row_regions = split_vertical(self.canvas, n_rows)
 
-        for i, (img, region) in enumerate(zip(rows_imgs, row_regions)):
+        for img, region, marquee in zip(rows_imgs, row_regions, self._row_marquees):
             if img is None:
                 continue
-            strip_w = self._row_widths[i]
-            if strip_w <= 0:
-                continue
-
-            # Advance and keep offset in [-strip_w, 0) for seamless looping
-            self._row_offsets[i] -= self._row_speeds[i]
-            if self._row_offsets[i] <= -strip_w:
-                self._row_offsets[i] += strip_w
-
-            # Draw enough copies of the strip to fill the row with no gap
-            x = int(self._row_offsets[i])
-            while x < region.width:
-                blit(region, img, x)
-                x += strip_w
+            marquee.render(region, img)
 
     def _fit_text(
         self,

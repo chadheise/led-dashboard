@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw
 from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints
+from marquee import Marquee
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, arrow_img, _resolve_font, fit_text, can_fit_text
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
@@ -294,7 +295,7 @@ class SportsApp(DisplayApp):
 
         # Marquee state
         self._marquee_strip: Image.Image | None = None
-        self._marquee_offset: float = 0.0
+        self._marquee = Marquee(direction="left", speed=1.5, loop=True)
 
         # Staggered state
         self._stagger_slot_idx: list[int] = []
@@ -441,7 +442,7 @@ class SportsApp(DisplayApp):
     async def on_activate(self) -> None:
         self._page_idx = 0
         self._frame_count = 0
-        self._marquee_offset = 0.0
+        self._marquee.reset(self.canvas)
         self._marquee_strip = None
         self._init_stagger_state()
         await self.fetch_data()
@@ -497,24 +498,8 @@ class SportsApp(DisplayApp):
         if self._marquee_strip is None:
             return
 
-        strip = self._marquee_strip
-        strip_w = strip.width
-        cw = self.canvas.width
-        ch = self.canvas.height
-        speed = float(self.config.get("marquee_speed", 1.5))
-
-        off = int(self._marquee_offset)
-        img = Image.new("RGB", (cw, ch), (0, 0, 0))
-        img.paste(strip, (off, 0))
-        # Wrap: show start of strip when the end has scrolled into view
-        if off < 0:
-            img.paste(strip, (off + strip_w, 0))
-
-        blit(self.canvas, img)
-
-        self._marquee_offset -= speed
-        if self._marquee_offset <= -strip_w:
-            self._marquee_offset = 0.0
+        self._marquee.speed = float(self.config.get("marquee_speed", 1.5))
+        self._marquee.render(self.canvas, self._marquee_strip)
 
     def _render_staggered_frame(self) -> None:
         n = self._scores_per_screen()

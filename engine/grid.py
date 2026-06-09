@@ -40,6 +40,16 @@ def split_vertical(canvas: Canvas, n: int) -> list[CanvasRegion]:
     return regions
 
 
+def split_grid(canvas: Canvas, rows: int, cols: int) -> list[list[CanvasRegion]]:
+    """Split canvas into a rows×cols grid.
+
+    Returns a 2-D list indexed as grid[row][col]. Each cell is a CanvasRegion
+    whose coordinates are local to that cell. The last row and last column each
+    absorb any pixel remainder from integer division.
+    """
+    return [split_horizontal(row_region, cols) for row_region in split_vertical(canvas, rows)]
+
+
 @dataclass(frozen=True)
 class SizeConstraints:
     """Minimum pixel dimensions an app needs to render sensibly.

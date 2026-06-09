@@ -6,6 +6,7 @@ from PIL import Image
 
 from canvas.base import Canvas
 from app_base import DisplayApp
+from marquee import Marquee
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text
 
@@ -35,7 +36,7 @@ class TextApp(DisplayApp):
 
     def __init__(self, config: dict[str, Any], canvas: Canvas, global_config: dict[str, Any] | None = None, library_configs: dict[str, dict[str, Any]] | None = None) -> None:
         super().__init__(config, canvas, global_config, library_configs)
-        self._offset = 0
+        self._marquee = Marquee(direction="left", speed=2.0, loop=False)
         self._rendered: Image.Image | None = None
         self._text_w = 0
 
@@ -44,7 +45,7 @@ class TextApp(DisplayApp):
 
     async def on_activate(self) -> None:
         self._build_image()
-        self._offset = self.canvas.width
+        self._marquee.reset(self.canvas)
 
     def _build_image(self) -> None:
         msg = str(self.config.get("message", ""))
@@ -63,10 +64,7 @@ class TextApp(DisplayApp):
         scroll = bool(self.config.get("scroll", True))
 
         if scroll:
-            blit(self.canvas, self._rendered, self._offset)
-            self._offset -= 2
-            if self._offset < -self._text_w:
-                self._offset = self.canvas.width
+            self._marquee.render(self.canvas, self._rendered)
         else:
             x_offset = (self.canvas.width - self._text_w) // 2
             blit(self.canvas, self._rendered, x_offset)
