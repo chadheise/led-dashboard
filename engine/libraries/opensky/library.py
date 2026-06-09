@@ -16,6 +16,11 @@ _TOKEN_URL = (
     "/protocol/openid-connect/token"
 )
 
+# Module-level defaults — also used as schema defaults
+_DEFAULT_BACKOFF_BASE: int = 60    # seconds before first retry after 429
+_DEFAULT_BACKOFF_MAX: int = 180    # cap in seconds
+_BACKOFF_FACTOR: float = 2.0
+
 
 def _km_to_deg(km: float) -> float:
     return km / 111.0
@@ -38,11 +43,35 @@ class OpenSkyLibrary(Library):
                 "type": "string",
                 "title": "Client ID (optional)",
                 "default": "",
+                "x-no-reset": True,
             },
             "opensky_client_secret": {
                 "type": "string",
                 "title": "Client Secret (optional)",
                 "default": "",
+                "x-no-reset": True,
+            },
+            "backoff_base_seconds": {
+                "type": "integer",
+                "title": "Throttle backoff — initial (seconds)",
+                "description": (
+                    "How long to wait after the first 429 rate-limit response before retrying. "
+                    "Doubles on each consecutive throttle up to the maximum."
+                ),
+                "default": _DEFAULT_BACKOFF_BASE,
+                "minimum": 10,
+                "maximum": 300,
+            },
+            "backoff_max_seconds": {
+                "type": "integer",
+                "title": "Throttle backoff — maximum (seconds)",
+                "description": (
+                    "Cap on the wait between throttled retries. "
+                    "Stale flight positions are shown on-screen during this window."
+                ),
+                "default": _DEFAULT_BACKOFF_MAX,
+                "minimum": 30,
+                "maximum": 900,
             },
         },
     }
@@ -51,6 +80,16 @@ class OpenSkyLibrary(Library):
         super().__init__(config)
         self._token: str | None = None
         self._token_expiry: float = 0.0
+        self._throttled_until: float = 0.0
+        self._backoff_interval: float = self._backoff_base
+
+    @property
+    def _backoff_base(self) -> float:
+        return float(self._config.get("backoff_base_seconds", _DEFAULT_BACKOFF_BASE))
+
+    @property
+    def _backoff_max(self) -> float:
+        return float(self._config.get("backoff_max_seconds", _DEFAULT_BACKOFF_MAX))
 
     async def fetch_flights(
         self,
@@ -58,7 +97,16 @@ class OpenSkyLibrary(Library):
         lon: float,
         radius_km: float,
         max_flights: int = 10,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, Any]] | None:
+        """Return fresh flights, [] if none in range, or None if throttled/errored (use stale data)."""
+        now = time.monotonic()
+        if now < self._throttled_until:
+            logger.info(
+                "OpenSky: rate-limited, serving stale data (%.0fs remaining)",
+                self._throttled_until - now,
+            )
+            return None
+
         d = _km_to_deg(radius_km)
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
@@ -76,15 +124,31 @@ class OpenSkyLibrary(Library):
                     params=params,
                     headers=headers,
                 )
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                backoff = (
+                    min(float(retry_after), self._backoff_max)
+                    if retry_after and retry_after.isdigit()
+                    else self._backoff_interval
+                )
+                self._throttled_until = time.monotonic() + backoff
+                self._backoff_interval = min(self._backoff_interval * _BACKOFF_FACTOR, self._backoff_max)
+                logger.warning(
+                    "OpenSky: throttled (429), backing off %.0fs (showing stale data)", backoff
+                )
+                return None
             if resp.status_code != 200:
-                logger.warning("OpenSky returned HTTP %d", resp.status_code)
-                return []
+                logger.warning("OpenSky: HTTP %d, serving stale data", resp.status_code)
+                return None
             if not resp.content:
                 return []
             data = resp.json()
         except Exception as exc:
             logger.warning("OpenSky fetch failed: %s", exc)
-            return []
+            return None
+
+        # Successful response — reset backoff to configured base
+        self._backoff_interval = self._backoff_base
 
         flights: list[dict[str, Any]] = []
         for state in data.get("states") or []:
