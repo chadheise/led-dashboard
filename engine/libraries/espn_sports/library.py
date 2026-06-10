@@ -467,6 +467,19 @@ class ESPNSportsLibrary(Library):
             # In-game situational data (football: down/distance/possession; baseball: runners/outs)
             situation = comp.get("situation") or {}
 
+            # Most recent play, when the scoreboard includes one (live games).
+            # Normalized defensively — celebration detection degrades gracefully
+            # when ESPN omits it for a sport or game.
+            lp = situation.get("lastPlay") or {}
+            last_play: dict[str, str] | None = None
+            if lp:
+                last_play = {
+                    "id": str(lp.get("id") or ""),
+                    "type_text": str(((lp.get("type") or {}).get("text")) or ""),
+                    "text": str(lp.get("text") or ""),
+                    "team_id": str(((lp.get("team") or {}).get("id")) or ""),
+                }
+
             # Team records (for football display)
             home_record: str | None = next(
                 (r.get("summary") for r in home.get("records", []) if r.get("name") == "overall"),
@@ -521,6 +534,7 @@ class ESPNSportsLibrary(Library):
 
             games.append(
                 {
+                    "id": str(event.get("id") or ""),
                     "league": league,
                     "sport": sport,
                     "home_abbr": home_team.get("abbreviation", "???"),
@@ -548,6 +562,7 @@ class ESPNSportsLibrary(Library):
                     "home_conf": home_conf,
                     "away_conf": away_conf,
                     "situation": situation,
+                    "last_play": last_play,
                     "home_id": home_team.get("id", ""),
                     "away_id": away_team.get("id", ""),
                     "home_record": home_record,

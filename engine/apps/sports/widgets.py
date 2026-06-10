@@ -8,9 +8,11 @@ they never return an image wider than asked for.
 
 from __future__ import annotations
 
+import math
+
 from PIL import Image, ImageDraw
 
-from libraries.layout.library import TextSpec, first_fitting, text_img
+from libraries.layout.library import TextSpec, first_fitting, fit_font_size, text_img
 from libraries.text_renderer.library import _resolve_font, arrow_img, render_text
 
 from .colors import RGB
@@ -279,6 +281,152 @@ def goal_list_img(
     for img in imgs:
         out.paste(img, ((col_w - img.width) // 2, y))
         y += row_h + _GOAL_GAP
+    return out
+
+
+# ── Celebrations ───────────────────────────────────────────────────────────────
+
+_CELEBRATION_TEXT: dict[str, tuple[str, str]] = {
+    "goal": ("GOAL!", "GOAL"),
+    "touchdown": ("TOUCHDOWN!", "TD!"),
+    "field_goal": ("FIELD GOAL!", "FG!"),
+    "interception": ("INTERCEPTION!", "INT!"),
+    "home_run": ("HOME RUN!", "HR!"),
+}
+
+CELEBRATION_ANIM_FRAMES = 8
+
+_BALL_WHITE: RGB = (235, 235, 235)
+_BALL_DARK: RGB = (30, 30, 30)
+_FOOTBALL_BROWN: RGB = (150, 75, 30)
+_STITCH_RED: RGB = (220, 40, 40)
+
+# Vertical bounce offsets (fraction of available headroom, eighths).
+_BOUNCE_8THS = [0, 1, 3, 5, 6, 5, 3, 1]
+
+
+def celebration_color(view: GameView) -> RGB:
+    """The scoring team's color, or the highlight yellow when side is unknown."""
+    celeb = view.celebration
+    if celeb is not None and celeb.side in ("away", "home"):
+        return getattr(view, celeb.side).color
+    return YELLOW
+
+
+def celebration_text_img(kind: str, color: RGB, max_h: int, max_w: int) -> Image.Image:
+    """Biggest fitting form of the celebration text: full, abbreviated, truncated."""
+    full, abbr = _CELEBRATION_TEXT.get(kind, (kind.upper(), kind.upper()))
+    for text in (full, abbr):
+        font = fit_font_size(text, max_h, max_w, bold=True)
+        if font is not None:
+            return text_img(TextSpec(text, font, bold=True), color)
+    return truncate_to_fit(abbr, color, 7, max_w)
+
+
+def _soccer_ball(frame: int, size: int) -> Image.Image:
+    """White ball with a dark patch orbiting the centre (spin), bouncing."""
+    d = max(7, min(size, 13))
+    d = d if d % 2 else d - 1
+    img = Image.new("RGB", (d, size), (0, 0, 0))
+    headroom = size - d
+    y0 = round(_BOUNCE_8THS[frame % 8] / 6 * headroom) if headroom > 0 else 0
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([0, y0, d - 1, y0 + d - 1], fill=_BALL_WHITE, outline=(120, 120, 120))
+    c = d // 2
+    # Three small pentagon patches orbiting the centre read as a spinning ball.
+    r_orbit = max(1, d * 3 // 10)
+    r_patch = max(1, d // 8)
+    for k in range(3):
+        angle = (frame % 8 / 8 + k / 3) * 2 * math.pi
+        px_x = c + round(r_orbit * math.cos(angle))
+        px_y = y0 + c + round(r_orbit * math.sin(angle))
+        draw.ellipse(
+            [px_x - r_patch, px_y - r_patch, px_x + r_patch, px_y + r_patch],
+            fill=_BALL_DARK,
+        )
+    return img
+
+
+def _football_ball(frame: int, size: int) -> Image.Image:
+    """Brown ellipse with white laces, tumbling end over end."""
+    s = max(9, size)
+    s = s if s % 2 else s - 1
+    ball = Image.new("RGBA", (s, s), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(ball)
+    c = s // 2
+    ry = max(2, s * 5 // 16)
+    draw.ellipse([0, c - ry, s - 1, c + ry], fill=(*_FOOTBALL_BROWN, 255))
+    lace_w = max(2, s // 4)
+    draw.line([c - lace_w // 2, c, c + lace_w // 2, c], fill=(255, 255, 255, 255))
+    for dx in range(-lace_w // 2, lace_w // 2 + 1, 2):
+        draw.line([c + dx, c - 1, c + dx, c + 1], fill=(255, 255, 255, 255))
+    rotated = ball.rotate(frame % 8 * 45, resample=Image.NEAREST)
+    out = Image.new("RGB", (s, s), (0, 0, 0))
+    out.paste(rotated.convert("RGB"), (0, 0), rotated.split()[3])
+    return out
+
+
+def _baseball_ball(frame: int, size: int) -> Image.Image:
+    """White ball with red stitch arcs, rising out of the frame and looping."""
+    d = max(7, min(size, 11))
+    d = d if d % 2 else d - 1
+    img = Image.new("RGB", (d, size), (0, 0, 0))
+    headroom = size - d
+    y0 = round((1 - frame % 8 / 7) * headroom) if headroom > 0 else 0
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([0, y0, d - 1, y0 + d - 1], fill=_BALL_WHITE, outline=(120, 120, 120))
+    inset = max(1, d // 4)
+    draw.arc([-inset, y0, inset * 2, y0 + d - 1], 300, 60, fill=_STITCH_RED)
+    draw.arc([d - 1 - inset * 2, y0, d - 1 + inset, y0 + d - 1], 120, 240, fill=_STITCH_RED)
+    return img
+
+
+_SPRITES = {
+    "soccer": _soccer_ball,
+    "football": _football_ball,
+    "baseball": _baseball_ball,
+}
+
+
+def celebration_sprite(sport: str, frame: int, size: int) -> Image.Image | None:
+    """One animation frame of the sport's ball, sized to fit a size×size box."""
+    draw_fn = _SPRITES.get(sport)
+    if draw_fn is None or size < 7:
+        return None
+    return draw_fn(frame % CELEBRATION_ANIM_FRAMES, size)
+
+
+_CELEB_GAP = 1
+_MIN_SPRITE = 8
+
+
+def celebration_img(view: GameView, max_h: int, max_w: int) -> Image.Image:
+    """Centre-column celebration: animated sprite above the pulsing big text.
+
+    The text's space is always reserved (blanked during the off pulse phase)
+    so the layout never shifts; the sprite keeps animating through both
+    phases so the card stays visibly alive. The sprite degrades first, then
+    drops entirely, before the text gives up any size.
+    """
+    celeb = view.celebration
+    assert celeb is not None
+    color = celebration_color(view)
+    text = celebration_text_img(celeb.kind, color, min(max_h, 15), max_w)
+
+    sprite = None
+    sprite_space = max_h - text.height - _CELEB_GAP
+    if sprite_space >= _MIN_SPRITE:
+        sprite = celebration_sprite(view.sport, celeb.anim_frame, min(sprite_space, 17))
+
+    width = max(text.width, sprite.width if sprite is not None else 0, 1)
+    height = text.height + (sprite.height + _CELEB_GAP if sprite is not None else 0)
+    out = Image.new("RGB", (width, height), (0, 0, 0))
+    y = 0
+    if sprite is not None:
+        out.paste(sprite, ((width - sprite.width) // 2, y))
+        y += sprite.height + _CELEB_GAP
+    if celeb.pulse_on:
+        out.paste(text, ((width - text.width) // 2, y))
     return out
 
 

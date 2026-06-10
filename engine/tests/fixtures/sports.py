@@ -226,6 +226,76 @@ def _extra_fixtures() -> dict[str, dict[str, Any]]:
             away_record="24-18-5", home_record="20-22-4",
             logo_slug=(None, None),
         ),
+        # Celebration overlays: pulsing big text + sprite replace the centre
+        # widget (goal list / diamond) and the scoring team's score blinks.
+        # anim_frame is fixed so sprite output is deterministic.
+        "soccer_goal_celebration": _game(
+            "eng.1", "soccer",
+            ("MCI", "Manchester", "City"), ("ARS", "London", "Arsenal"),
+            away_score="1", home_score="2",
+            away_color="6cabdd", home_color="ef0107",
+            away_alt_color="1c2c5b", home_alt_color="023474",
+            status="67'", state="in",
+            away_goals=["23'"], home_goals=["12'", "66'"],
+            away_points=None, home_points=None,
+            logo_slug=("382", "359"),
+            _celebration={"kind": "goal", "side": "home", "pulse_on": True, "anim_frame": 2},
+        ),
+        # Off pulse phase: text and home score blanked, geometry unchanged.
+        "soccer_goal_celebration_off": _game(
+            "eng.1", "soccer",
+            ("MCI", "Manchester", "City"), ("ARS", "London", "Arsenal"),
+            away_score="1", home_score="2",
+            away_color="6cabdd", home_color="ef0107",
+            away_alt_color="1c2c5b", home_alt_color="023474",
+            status="67'", state="in",
+            away_goals=["23'"], home_goals=["12'", "66'"],
+            away_points=None, home_points=None,
+            logo_slug=("382", "359"),
+            _celebration={"kind": "goal", "side": "home", "pulse_on": False, "anim_frame": 3},
+        ),
+        "nfl_td_celebration": _game(
+            "nfl", "football",
+            ("KC", "Kansas City", "Chiefs"), ("NE", "New England", "Patriots"),
+            away_score="27", home_score="17",
+            away_color="e31837", home_color="002244",
+            away_alt_color="ffb612", home_alt_color="c60c30",
+            status="Q4 8:11", state="in",
+            away_record="8-3", home_record="4-7",
+            _celebration={"kind": "touchdown", "side": "away", "pulse_on": True, "anim_frame": 1},
+        ),
+        "nfl_fg_celebration": _game(
+            "nfl", "football",
+            ("KC", "Kansas City", "Chiefs"), ("NE", "New England", "Patriots"),
+            away_score="20", home_score="20",
+            away_color="e31837", home_color="002244",
+            away_alt_color="ffb612", home_alt_color="c60c30",
+            status="Q4 0:04", state="in",
+            away_record="8-3", home_record="4-7",
+            _celebration={"kind": "field_goal", "side": "home", "pulse_on": True, "anim_frame": 5},
+        ),
+        # Longest text — exercises the "INT!" abbreviation at narrow widths.
+        "nfl_int_celebration": _game(
+            "nfl", "football",
+            ("KC", "Kansas City", "Chiefs"), ("NE", "New England", "Patriots"),
+            away_score="14", home_score="10",
+            away_color="e31837", home_color="002244",
+            away_alt_color="ffb612", home_alt_color="c60c30",
+            status="Q3 5:02", state="in",
+            away_record="8-3", home_record="4-7",
+            _celebration={"kind": "interception", "side": "home", "pulse_on": True, "anim_frame": 0},
+        ),
+        "mlb_hr_celebration": _game(
+            "mlb", "baseball",
+            ("NYY", "New York", "Yankees"), ("BOS", "Boston", "Red Sox"),
+            away_score="5", home_score="3",
+            away_color="003087", home_color="bd3039",
+            away_alt_color="c4ced4", home_alt_color="0d2b56",
+            status="Top 7th", state="in",
+            away_record="55-30", home_record="48-37",
+            situation={"outs": 1, "onFirst": True},
+            _celebration={"kind": "home_run", "side": "away", "pulse_on": True, "anim_frame": 4},
+        ),
         # Worst case: long city + long nickname + ranks + 3-digit scores.
         "long_everything": _game(
             "mens-college-basketball", "basketball",
@@ -255,9 +325,12 @@ def _render_card(game: dict[str, Any], w: int, h: int) -> harness.RenderResult:
     delegates to) so the layout boxes are available for assertion tests.
     """
     from apps.sports.cards import render_card
-    from apps.sports.model import build_game_view
+    from apps.sports.model import CelebrationView, build_game_view
 
-    view = build_game_view(dict(game), fixture_logos(game))
+    game = dict(game)
+    celeb_raw = game.pop("_celebration", None)
+    celebration = CelebrationView(**celeb_raw) if celeb_raw else None
+    view = build_game_view(game, fixture_logos(game), celebration=celebration)
     result = render_card(view, w, h)
     return harness.RenderResult(image=result.image, boxes=result.boxes)
 
