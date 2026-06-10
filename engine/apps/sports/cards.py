@@ -140,6 +140,9 @@ def _min_name_w(team: TeamView) -> int:
 _MIN_LOGO_W = 10
 
 
+_SCORE_MARGIN = 2  # breathing room above/below the big score digits
+
+
 def _fit_score_and_logo(
     team: TeamView, row_w: int, row_h: int, logo_cap: int
 ) -> tuple[Image.Image | None, Image.Image | None]:
@@ -153,8 +156,9 @@ def _fit_score_and_logo(
     if not team.score:
         return _scaled_logo(team, row_h, logo_cap), None
 
+    score_h = max(5, row_h - _SCORE_MARGIN)
     ideal_font = fit_font_size(
-        team.score, row_h, max(1, row_w - min_name - 2 * _GAP), bold=True, allow_large=True
+        team.score, score_h, max(1, row_w - min_name - 2 * _GAP), bold=True, allow_large=True
     )
     ideal_w = measure(TextSpec(team.score, ideal_font, bold=True))[0] if ideal_font else 0
 
@@ -164,7 +168,7 @@ def _fit_score_and_logo(
         logo = _scaled_logo(team, row_h, min(logo_budget, logo_cap))
 
     score_max_w = row_w - (logo.width + _GAP if logo is not None else 0) - min_name - 2 * _GAP
-    return logo, _score_img_large(team, row_h, max(1, score_max_w))
+    return logo, _score_img_large(team, score_h, max(1, score_max_w))
 
 
 def _score_img_large(team: TeamView, max_h: int, max_w: int) -> Image.Image:
@@ -230,7 +234,7 @@ def _render_minimal(frame: Frame, view: GameView) -> None:
         if not text:
             continue
         box_name = f"{side}.score" if team.score else f"{side}.abbr"
-        size = fit_font_size(text, row.h, row.w - 2, bold=True)
+        size = fit_font_size(text, max(5, row.h - _SCORE_MARGIN), row.w - 2, bold=True)
         if size is None:
             img = widgets.truncate_to_fit(text, team.color, 7, row.w - 2)
         else:
@@ -509,9 +513,7 @@ def _render_wide(frame: Frame, view: GameView) -> None:
         widget = _diamond_widget(view, min(content.h - 4, 31))
         widget_name = "widget.diamond"
     elif view.is_soccer and view.state in ("in", "post"):
-        widget = widgets.goal_list_img(
-            view, content.h, w // 4, two_col=w > 160, font=9 if w > 160 else 7
-        )
+        widget = widgets.goal_list_img(view, content.h, w // 3)
         widget_name = "widget.goals"
     center_w = widget.width + 2 * (_GAP + 2) if widget is not None else _GAP * 3
     half_w = (w - center_w) // 2
@@ -619,7 +621,7 @@ def _render_wide(frame: Frame, view: GameView) -> None:
     score_imgs: dict[str, Image.Image] = {}
     score_row_h = 0
     if have_scores:
-        score_h = max(score_min_h - 4, content.h - name_h - _GAP)
+        score_h = max(score_min_h - 4, content.h - name_h - _GAP - _SCORE_MARGIN)
         fonts = [
             fit_font_size(team.score, score_h, text_regions[side].w, bold=True, allow_large=True)
             for side, team in (("away", view.away), ("home", view.home))

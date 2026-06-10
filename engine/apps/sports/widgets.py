@@ -222,13 +222,14 @@ def _goal_sort_key(t: str) -> tuple[int, int]:
 
 
 def goal_list_img(
-    view: GameView, max_h: int, max_w: int, *, two_col: bool, font: int
+    view: GameView, max_h: int, max_w: int, *, font: int = 9
 ) -> Image.Image | None:
-    """Soccer goal times as one measured image.
+    """Soccer goal times as one measured image, attributed by team.
 
-    Single column: all goals chronologically, each in the scoring team's
-    color. Two columns: away goals right-aligned in the left column, home
-    left-aligned in the right, one row per goal in global time order. When
+    Two columns whenever they fit — away goals right-aligned in the left
+    column, home left-aligned in the right, one row per goal in global time
+    order — so each minute reads on its team's side of the card. Falls back
+    to a single chronological column (still team-colored) when narrow. When
     rows don't fit, the *earliest* are dropped behind a gray "+N" marker —
     never silently clipped.
     """
@@ -252,35 +253,31 @@ def goal_list_img(
 
     n_rows = len(rows) + (1 if marker else 0)
     total_h = n_rows * row_h + (n_rows - 1) * _GOAL_GAP
+    col_w = max(img.width for img in imgs + ([marker] if marker else []))
 
-    if two_col:
-        sep = 2
-        col_w = max(img.width for img in imgs + ([marker] if marker else []))
+    sep = 2
+    if col_w * 2 + sep * 2 <= max_w:
         width = col_w * 2 + sep * 2
-        if width > max_w:
-            two_col = False  # fall back to single column below
-        else:
-            out = Image.new("RGB", (width, total_h), (0, 0, 0))
-            y = 0
-            if marker:
-                out.paste(marker, ((width - marker.width) // 2, y))
-                y += row_h + _GOAL_GAP
-            for (side, _t), img in zip(rows, imgs):
-                x = col_w - img.width if side == "away" else col_w + 2 * sep
-                out.paste(img, (x, y))
-                y += row_h + _GOAL_GAP
-            return out
+        out = Image.new("RGB", (width, total_h), (0, 0, 0))
+        y = 0
+        if marker:
+            out.paste(marker, ((width - marker.width) // 2, y))
+            y += row_h + _GOAL_GAP
+        for (side, _t), img in zip(rows, imgs):
+            x = col_w - img.width if side == "away" else col_w + 2 * sep
+            out.paste(img, (x, y))
+            y += row_h + _GOAL_GAP
+        return out
 
-    width = max(img.width for img in imgs + ([marker] if marker else []))
-    if width > max_w:
+    if col_w > max_w:
         return None  # no room for goals at all — drop the widget entirely
-    out = Image.new("RGB", (width, total_h), (0, 0, 0))
+    out = Image.new("RGB", (col_w, total_h), (0, 0, 0))
     y = 0
     if marker:
-        out.paste(marker, ((width - marker.width) // 2, y))
+        out.paste(marker, ((col_w - marker.width) // 2, y))
         y += row_h + _GOAL_GAP
     for img in imgs:
-        out.paste(img, ((width - img.width) // 2, y))
+        out.paste(img, ((col_w - img.width) // 2, y))
         y += row_h + _GOAL_GAP
     return out
 
