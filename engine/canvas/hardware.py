@@ -37,10 +37,10 @@ class HardwareCanvas(Canvas):
 
     panel chain order
     ------------------
-    The physical chain runs right-to-left: chain position 0 (the panel wired to the
-    controller's output) is the rightmost visible panel. _phys_panel_col mirrors the
-    logical column index so that logical col 0 (the leftmost visible panel) maps to
-    the last physical chain position.
+    Panels are connected left-to-right, but the chain's addressing renders chain
+    position 0 on the rightmost panel. _phys_panel_col mirrors the logical column
+    index so that logical col 0 (the leftmost visible panel) maps to the last
+    physical chain position.
 
     display dimensions vs hardware config
     --------------------------------------
@@ -103,9 +103,10 @@ class HardwareCanvas(Canvas):
         return self._rotation
 
     def _phys_panel_col(self, logical_col: int) -> int:
-        # The chain wires up right-to-left, so mirror the column index to keep
-        # logical col 0 as the leftmost visible panel. Zigzag wiring reverses the
-        # physical order again, cancelling out the mirroring.
+        # Although panels are connected left-to-right, chain position 0 renders on
+        # the rightmost panel, so mirror the column index to keep logical col 0 as
+        # the leftmost visible panel. Zigzag wiring reverses the physical order
+        # again, cancelling out the mirroring.
         if self._alternate_rotation:
             return logical_col
         return self._chain_length - 1 - logical_col
