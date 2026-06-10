@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import AppForm from "../components/AppForm";
 import AppIcon from "../components/AppIcon";
@@ -61,6 +61,8 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [restored, setRestored] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [brightness, setBrightness] = useState(100);
+  const brightnessTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -77,7 +79,25 @@ export default function Settings() {
       for (const l of allLibs) initLib[l.id] = l.global_config ?? {};
       setLibConfigs(initLib);
     });
+
+    fetch("/api/display/settings")
+      .then((r) => r.json())
+      .then((d) => {
+        if (typeof d.brightness === "number") setBrightness(d.brightness);
+      });
   }, []);
+
+  const changeBrightness = (value: number) => {
+    setBrightness(value);
+    if (brightnessTimer.current) clearTimeout(brightnessTimer.current);
+    brightnessTimer.current = setTimeout(() => {
+      fetch("/api/display/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brightness: value }),
+      });
+    }, 200);
+  };
 
   // Redirect to /settings if the URL points at an app/library that doesn't exist
   useEffect(() => {
@@ -314,6 +334,24 @@ export default function Settings() {
             }}>
               App-level configuration and shared library settings — API keys and defaults used across all modules.
             </p>
+
+            <div style={sectionLabelStyle}>DISPLAY</div>
+            <div style={{ marginBottom: 24 }}>
+              <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: F.size.sm, color: C.textMuted, fontFamily: F.family }}>
+                <span>
+                  Brightness:{" "}
+                  <span style={{ color: C.textSecondary }}>{brightness}%</span>
+                </span>
+                <input
+                  type="range"
+                  min={1}
+                  max={100}
+                  value={brightness}
+                  onChange={(e) => changeBrightness(Number(e.target.value))}
+                  style={{ accentColor: C.sage }}
+                />
+              </label>
+            </div>
 
             <div style={sectionLabelStyle}>APP TYPE</div>
             {cardGrid(apps, (id) => navigate(`/settings/app/${id}`))}

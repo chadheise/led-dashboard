@@ -10,8 +10,9 @@ class SimulatorCanvas(Canvas):
         width: int,
         height: int,
         broadcast: Callable[[bytes], Awaitable[None]],
+        brightness: int = 100,
     ) -> None:
-        super().__init__(width, height)
+        super().__init__(width, height, brightness)
         self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast
 
@@ -27,5 +28,10 @@ class SimulatorCanvas(Canvas):
 
     async def render(self) -> None:
         # 4-byte header: width and height as big-endian uint16
-        frame = struct.pack(">HH", self.width, self.height) + bytes(self._pixels)
+        if self.brightness >= 100:
+            pixels = bytes(self._pixels)
+        else:
+            scale = self.brightness / 100
+            pixels = bytes(round(b * scale) for b in self._pixels)
+        frame = struct.pack(">HH", self.width, self.height) + pixels
         await self._broadcast(frame)

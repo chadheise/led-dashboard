@@ -50,6 +50,7 @@ class AppState(BaseModel):
     active_playlist_id: str | None = None
     app_configs: dict[str, dict[str, Any]] = {}  # keyed by app_id
     library_configs: dict[str, dict[str, Any]] = {}  # keyed by library_id
+    brightness: int | None = None  # 0-100; None means use config.yaml default
 
 
 # ── Store ──────────────────────────────────────────────────────────────────────
@@ -106,6 +107,15 @@ class StateStore:
 
     def save_library_config(self, lib_id: str, config: dict[str, Any]) -> None:
         self._state.library_configs[lib_id] = config
+        self._save()
+
+    # ── Display settings ───────────────────────────────────────────────────
+
+    def get_brightness(self, default: int = 100) -> int:
+        return self._state.brightness if self._state.brightness is not None else default
+
+    def save_brightness(self, brightness: int) -> None:
+        self._state.brightness = brightness
         self._save()
 
     # ── Playlists ──────────────────────────────────────────────────────────

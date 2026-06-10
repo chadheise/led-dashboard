@@ -398,6 +398,23 @@ async def toggle_display_power(request: Request) -> dict[str, Any]:
     return {"display_on": sm.display_on}
 
 
+class DisplaySettingsBody(BaseModel):
+    brightness: int
+
+
+@router.get("/display/settings")
+def get_display_settings(request: Request) -> dict[str, Any]:
+    return {"brightness": request.app.state.canvas.brightness}
+
+
+@router.put("/display/settings")
+async def save_display_settings(request: Request, body: DisplaySettingsBody) -> dict[str, Any]:
+    brightness = max(1, min(100, body.brightness))
+    request.app.state.canvas.set_brightness(brightness)
+    request.app.state.store.save_brightness(brightness)
+    return {"brightness": brightness}
+
+
 @router.get("/status")
 def get_status(request: Request) -> dict[str, Any]:
     store = request.app.state.store

@@ -6,7 +6,7 @@ display:
   width: 320
   height: 64
   fps: 30
-  brightness: 80
+  brightness: 100
 
 server:
   host: "0.0.0.0"
