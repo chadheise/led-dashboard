@@ -20,9 +20,7 @@ _DEBUG_GAMES_PATH = (
 )
 
 # Sizes every fixture is rendered at: the realistic panel widths × both heights.
-CORE_SIZES: list[tuple[int, int]] = [
-    (w, h) for h in (32, 64) for w in (64, 128, 192, 256, 320)
-]
+CORE_SIZES = harness.CORE_SIZES
 
 # Layout tier edges (minimal tier, multi-card slot widths) only need coverage
 # from one representative in-progress fixture per sport.

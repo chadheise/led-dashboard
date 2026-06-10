@@ -36,11 +36,23 @@ class SnapshotSuite:
     extra_cases: Sequence[tuple[str, int, int]] = field(default_factory=tuple)
 
 
+# Standard size matrix: realistic panel widths at both panel heights.
+CORE_SIZES: list[tuple[int, int]] = [
+    (w, h) for h in (32, 64) for w in (64, 128, 192, 256, 320)
+]
+
 _REGISTRY: dict[str, SnapshotSuite] = {}
 
 # Modules that register suites on import. Future apps append here.
 _SUITE_MODULES = [
     "tests.fixtures.sports",
+    "tests.fixtures.stocks",
+    "tests.fixtures.text",
+    "tests.fixtures.flights",
+    "tests.fixtures.spotify",
+    "tests.fixtures.weather",
+    "tests.fixtures.countdown",
+    "tests.fixtures.world_clock",
 ]
 
 
@@ -83,6 +95,35 @@ def case_id(fixture_id: str, w: int, h: int) -> str:
 
 
 # ── Whole-app frame rendering ──────────────────────────────────────────────────
+
+
+def app_case_render(
+    app_cls: type, *, freeze_datetime: str | None = None
+) -> Callable[[Any, int, int], RenderResult]:
+    """Build a SnapshotSuite render callable for config-driven app fixtures.
+
+    Fixture payloads are ``{"config": {...}, "seed": callable | None}`` dicts.
+    ``freeze_datetime`` (e.g. ``"apps.weather.app.datetime"``) pins
+    ``datetime.now()`` in the app module to ``clock.FIXED_NOW`` during the
+    render, for apps whose frames depend on the current time.
+    """
+    from contextlib import nullcontext
+
+    from tests.snaptest.clock import frozen_time
+
+    def _render(case: Any, w: int, h: int) -> RenderResult:
+        ctx = frozen_time(freeze_datetime) if freeze_datetime else nullcontext()
+        with ctx:
+            image = render_app_frame(
+                app_cls,
+                dict(case.get("config") or {}),
+                w,
+                h,
+                seed=case.get("seed") or (lambda app: None),
+            )
+        return RenderResult(image=image)
+
+    return _render
 
 
 def render_app_frame(

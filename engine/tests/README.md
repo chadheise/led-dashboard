@@ -50,6 +50,12 @@ ones.
 - `tests/fixtures/sports.py` — all dev-UI debug games plus stress fixtures
   (near-black colors, 3-digit OT scores, bases loaded, goal overflow,
   missing logos, ...). Add new cases here.
+- `tests/fixtures/{stocks,text,flights,spotify,weather,countdown,world_clock}.py`
+  — one suite per app covering every display mode/config variant (e.g. stocks
+  marquee 1/2-row, paginate N-up, chart splits) plus empty/loading states,
+  run through `test_app_snapshots.py`. Apps whose frames depend on the
+  current time (weather, countdown, world clock) are rendered with
+  `datetime.now()` frozen to `snaptest/clock.py::FIXED_NOW`.
 - Logos are deterministic generated placeholders (team-color shields/flags).
   Optionally commit real PNGs to `tests/fixtures/logos/{league}/{ABBR}.png`
   (run `python -m tests.snaptest.fetch_fixture_logos` on a machine with
@@ -57,11 +63,12 @@ ones.
 
 ## Adding snapshot coverage for another app
 
-1. Create `tests/fixtures/{app}.py` that builds fixture payloads and calls
-   `tests.snaptest.harness.register(SnapshotSuite(...))` with a render
-   callable `(fixture, w, h) -> RenderResult`. Use
-   `harness.render_app_frame` to run a full `DisplayApp` headlessly with
-   seeded data.
-2. Add the module to `_SUITE_MODULES` in `tests/snaptest/harness.py`.
-3. Add a parametrized test like `test_sports_snapshots.py` and run with
-   `--snapshot-update` to create the goldens.
+1. Create `tests/fixtures/{app}.py` with fixture payloads
+   `{"config": {...}, "seed": callable | None}` — the seed injects the data
+   `fetch_data` would have fetched — and register:
+   `harness.register(SnapshotSuite(app_id, fixtures, harness.CORE_SIZES,
+   harness.app_case_render(AppCls, freeze_datetime=... )))`.
+2. Add the module to `_SUITE_MODULES` in `tests/snaptest/harness.py` and the
+   app id to `_APP_IDS` in `test_app_snapshots.py`.
+3. Run with `--snapshot-update` to create the goldens, review the contact
+   sheet (`python -m tests.snaptest.contact_sheet --app {app}`), and commit.
