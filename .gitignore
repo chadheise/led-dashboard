@@ -21,3 +21,6 @@ ui/.vite/
 
 # Persisted runtime state (user data, not code)
 engine/data/
+
+# Test artifacts (diff images, contact sheets) — goldens in tests/snapshots/ ARE committed
+engine/tests/output/

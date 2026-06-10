@@ -336,14 +336,17 @@ class CountdownApp(DisplayApp):
 
         raw_units = self.config.get("units", ["days", "hours", "minutes"])
         units = [str(u) for u in raw_units] if isinstance(raw_units, list) and raw_units else ["days", "hours", "minutes"]
-        countdown_str = _format_countdown(_decompose(now, self._target_dt, units))
-        self._draw_countdown(text_color, countdown_color, countdown_str)
+        parts = _decompose(now, self._target_dt, units)
+        # Fallback ladder: full breakdown first, then progressively drop the
+        # finest units ("3d 07h 15m" -> "3d 07h" -> "3d") for narrow panels.
+        candidates = [_format_countdown(parts[:k]) for k in range(len(parts), 0, -1)]
+        self._draw_countdown(text_color, countdown_color, candidates)
 
     def _draw_countdown(
         self,
         text_color: tuple[int, int, int],
         countdown_color: tuple[int, int, int],
-        countdown_str: str,
+        countdown_strs: list[str],
     ) -> None:
         w, h = self.canvas.width, self.canvas.height
         pad = 2
@@ -361,7 +364,15 @@ class CountdownApp(DisplayApp):
         name_size = _fit_size(self._event_name, max(8, min(h // 4, 14)), avail_w)
         name_img = render_text(_clip_text(self._event_name, name_size, avail_w), text_color, name_size)
 
+        # First (most detailed) breakdown that actually fits; the coarsest one
+        # may still need clipping on truly tiny panels.
+        countdown_str = countdown_strs[-1]
         countdown_size = _fit_size(countdown_str, max(10, min(h // 2, 26)), avail_w)
+        for cand in countdown_strs:
+            size = _fit_size(cand, max(10, min(h // 2, 26)), avail_w)
+            if can_fit_text(avail_w, size, cand):
+                countdown_str, countdown_size = cand, size
+                break
         countdown_img = render_text(_clip_text(countdown_str, countdown_size, avail_w), countdown_color, countdown_size)
 
         lines = [name_img, countdown_img]
