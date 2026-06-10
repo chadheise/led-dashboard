@@ -251,17 +251,17 @@ def all_fixtures() -> dict[str, dict[str, Any]]:
 
 
 def _render_card(game: dict[str, Any], w: int, h: int) -> harness.RenderResult:
-    """Render one game card headlessly through the real SportsApp pipeline."""
-    from apps.sports.app import SportsApp
-    from canvas.simulator import SimulatorCanvas
+    """Render one game card through the real model + card pipeline.
 
-    async def _noop_broadcast(_frame: bytes) -> None:
-        pass
+    Calls build_game_view/render_card directly (what SportsApp._render_slot_image
+    delegates to) so the layout boxes are available for assertion tests.
+    """
+    from apps.sports.cards import render_card
+    from apps.sports.model import build_game_view
 
-    app = SportsApp({"leagues": []}, SimulatorCanvas(w, h, _noop_broadcast), {}, {})
-    app._logos = fixture_logos(game)
-    image = app._render_slot_image(dict(game), w, h)
-    return harness.RenderResult(image=image)
+    view = build_game_view(dict(game), fixture_logos(game))
+    result = render_card(view, w, h)
+    return harness.RenderResult(image=result.image, boxes=result.boxes)
 
 
 harness.register(

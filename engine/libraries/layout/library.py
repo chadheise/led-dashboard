@@ -259,11 +259,17 @@ def fit_font_size(
     Returns None when even the smallest pixel font doesn't fit.
     """
     candidates: list[int] = []
-    if allow_large and max_h > 28:
-        # Rendered glyph height runs ~30% below the nominal size; probing from
-        # 1.5x the height budget down to 29 always brackets the best size.
+    if allow_large and max_h >= 22:
+        # Above 21px the largest pixel font (LoRes28, 19px digits) wastes 3+px
+        # of budget, so try Roboto sizes too. Rendered glyph height runs ~30%
+        # below the nominal size; probing from 1.5x the height budget down to
+        # 29 always brackets the best size.
         candidates.extend(range(min(96, max_h * 3 // 2), 28, -1))
     candidates.extend(PIXEL_SIZES)
+    if bold:
+        # LoRes28 ships no bold variant — "bold" 28 renders thin, which reads
+        # wrong next to truly bold sizes. LoRes22 bold or Roboto cover it.
+        candidates = [s for s in candidates if s != 28]
 
     for size in candidates:
         w, h = measure(TextSpec(text, size, bold))
