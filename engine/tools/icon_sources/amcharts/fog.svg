@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Custom icon in the amCharts SVG weather-icons style (the free set has no
+     fog icon): their cloud shape over drifting horizontal fog strokes. -->
+<svg
+    version="1.1"
+    xmlns="http://www.w3.org/2000/svg"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    width="64"
+    height="64"
+    viewbox="0 0 64 64">
+    <defs>
+        <style type="text/css"><![CDATA[
+@keyframes am-weather-cloud-1 {
+  0% {
+            transform: translate(-2px,0px);
+  }
+
+  50% {
+            transform: translate(4px,0px);
+  }
+
+  100% {
+            transform: translate(-2px,0px);
+  }
+}
+
+.am-weather-cloud-1 {
+          animation-name: am-weather-cloud-1;
+          animation-duration: 6s;
+          animation-timing-function: linear;
+          animation-iteration-count: infinite;
+}
+
+@keyframes am-weather-fog-1 {
+  0% {
+            transform: translate(-3px,0px);
+  }
+
+  50% {
+            transform: translate(3px,0px);
+  }
+
+  100% {
+            transform: translate(-3px,0px);
+  }
+}
+
+.am-weather-fog-1 {
+          animation-name: am-weather-fog-1;
+          animation-duration: 6s;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+}
+
+@keyframes am-weather-fog-2 {
+  0% {
+            transform: translate(3px,0px);
+  }
+
+  50% {
+            transform: translate(-3px,0px);
+  }
+
+  100% {
+            transform: translate(3px,0px);
+  }
+}
+
+.am-weather-fog-2 {
+          animation-name: am-weather-fog-2;
+          animation-duration: 3s;
+          animation-timing-function: ease-in-out;
+          animation-iteration-count: infinite;
+}
+        ]]></style>
+    </defs>
+    <g id="fog">
+        <g transform="translate(20,8)">
+            <g class="am-weather-cloud-1">
+                <path d="M47.7,35.4     c0-4.6-3.7-8.2-8.2-8.2c-1,0-1.9,0.2-2.8,0.5c-0.3-3.4-3.1-6.2-6.6-6.2c-3.7,0-6.7,3-6.7,6.7c0,0.8,0.2,1.6,0.4,2.3     c-0.3-0.1-0.7-0.1-1-0.1c-3.7,0-6.7,3-6.7,6.7c0,3.6,2.9,6.6,6.5,6.7l17.2,0C44.2,43.3,47.7,39.8,47.7,35.4z" fill="#57A0EE" stroke="white" stroke-linejoin="round" stroke-width="1.2" transform="translate(-20,-11)"/>
+            </g>
+            <g class="am-weather-fog-1">
+                <line fill="none" stroke="#91C0F8" stroke-linecap="round" stroke-width="2.5" x1="-1" x2="25" y1="38" y2="38"/>
+            </g>
+            <g class="am-weather-fog-2">
+                <line fill="none" stroke="#57A0EE" stroke-linecap="round" stroke-width="2.5" x1="1" x2="27" y1="43" y2="43"/>
+            </g>
+            <g class="am-weather-fog-1">
+                <line fill="none" stroke="#91C0F8" stroke-linecap="round" stroke-width="2.5" x1="3" x2="23" y1="48" y2="48"/>
+            </g>
+        </g>
+    </g>
+</svg>

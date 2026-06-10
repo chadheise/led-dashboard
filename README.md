@@ -488,6 +488,13 @@ hardware: # used only when CANVAS=hardware
 
 After first run, all state is stored in `data/state.json` and managed through the UI.
 
+## Icon credits
+
+- **Weather icons** — the Weather app's animated icons are the free [amCharts SVG weather icons](https://www.amcharts.com/free-animated-svg-weather-icons/) (CC BY 4.0), pre-baked from SVG into PNG sprite strips by `engine/tools/bake_icons.py`.
+- **Holiday icons** — the Countdown app's icons are from [Twemoji](https://github.com/jdecked/twemoji) (graphics CC BY 4.0), rasterized by the same script.
+
+To regenerate the committed PNG assets after changing the sources under `engine/tools/icon_sources/`, install `cairosvg` (see `engine/requirements-dev.txt`) and run `python tools/bake_icons.py` from the `engine` directory.
+
 ## Development phases
 
 1. **Simulator + WebSocket preview** ✓

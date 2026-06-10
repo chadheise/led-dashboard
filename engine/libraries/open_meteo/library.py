@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
-import math
 import time
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
-from PIL import Image, ImageDraw
+from PIL import Image
 
 from libraries.base import Library
 
@@ -55,121 +56,75 @@ def condition_label(condition: str) -> str:
     return _CONDITION_LABELS.get(condition, "Unknown")
 
 
-# ── Procedural icon drawing ─────────────────────────────────────────────────
+# ── Animated weather icons ──────────────────────────────────────────────────
 #
-# Icons are drawn with simple PIL primitives, scaled to the requested pixel
-# size, rather than loaded from bitmap assets — this lets them render crisply
-# at any resolution the LED panel needs (the project has no icon-asset
-# pipeline, and a vector approach matches `arrow_img` in text_renderer).
+# Full-color animated icons from the free amCharts SVG weather-icons set,
+# pre-baked into PNG sprite strips by `tools/bake_icons.py` (one square frame
+# per animation step, side by side). Frames are sliced and resized lazily and
+# cached per (icon, size) so the render loop just indexes a list.
+
+_ICONS_DIR = Path(__file__).parent / "icons"
+_ICONS_META: dict[str, Any] = json.loads((_ICONS_DIR / "meta.json").read_text(encoding="utf-8"))
+
+_DAY_ICON_BY_CONDITION: dict[str, str] = {
+    "clear": "day",
+    "partly_cloudy": "cloudy-day-3",
+    "cloudy": "cloudy",
+    "fog": "fog",
+    "rain": "rainy-6",
+    "snow": "snowy-6",
+    "thunderstorm": "thunder",
+}
+_NIGHT_ICON_BY_CONDITION: dict[str, str] = {"clear": "night", "partly_cloudy": "cloudy-night-3"}
+
+_strip_cache: dict[str, list[Image.Image]] = {}
+_frame_cache: dict[tuple[str, int], list[Image.Image]] = {}
 
 
-def _sun(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float, color: tuple[int, int, int], *, rays: bool) -> None:
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
-    if rays:
-        gap = r * 0.35
-        length = r * 0.65
-        width = max(1, round(r * 0.28))
-        for deg in (0, 45, 90, 135, 180, 225, 270, 315):
-            rad = math.radians(deg)
-            x0 = cx + (r + gap) * math.cos(rad)
-            y0 = cy + (r + gap) * math.sin(rad)
-            x1 = cx + (r + gap + length) * math.cos(rad)
-            y1 = cy + (r + gap + length) * math.sin(rad)
-            draw.line([(x0, y0), (x1, y1)], fill=color, width=width)
+def _icon_frames(name: str, size: int) -> list[Image.Image]:
+    """The icon's animation frames at `size`, composited onto black RGB."""
+    cached = _frame_cache.get((name, size))
+    if cached is not None:
+        return cached
+
+    full = _strip_cache.get(name)
+    if full is None:
+        strip = Image.open(_ICONS_DIR / f"{name}.png").convert("RGBA")
+        side = strip.height
+        full = [strip.crop((i * side, 0, (i + 1) * side, side)) for i in range(strip.width // side)]
+        _strip_cache[name] = full
+
+    frames: list[Image.Image] = []
+    for frame in full:
+        if frame.width != size:
+            frame = frame.resize((size, size), Image.LANCZOS)
+        composited = Image.new("RGB", (size, size), (0, 0, 0))
+        composited.paste(frame, (0, 0), frame)
+        frames.append(composited)
+    _frame_cache[(name, size)] = frames
+    return frames
 
 
-def _moon(draw: ImageDraw.ImageDraw, cx: float, cy: float, r: float, color: tuple[int, int, int]) -> None:
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
-    cut = r * 0.85
-    draw.ellipse([cx - r + cut, cy - r, cx + r + cut, cy + r], fill=(0, 0, 0))
+def weather_icon_img(
+    condition: str,
+    size: int,
+    color: tuple[int, int, int] | None = None,
+    *,
+    night: bool = False,
+    t: float = 0.0,
+) -> Image.Image:
+    """A size x size frame of the condition's animated icon at elapsed time `t`.
 
-
-def _cloud(draw: ImageDraw.ImageDraw, cx: float, cy: float, w: float, h: float, color: tuple[int, int, int]) -> None:
-    """A puffy cloud whose bounding box is roughly w wide by h tall, centered at (cx, cy)."""
-    top = cy - h * 0.20
-    bottom = cy + h * 0.50
-    draw.rounded_rectangle([cx - w / 2, top, cx + w / 2, bottom], radius=h * 0.35, fill=color)
-    r1 = h * 0.45
-    draw.ellipse([cx - w * 0.22 - r1, top - r1 * 0.85, cx - w * 0.22 + r1, top + r1 * 1.05], fill=color)
-    r2 = h * 0.58
-    draw.ellipse([cx + w * 0.10 - r2, top - r2 * 1.05, cx + w * 0.10 + r2, top + r2 * 0.75], fill=color)
-
-
-def _rain_drops(draw: ImageDraw.ImageDraw, cx: float, top: float, w: float, h: float, color: tuple[int, int, int]) -> None:
-    width = max(1, round(h * 0.16))
-    drop = h * 0.85
-    for i, dx in enumerate((-w * 0.26, 0.0, w * 0.26)):
-        x = cx + dx
-        y0 = top + (h * 0.18 if i == 1 else 0.0)
-        draw.line([(x, y0), (x - drop * 0.35, y0 + drop)], fill=color, width=width)
-
-
-def _snow_flakes(draw: ImageDraw.ImageDraw, cx: float, top: float, w: float, h: float, color: tuple[int, int, int]) -> None:
-    r = max(1.0, h * 0.16)
-    for i, dx in enumerate((-w * 0.26, 0.0, w * 0.26)):
-        x = cx + dx
-        y = top + (h * 0.55 if i == 1 else h * 0.30)
-        draw.ellipse([x - r, y - r, x + r, y + r], fill=color)
-
-
-def _bolt(draw: ImageDraw.ImageDraw, cx: float, top: float, h: float, color: tuple[int, int, int]) -> None:
-    w = h * 0.65
-    pts = [
-        (cx + w * 0.20, top),
-        (cx - w * 0.30, top + h * 0.55),
-        (cx - w * 0.02, top + h * 0.55),
-        (cx - w * 0.20, top + h * 1.05),
-        (cx + w * 0.32, top + h * 0.40),
-        (cx + w * 0.05, top + h * 0.40),
-    ]
-    draw.polygon(pts, fill=color)
-
-
-def _fog_lines(draw: ImageDraw.ImageDraw, cx: float, cy: float, w: float, color: tuple[int, int, int]) -> None:
-    width = max(1, round(w * 0.05))
-    spacing = max(2.0, w * 0.16)
-    for i in range(3):
-        y = cy + (i - 1) * spacing
-        draw.line([(cx - w / 2, y), (cx + w / 2, y)], fill=color, width=width)
-
-
-def weather_icon_img(condition: str, size: int, color: tuple[int, int, int], *, night: bool = False) -> Image.Image:
-    """Draw a small weather-condition icon, scaled to fill a size x size square."""
+    Pass a monotonically growing `t` (seconds) across successive renders to
+    animate; t=0 always yields the first frame, keeping single-frame renders
+    (e.g. snapshot tests) deterministic. `color` is accepted for call-site
+    compatibility but ignored — the artwork is full-color.
+    """
     size = max(8, int(size))
-    img = Image.new("RGB", (size, size), (0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    cx = size / 2.0
-
-    if condition in ("clear", "partly_cloudy"):
-        if condition == "clear":
-            sun_cx, sun_cy, sun_r = cx, size * 0.42, size * 0.30
-        else:
-            sun_cx, sun_cy, sun_r = size * 0.62, size * 0.36, size * 0.20
-        if night:
-            _moon(draw, sun_cx, sun_cy, sun_r, color)
-        else:
-            _sun(draw, sun_cx, sun_cy, sun_r, color, rays=(condition == "clear" and size >= 14))
-        if condition == "partly_cloudy":
-            _cloud(draw, size * 0.44, size * 0.62, size * 0.62, size * 0.34, color)
-        return img
-
-    if condition in ("cloudy", "fog"):
-        _cloud(draw, cx, size * 0.50, size * 0.74, size * 0.40, color)
-        if condition == "fog":
-            _fog_lines(draw, cx, size * 0.84, size * 0.7, color)
-        return img
-
-    # Precipitation conditions: cloud body with an accent below it.
-    _cloud(draw, cx, size * 0.36, size * 0.7, size * 0.32, color)
-    accent_top = size * 0.58
-    accent_h = size * 0.34
-    if condition == "rain":
-        _rain_drops(draw, cx, accent_top, size * 0.6, accent_h, color)
-    elif condition == "snow":
-        _snow_flakes(draw, cx, accent_top, size * 0.6, accent_h, color)
-    elif condition == "thunderstorm":
-        _bolt(draw, cx, accent_top - size * 0.04, accent_h, color)
-    return img
+    name = (night and _NIGHT_ICON_BY_CONDITION.get(condition)) or _DAY_ICON_BY_CONDITION.get(condition, "cloudy")
+    frames = _icon_frames(name, size)
+    idx = int(t * float(_ICONS_META["fps"])) % len(frames)
+    return frames[idx]
 
 
 # ── Library class ───────────────────────────────────────────────────────────
