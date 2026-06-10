@@ -14,6 +14,7 @@ def create_app(
     scene_manager: Any = None,
     preview_manager: Any = None,
     sizes_preview_manager: Any = None,
+    canvas: Any = None,
 ) -> FastAPI:
     app = FastAPI(title="LED Wall Engine", version="0.1.0", lifespan=lifespan)
 
@@ -36,6 +37,8 @@ def create_app(
         app.state.preview_manager = preview_manager
     if sizes_preview_manager is not None:
         app.state.sizes_preview_manager = sizes_preview_manager
+    if canvas is not None:
+        app.state.canvas = canvas
 
     @app.get("/health")
     def health() -> dict[str, str]:

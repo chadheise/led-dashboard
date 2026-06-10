@@ -54,8 +54,9 @@ class HardwareCanvas(Canvas):
         height: int,
         hw_cfg: dict,
         broadcast: Callable[[bytes], Awaitable[None]],
+        brightness: int = 100,
     ) -> None:
-        super().__init__(width, height)
+        super().__init__(width, height, brightness)
         from rgbmatrix import RGBMatrix, RGBMatrixOptions  # type: ignore[import]
 
         options = RGBMatrixOptions()
@@ -65,6 +66,7 @@ class HardwareCanvas(Canvas):
         options.parallel = hw_cfg.get("parallel", 1)
         options.gpio_slowdown = hw_cfg.get("gpio_slowdown", 4)
         options.hardware_mapping = hw_cfg.get("hardware_mapping", "regular")
+        options.brightness = brightness
         options.drop_privileges = False
 
         pixel_mapper = hw_cfg.get("pixel_mapper", "")
@@ -152,7 +154,14 @@ class HardwareCanvas(Canvas):
         self._canvas.Clear()
         self._pixels = bytearray(self.width * self.height * 3)
 
+    def set_brightness(self, brightness: int) -> None:
+        super().set_brightness(brightness)
+        self._matrix.brightness = brightness
+        self._canvas.brightness = brightness
+
     async def render(self) -> None:
         self._canvas = self._matrix.SwapOnVSync(self._canvas)
+        # Double-buffered: keep the freshly swapped-in canvas at the current brightness.
+        self._canvas.brightness = self.brightness
         frame = struct.pack(">HH", self.width, self.height) + bytes(self._pixels)
         await self._broadcast(frame)

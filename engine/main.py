@@ -85,6 +85,9 @@ def main() -> None:
     display_cfg = cfg["display"]
     server_cfg = cfg["server"]
 
+    store = StateStore()
+    brightness = store.get_brightness(display_cfg.get("brightness", 100))
+
     if os.environ.get("CANVAS", "").lower() == "hardware":
         preview_enabled = os.environ.get("PREVIEW_ENABLED", "true").lower() != "false"
 
@@ -93,13 +96,14 @@ def main() -> None:
 
         broadcast = manager.broadcast if preview_enabled else _noop
         canvas = HardwareCanvas(
-            display_cfg["width"], display_cfg["height"], cfg.get("hardware", {}), broadcast
+            display_cfg["width"], display_cfg["height"], cfg.get("hardware", {}), broadcast,
+            brightness=brightness,
         )
     else:
         canvas = SimulatorCanvas(
-            display_cfg["width"], display_cfg["height"], manager.broadcast
+            display_cfg["width"], display_cfg["height"], manager.broadcast,
+            brightness=brightness,
         )
-    store = StateStore()
     scene_manager = SceneManager(canvas, APP_REGISTRY)
     preview_manager = PreviewManager(
         display_cfg["width"], display_cfg["height"], display_cfg["fps"]
@@ -147,6 +151,7 @@ def main() -> None:
         scene_manager=scene_manager,
         preview_manager=preview_manager,
         sizes_preview_manager=sizes_preview_manager,
+        canvas=canvas,
     )
     uvicorn.run(app, host=server_cfg["host"], port=server_cfg["port"])
 
