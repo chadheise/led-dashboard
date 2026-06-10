@@ -33,6 +33,16 @@ class TeamView:
 
 
 @dataclass(frozen=True)
+class CelebrationView:
+    """A live scoring celebration, resolved to this frame's pulse/anim phase."""
+
+    kind: str            # "goal" | "touchdown" | "field_goal" | "interception" | "home_run"
+    side: str | None     # "away" | "home" | None (no score pulse target)
+    pulse_on: bool       # 1 Hz: text and scoring team's score visible this second
+    anim_frame: int      # sprite animation frame index
+
+
+@dataclass(frozen=True)
 class GameView:
     away: TeamView
     home: TeamView
@@ -43,6 +53,7 @@ class GameView:
     situation: dict[str, Any]  # baseball outs/bases
     away_goals: list[str]
     home_goals: list[str]
+    celebration: CelebrationView | None = None
 
     @property
     def is_baseball_live(self) -> bool:
@@ -172,6 +183,7 @@ def build_game_view(
     tz: datetime.tzinfo | None = None,
     time_format: str = "12h",
     now: datetime.datetime | None = None,
+    celebration: CelebrationView | None = None,
 ) -> GameView:
     state = game.get("state", "pre")
     sport = game.get("sport", "")
@@ -192,4 +204,5 @@ def build_game_view(
         situation=dict(game.get("situation") or {}),
         away_goals=list(game.get("away_goals") or []),
         home_goals=list(game.get("home_goals") or []),
+        celebration=celebration,
     )

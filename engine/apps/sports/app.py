@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+import time
 from pathlib import Path
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -18,7 +19,8 @@ from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 from libraries.location.library import LocationLibrary
 
 from .cards import render_card
-from .model import build_game_view
+from .events import Celebration, GameSnapshot, detect_events, game_key, make_snapshot
+from .model import CelebrationView, build_game_view
 
 
 _LEAGUE_IDS = [e["id"] for e in _LEAGUES]
@@ -34,6 +36,10 @@ _UNIT_SECONDS: dict[str, float] = {
 }
 
 _FPS = 30  # assumed display frame rate for seconds → frames conversion
+
+_CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
+_ANIM_FRAMES = 8             # sprite animation cycle length
+_ANIM_FPS = 8                # sprite frames per second
 
 _DEBUG_GAMES: list[dict[str, Any]] = json.loads(
     (Path(__file__).parent / "debug_games.json").read_text()
@@ -188,6 +194,14 @@ class SportsApp(DisplayApp):
         # Marquee state
         self._marquee_strip: Image.Image | None = None
         self._marquee = Marquee(direction="left", speed=1.5, loop=True)
+        # Per-game-index celebration phase baked into the strip, so only the
+        # cards whose pulse/anim phase changed get re-rendered and patched in.
+        self._marquee_celeb_state: dict[int, tuple[str, bool, int] | None] = {}
+
+        # Celebration state: previous fetch snapshots + active celebrations,
+        # both keyed by events.game_key
+        self._prev_snaps: dict[str, GameSnapshot] = {}
+        self._celebrations: dict[str, Celebration] = {}
 
         # Staggered state
         self._stagger_slot_idx: list[int] = []
@@ -251,12 +265,47 @@ class SportsApp(DisplayApp):
 
         self._games = self._filter_by_time_window(games)
 
+        self._update_celebrations()
+
         # Store logos at full display height so any layout can downscale cleanly
         new_logos = await self._espn.fetch_logos(self._games, (64, 64))
         self._logos.update(new_logos)
 
         # Rebuild marquee strip whenever data changes
         self._marquee_strip = self._build_marquee_strip()
+
+    def _now(self) -> float:
+        return time.monotonic()
+
+    def _update_celebrations(self) -> None:
+        """Diff the fresh fetch against the previous one to start celebrations."""
+        now = self._now()
+        for ev in detect_events(self._prev_snaps, self._games):
+            self._celebrations[ev.game_key] = Celebration(ev.kind, ev.side, now)
+        self._prev_snaps = {
+            game_key(g): make_snapshot(g, self._prev_snaps.get(game_key(g)))
+            for g in self._games
+        }
+        self._celebrations = {
+            k: c
+            for k, c in self._celebrations.items()
+            if k in self._prev_snaps and now - c.started_at < _CELEBRATION_SECONDS
+        }
+
+    def _celebration_view(self, key: str) -> CelebrationView | None:
+        """Resolve a game's active celebration to this instant's pulse/anim phase."""
+        celeb = self._celebrations.get(key)
+        if celeb is None:
+            return None
+        elapsed = self._now() - celeb.started_at
+        if not 0 <= elapsed < _CELEBRATION_SECONDS:
+            return None
+        return CelebrationView(
+            kind=celeb.kind,
+            side=celeb.side,
+            pulse_on=int(elapsed) % 2 == 0,
+            anim_frame=int(elapsed * _ANIM_FPS) % _ANIM_FRAMES,
+        )
 
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
@@ -361,17 +410,47 @@ class SportsApp(DisplayApp):
 
     def _build_marquee_strip(self) -> Image.Image | None:
         if not self._games:
+            self._marquee_celeb_state = {}
             return None
         n = self._scores_per_screen()
         card_w = self.canvas.width // n
         h = self.canvas.height
         strip = Image.new("RGB", (card_w * len(self._games), h), (0, 0, 0))
+        self._marquee_celeb_state = {}
         for i, game in enumerate(self._games):
             card = self._render_slot_image(game, card_w, h)
             strip.paste(card, (i * card_w, 0))
             if i > 0:
                 ImageDraw.Draw(strip).line([(i * card_w, 0), (i * card_w, h - 1)], fill=(35, 35, 35))
+            self._marquee_celeb_state[i] = self._marquee_celeb_key(game)
         return strip
+
+    def _marquee_celeb_key(self, game: dict[str, Any]) -> tuple[str, bool, int] | None:
+        view = self._celebration_view(game_key(game))
+        if view is None:
+            return None
+        return (view.kind, view.pulse_on, view.anim_frame)
+
+    def _patch_marquee_celebrations(self) -> None:
+        """Re-render only the cards whose celebration phase changed since the
+        strip was built — a full per-frame strip rebuild would be wasteful."""
+        strip = self._marquee_strip
+        if strip is None:
+            return
+        n = self._scores_per_screen()
+        card_w = self.canvas.width // n
+        h = self.canvas.height
+        for i, game in enumerate(self._games):
+            key = self._marquee_celeb_key(game)
+            if key == self._marquee_celeb_state.get(i):
+                continue
+            card = self._render_slot_image(game, card_w, h)
+            strip.paste(card, (i * card_w, 0))
+            if i > 0:  # the paste overwrote the column divider — redraw it
+                ImageDraw.Draw(strip).line(
+                    [(i * card_w, 0), (i * card_w, h - 1)], fill=(35, 35, 35)
+                )
+            self._marquee_celeb_state[i] = key
 
     def _render_marquee_frame(self) -> None:
         if self._marquee_strip is None:
@@ -379,6 +458,7 @@ class SportsApp(DisplayApp):
         if self._marquee_strip is None:
             return
 
+        self._patch_marquee_celebrations()
         self._marquee.speed = float(self.config.get("marquee_speed", 1.5))
         self._marquee.render(self.canvas, self._marquee_strip)
 
@@ -448,5 +528,6 @@ class SportsApp(DisplayApp):
             self._logos,
             tz=self._get_user_tz(),
             time_format=str(loc_cfg.get("time_format", "12h")),
+            celebration=self._celebration_view(game_key(game)),
         )
         return render_card(view, w, h).image

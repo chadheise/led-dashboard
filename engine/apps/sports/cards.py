@@ -91,6 +91,18 @@ def _scaled_logo(team: TeamView, max_h: int, max_w: int) -> Image.Image | None:
     )
 
 
+def _pulsed_score(view: GameView, side: str, img: Image.Image) -> Image.Image:
+    """Blank the scoring team's score during the celebration's off pulse phase.
+
+    The replacement is a same-size black image so geometry (and the layout
+    box audit) is identical in both phases — only the pixels blink.
+    """
+    celeb = view.celebration
+    if celeb is not None and celeb.side == side and not celeb.pulse_on:
+        return Image.new(img.mode, img.size)
+    return img
+
+
 def _possessed(text: str, team: TeamView, side: str) -> str:
     """Append the football possession marker to a team's primary name line."""
     if not team.has_possession:
@@ -203,6 +215,7 @@ def _render_footer(
     *,
     show_records: bool,
     diamond_in_footer: bool,
+    celebration_in_footer: bool = False,
 ) -> None:
     font = 9 if footer.h >= 12 else 7
     region = footer.inset(2, 0)
@@ -219,6 +232,19 @@ def _render_footer(
             right_edge = box.x - _GAP
 
     center = Region(left_edge, region.y, max(1, right_edge - left_edge), region.h)
+
+    # Tiers without a centre widget show the pulsing celebration text in place
+    # of the status line. Same box name so the layout contract is unchanged.
+    if celebration_in_footer and view.celebration is not None:
+        text = widgets.celebration_text_img(
+            view.celebration.kind, widgets.celebration_color(view), center.h, center.w
+        )
+        if not view.celebration.pulse_on:
+            text = Image.new(text.mode, text.size)
+        if text.height <= center.h and text.width <= center.w:
+            frame.place("footer.status", text, center, anchor="mm", priority=2)
+        return
+
     status = widgets.status_img(view, font, center.w, diamond_in_footer=diamond_in_footer)
     if status.height <= center.h and status.width <= center.w:
         frame.place("footer.status", status, center, anchor="mm", priority=2)
@@ -239,6 +265,8 @@ def _render_minimal(frame: Frame, view: GameView) -> None:
             img = widgets.truncate_to_fit(text, team.color, 7, row.w - 2)
         else:
             img = text_img(TextSpec(text, size, bold=True), team.color)
+        if team.score:
+            img = _pulsed_score(view, side, img)
         frame.place(box_name, img, row, anchor="mm", priority=0)
 
 
@@ -295,9 +323,16 @@ def _render_compact(frame: Frame, view: GameView) -> None:
         )
         if side in score_imgs:
             score_region, _ = row.take_right(score_col)
-            frame.place(f"{side}.score", score_imgs[side], score_region, anchor="rm", priority=0)
+            frame.place(
+                f"{side}.score",
+                _pulsed_score(view, side, score_imgs[side]),
+                score_region, anchor="rm", priority=0,
+            )
 
-    _render_footer(frame, view, footer, show_records=False, diamond_in_footer=True)
+    _render_footer(
+        frame, view, footer,
+        show_records=False, diamond_in_footer=True, celebration_in_footer=True,
+    )
 
 
 # ── INLINE: one row per game (short, wide) ─────────────────────────────────────
@@ -308,7 +343,11 @@ def _render_inline(frame: Frame, view: GameView) -> None:
     footer, content = frame.region.take_bottom(9)
 
     widget = None
-    if view.is_baseball_live:
+    widget_name = "widget.diamond"
+    if view.celebration is not None:
+        widget = widgets.celebration_img(view, content.h - 2, w // 3)
+        widget_name = "widget.celebration"
+    elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 2, 15))
     # Without a widget, keep a clear gutter so the two scores don't read as one.
     center_w = widget.width + 2 * (_GAP + 1) if widget is not None else _GAP * 4
@@ -319,7 +358,7 @@ def _render_inline(frame: Frame, view: GameView) -> None:
     }
 
     if widget is not None:
-        frame.place("widget.diamond", widget, content, anchor="mm", priority=2)
+        frame.place(widget_name, widget, content, anchor="mm", priority=2)
 
     # Score at ideal size first, logo from the remainder, name budget last.
     logos: dict[str, Image.Image | None] = {}
@@ -387,7 +426,11 @@ def _render_inline(frame: Frame, view: GameView) -> None:
                 score_region, region = region.take_right(score_img.width)
             else:
                 score_region, region = region.take_left(score_img.width)
-            frame.place(f"{side}.score", score_img, score_region, anchor="mm", priority=0)
+            frame.place(
+                f"{side}.score",
+                _pulsed_score(view, side, score_img),
+                score_region, anchor="mm", priority=0,
+            )
             if side == "away":
                 region, _ = region.take_left(max(0, region.w - _GAP))
             else:
@@ -473,7 +516,11 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
             if score_img.width > col:  # degraded space — refit the score
                 score_img = _score_img(team, region.h, col)
             score_region, region = region.take_right(col)
-            frame.place(f"{side}.score", score_img, score_region, anchor="rm", priority=0)
+            frame.place(
+                f"{side}.score",
+                _pulsed_score(view, side, score_img),
+                score_region, anchor="rm", priority=0,
+            )
             region, _ = region.take_left(max(0, region.w - _GAP))
 
         if two_rows:
@@ -495,7 +542,10 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
                 region, anchor="lm", priority=1,
             )
 
-    _render_footer(frame, view, footer, show_records=False, diamond_in_footer=True)
+    _render_footer(
+        frame, view, footer,
+        show_records=False, diamond_in_footer=True, celebration_in_footer=True,
+    )
 
 
 # ── WIDE: full layout (tall, wide) ─────────────────────────────────────────────
@@ -507,9 +557,13 @@ def _render_wide(frame: Frame, view: GameView) -> None:
     content = content.inset(0, 1)
 
     # Centre widget reserves its column before the halves are budgeted.
+    # A live celebration takes the column over (hiding the goal list/diamond).
     widget: Image.Image | None = None
     widget_name = ""
-    if view.is_baseball_live:
+    if view.celebration is not None:
+        widget = widgets.celebration_img(view, content.h - 2, w // 3)
+        widget_name = "widget.celebration"
+    elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 4, 31))
         widget_name = "widget.diamond"
     elif view.is_soccer and view.state in ("in", "post"):
@@ -519,7 +573,7 @@ def _render_wide(frame: Frame, view: GameView) -> None:
     half_w = (w - center_w) // 2
 
     if widget is not None:
-        anchor = "mm" if view.is_baseball_live else "mb"
+        anchor = "mb" if widget_name == "widget.goals" else "mm"
         frame.place(widget_name, widget, content, anchor=anchor, priority=2)
 
     halves = {
@@ -645,7 +699,7 @@ def _render_wide(frame: Frame, view: GameView) -> None:
             y += row_h + _GAP
         if side in score_imgs:
             score_region = Region(region.x, y, region.w, max(1, region.bottom - y))
-            frame.place(f"{side}.score", score_imgs[side], score_region,
-                        anchor=f"{align}t", priority=0)
+            frame.place(f"{side}.score", _pulsed_score(view, side, score_imgs[side]),
+                        score_region, anchor=f"{align}t", priority=0)
 
     _render_footer(frame, view, footer, show_records=True, diamond_in_footer=False)
