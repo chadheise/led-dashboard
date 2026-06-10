@@ -1,0 +1,33 @@
+{
+  "fps": 10,
+  "frame_size": 64,
+  "icons": {
+    "cloudy": {
+      "frames": 60
+    },
+    "cloudy-day-3": {
+      "frames": 90
+    },
+    "cloudy-night-3": {
+      "frames": 60
+    },
+    "day": {
+      "frames": 90
+    },
+    "fog": {
+      "frames": 60
+    },
+    "night": {
+      "frames": 60
+    },
+    "rainy-6": {
+      "frames": 80
+    },
+    "snowy-6": {
+      "frames": 60
+    },
+    "thunder": {
+      "frames": 70
+    }
+  }
+}

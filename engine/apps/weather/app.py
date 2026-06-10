@@ -186,6 +186,8 @@ class WeatherApp(DisplayApp):
         self._fetched_once: bool = False
         self._view_idx: int = 0
         self._view_last_ts: float = time.monotonic()
+        self._anim_start: float | None = None
+        self._anim_t: float = 0.0
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -234,6 +236,13 @@ class WeatherApp(DisplayApp):
     # ── Rendering ──────────────────────────────────────────────────────────────
 
     async def render_frame(self) -> None:
+        # Icon-animation clock: 0.0 on the first rendered frame (which keeps
+        # single-frame snapshot renders deterministic), wall-time thereafter.
+        now = time.monotonic()
+        if self._anim_start is None:
+            self._anim_start = now
+        self._anim_t = now - self._anim_start
+
         if not self._fetched_once:
             self._draw_message("Loading...")
             return
@@ -276,7 +285,7 @@ class WeatherApp(DisplayApp):
         pad = 2
 
         icon_size = max(14, min(h - 2 * pad, w // 3))
-        icon = weather_icon_img(condition, icon_size, text_color, night=night)
+        icon = weather_icon_img(condition, icon_size, night=night, t=self._anim_t)
         img.paste(icon, (pad, (h - icon_size) // 2))
 
         text_x = pad + icon_size + 4
@@ -367,7 +376,7 @@ class WeatherApp(DisplayApp):
 
             if show_icon:
                 condition = condition_for_code(entry.get("weather_code"))
-                icon = weather_icon_img(condition, icon_size, text_color)
+                icon = weather_icon_img(condition, icon_size, t=self._anim_t)
                 img.paste(icon, (cx - icon_size // 2, icon_y))
 
             temp = entry.get("temperature")
@@ -425,7 +434,7 @@ class WeatherApp(DisplayApp):
 
             if show_icon:
                 condition = condition_for_code(entry.get("weather_code"))
-                icon = weather_icon_img(condition, icon_size, text_color)
+                icon = weather_icon_img(condition, icon_size, t=self._anim_t)
                 img.paste(icon, (cx - icon_size // 2, icon_y))
 
             hi = entry.get("temp_max")
