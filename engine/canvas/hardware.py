@@ -31,8 +31,16 @@ class HardwareCanvas(Canvas):
         When cables are too short to wire panels in the same direction, set
         alternate_rotation: true. Even-indexed logical panels use `rotation`; odd-indexed
         panels use rotation + 180 deg. The pattern repeats: 270, 90, 270, 90, ...
-        Because zigzag wiring also reverses the physical panel order, the chain is
-        mirrored so that logical col 0 remains the leftmost visible panel.
+        Because zigzag wiring also reverses the physical panel order, it cancels out
+        the chain mirroring applied in the non-zigzag case, so logical col 0 maps
+        directly to physical chain position 0.
+
+    panel chain order
+    ------------------
+    Panels are connected left-to-right, but the chain's addressing renders chain
+    position 0 on the rightmost panel. _phys_panel_col mirrors the logical column
+    index so that logical col 0 (the leftmost visible panel) maps to the last
+    physical chain position.
 
     display dimensions vs hardware config
     --------------------------------------
@@ -95,11 +103,13 @@ class HardwareCanvas(Canvas):
         return self._rotation
 
     def _phys_panel_col(self, logical_col: int) -> int:
-        # Zigzag wiring reverses the physical panel order relative to the visual order.
-        # Mirror the column index so logical col 0 is always the leftmost visible panel.
+        # Although panels are connected left-to-right, chain position 0 renders on
+        # the rightmost panel, so mirror the column index to keep logical col 0 as
+        # the leftmost visible panel. Zigzag wiring reverses the physical order
+        # again, cancelling out the mirroring.
         if self._alternate_rotation:
-            return self._chain_length - 1 - logical_col
-        return logical_col
+            return logical_col
+        return self._chain_length - 1 - logical_col
 
     def _logical_to_physical(self, x: int, y: int) -> tuple[int, int]:
         hw_rows = self._hw_rows
