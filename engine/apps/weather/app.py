@@ -342,9 +342,18 @@ class WeatherApp(DisplayApp):
         col_max_w = max(6, slot_w - col_pad)
 
         label_size = _fit_size("12PM", min(h // 6, 12), col_max_w)
-        glyph_h = render_text("9AM", text_color, label_size).height
-        icon_size = max(10, min(h - glyph_h - 16, slot_w - 4))
+        label_h = render_text("9AM", text_color, label_size).height
         temp_size = _fit_size("100°", min(h // 6, 14), col_max_w)
+        temp_h = render_text("100°", text_color, temp_size).height
+
+        # Label at top, temp anchored to the bottom; the icon gets exactly the
+        # measured space between them and is dropped when too small to read.
+        temp_y = h - temp_h - 1
+        icon_top = label_h + 3
+        icon_size = min(temp_y - 2 - icon_top, slot_w - 4)
+        show_icon = icon_size >= 8
+        # Centre the icon in its band (it may be width-capped below band height)
+        icon_y = icon_top + max(0, (temp_y - 2 - icon_top - icon_size) // 2)
 
         for i, entry in enumerate(picks):
             x0 = i * slot_w
@@ -356,17 +365,15 @@ class WeatherApp(DisplayApp):
             label_img = render_text(label, text_color, label_size)
             img.paste(label_img, (cx - label_img.width // 2, 1))
 
-            condition = condition_for_code(entry.get("weather_code"))
-            icon = weather_icon_img(condition, icon_size, text_color)
-            icon_y = label_img.height + 2
-            img.paste(icon, (cx - icon_size // 2, icon_y))
+            if show_icon:
+                condition = condition_for_code(entry.get("weather_code"))
+                icon = weather_icon_img(condition, icon_size, text_color)
+                img.paste(icon, (cx - icon_size // 2, icon_y))
 
             temp = entry.get("temperature")
             temp_str = f"{round(temp)}°" if temp is not None else "--°"
             temp_img = render_text(_clip_text(temp_str, temp_size, max_w), text_color, temp_size)
-            temp_y = icon_y + icon_size + 2
-            if temp_y + temp_img.height <= h:
-                img.paste(temp_img, (cx - temp_img.width // 2, temp_y))
+            img.paste(temp_img, (cx - temp_img.width // 2, temp_y))
 
         blit(self.canvas, img)
 
@@ -390,9 +397,21 @@ class WeatherApp(DisplayApp):
         day_sample = "Mo" if short_labels else "Mon"
 
         label_size = _fit_size(day_sample, min(h // 7, 11), col_max_w)
-        glyph_h = render_text(day_sample, text_color, label_size).height
-        icon_size = max(10, min(h - glyph_h - 18, slot_w - 4))
+        label_h = render_text(day_sample, text_color, label_size).height
         temp_size = _fit_size("100°", min(h // 8, 10), col_max_w)
+        temp_h = render_text("100°", text_color, temp_size).height
+
+        # Label at top, temps anchored to the bottom (hi over lo with a 1px
+        # gap), icon in the measured middle. Degrade explicitly: drop the lo
+        # temp before the icon, and the icon before the hi temp.
+        icon_top = label_h + 3
+        show_lo = h - 1 - 2 * temp_h - 1 - 2 - icon_top >= 8
+        temps_h = (2 * temp_h + 1) if show_lo else temp_h
+        temp_y = h - temps_h - 1
+        icon_size = min(temp_y - 2 - icon_top, slot_w - 4)
+        show_icon = icon_size >= 8
+        # Centre the icon in its band (it may be width-capped below band height)
+        icon_y = icon_top + max(0, (temp_y - 2 - icon_top - icon_size) // 2)
 
         for i, entry in enumerate(days):
             x0 = i * slot_w
@@ -404,23 +423,21 @@ class WeatherApp(DisplayApp):
             label_img = render_text(label, text_color, label_size)
             img.paste(label_img, (cx - label_img.width // 2, 1))
 
-            condition = condition_for_code(entry.get("weather_code"))
-            icon = weather_icon_img(condition, icon_size, text_color)
-            icon_y = label_img.height + 2
-            img.paste(icon, (cx - icon_size // 2, icon_y))
+            if show_icon:
+                condition = condition_for_code(entry.get("weather_code"))
+                icon = weather_icon_img(condition, icon_size, text_color)
+                img.paste(icon, (cx - icon_size // 2, icon_y))
 
             hi = entry.get("temp_max")
             lo = entry.get("temp_min")
-            y = icon_y + icon_size + 2
+            y = temp_y
             if hi is not None:
                 hi_img = render_text(_clip_text(f"{round(hi)}°", temp_size, max_w), text_color, temp_size)
-                if y + hi_img.height <= h:
-                    img.paste(hi_img, (cx - hi_img.width // 2, y))
-                    y += hi_img.height
-            if lo is not None:
+                img.paste(hi_img, (cx - hi_img.width // 2, y))
+                y += temp_h + 1
+            if show_lo and lo is not None:
                 lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), _dim(text_color), temp_size)
-                if y + lo_img.height <= h:
-                    img.paste(lo_img, (cx - lo_img.width // 2, y))
+                img.paste(lo_img, (cx - lo_img.width // 2, y))
 
         blit(self.canvas, img)
 

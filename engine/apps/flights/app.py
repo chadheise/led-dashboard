@@ -323,27 +323,44 @@ class FlightsApp(DisplayApp):
         pad = 2
         inner_h = h - 2 * pad
         inner_w = w - 2 * pad
-
-        # Divide available height into 5 equal slots; text is centered in each slot.
-        slot_h = inner_h // 5
-        font_size = max(6, slot_h - 2)
         logo_gap = 2
         stats_gap = 2
+
+        # Pick the largest font whose *measured* glyph height fits five rows;
+        # if even the smallest font can't, show fewer rows instead of letting
+        # the rows overlap.
+        n_rows = 5
+        font_size = 7
+        size_cap = max(7, inner_h // 5 - 2)
+        for size in (15, 12, 9, 8, 7):
+            if size > size_cap:
+                continue
+            if 5 * (render_text("Ag", text_color, size).height + 1) - 1 <= inner_h:
+                font_size = size
+                break
+        else:
+            glyph_h = render_text("Ag", text_color, 7).height
+            n_rows = max(2, (inner_h + 1) // (glyph_h + 1))
+        slot_h = inner_h // n_rows
 
         def row_y(row: int, img_h: int) -> int:
             """Top-left y to vertically center img_h within slot `row`."""
             return pad + row * slot_h + (slot_h - img_h) // 2
 
-        # Pre-compute stats width so text columns know how much space they have
-        stat_strs = _build_stat_lines(flight, self._show_imperial)
+        # Stats column: right-aligned. Dropped entirely when it would consume
+        # more than half the card (narrow panels) — airline and route win.
+        stat_strs = _build_stat_lines(flight, self._show_imperial)[:n_rows]
         stat_imgs = [render_text(s, text_color, font_size) for s in stat_strs]
         stats_w = max((si.width for si in stat_imgs), default=0)
+        if stats_w > inner_w // 2:
+            stat_imgs = []
+            stats_w = 0
 
-        # Logo: square spanning top 3 slots
-        logo_dim = 3 * slot_h
+        # Logo: square spanning the top rows, capped so text keeps room.
+        logo_dim = min(min(3, n_rows) * slot_h, w // 4)
         operator_iata = enriched.get("operator_iata", "") or ""
         raw_logo = self._logos.get(operator_iata) if operator_iata else None
-        if raw_logo is not None:
+        if raw_logo is not None and logo_dim >= 8:
             resized = raw_logo.resize((logo_dim, logo_dim), Image.LANCZOS)
             bg = Image.new("RGB", resized.size, (0, 0, 0))
             if resized.mode == "RGBA":
@@ -355,32 +372,33 @@ class FlightsApp(DisplayApp):
         else:
             mid_x = pad
 
-        # Middle text (rows 0-2): airline name, route, aircraft type
-        mid_w = (w - pad - stats_w - stats_gap) - mid_x
+        # Middle text: airline name, route, aircraft type (as many as fit)
+        mid_w = max(0, (w - pad - stats_w - (stats_gap if stats_w else 0)) - mid_x)
         airline = enriched.get("airline", "") or ""
         origin = enriched.get("origin", "") or ""
         dest = enriched.get("dest", "") or ""
         aircraft_type = enriched.get("aircraft_type", "") or ""
         route = f"{origin}->{dest}" if origin and dest else ""
 
-        for i, line in enumerate([airline, route, aircraft_type]):
-            if line:
+        for i, line in enumerate([airline, route, aircraft_type][: min(3, n_rows)]):
+            if line and mid_w > 0:
                 clipped = _clip_text(line, font_size, mid_w)
                 line_img = render_text(clipped, text_color, font_size)
                 img.paste(line_img, (mid_x, row_y(i, line_img.height)))
 
-        # Bottom text (rows 3-4): origin and destination airport names, left-aligned
-        origin_name = enriched.get("origin_name", "") or ""
-        dest_name = enriched.get("dest_name", "") or ""
-        bottom_w = inner_w - stats_w - stats_gap
+        # Bottom text (rows 3-4, full-height cards only): airport names
+        if n_rows == 5:
+            origin_name = enriched.get("origin_name", "") or ""
+            dest_name = enriched.get("dest_name", "") or ""
+            bottom_w = inner_w - stats_w - (stats_gap if stats_w else 0)
 
-        for i, name in enumerate([origin_name, dest_name]):
-            if name:
-                clipped = _clip_text(name, font_size, bottom_w)
-                name_img = render_text(clipped, text_color, font_size)
-                img.paste(name_img, (pad, row_y(3 + i, name_img.height)))
+            for i, name in enumerate([origin_name, dest_name]):
+                if name and bottom_w > 0:
+                    clipped = _clip_text(name, font_size, bottom_w)
+                    name_img = render_text(clipped, text_color, font_size)
+                    img.paste(name_img, (pad, row_y(3 + i, name_img.height)))
 
-        # Stats: right-aligned, vertically centered in rows 0-3
+        # Stats: right-aligned, one per row from the top
         for i, si in enumerate(stat_imgs):
             img.paste(si, (w - pad - si.width, row_y(i, si.height)))
 
@@ -389,17 +407,43 @@ class FlightsApp(DisplayApp):
     def _draw_table(self) -> None:
         max_flights = int(self.config.get("max_flights", 10))
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
+        max_w = self.canvas.width - 4
+
+        def _rows(with_alt: bool, with_spd: bool) -> list[str]:
+            rows = []
+            for flight in self._flights[:max_flights]:
+                parts = [f"{flight['callsign']:<8}"]
+                if with_alt:
+                    alt = f"{flight['alt_ft']:,}ft" if flight["alt_ft"] is not None else "   ---"
+                    parts.append(f"{alt:>8}")
+                if with_spd:
+                    spd = f"{flight['spd_kt']}kt" if flight["spd_kt"] is not None else "---"
+                    parts.append(f"{spd:>5}")
+                rows.append("  ".join(parts))
+            return rows
+
+        # Shrink the font, then drop the rightmost columns, until the widest
+        # row actually fits — never clip mid-column.
+        rows: list[str] = []
         font_size = 12
+        for columns in ((True, True), (True, False), (False, False)):
+            candidate_rows = _rows(*columns)
+            widest = max(candidate_rows, key=lambda r: render_text(r, text_color, 12).width)
+            font_size = next(
+                (s for s in (12, 9, 8, 7) if render_text(widest, text_color, s).width <= max_w),
+                None,
+            )
+            if font_size is not None:
+                rows = candidate_rows
+                break
+        if font_size is None:
+            font_size, rows = 7, _rows(False, False)
 
         glyph_h = render_text("A", (255, 255, 255), font_size).height
         row_h = glyph_h + 2
 
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-
-        for i, flight in enumerate(self._flights[:max_flights]):
-            alt = f"{flight['alt_ft']:,}ft" if flight["alt_ft"] is not None else "   ---"
-            spd = f"{flight['spd_kt']}kt" if flight["spd_kt"] is not None else "---"
-            row = f"{flight['callsign']:<8}  {alt:>8}  {spd:>5}"
+        for i, row in enumerate(rows):
             row_img = render_text(row, text_color, font_size)
             y = i * row_h + 1
             if y + row_img.height <= img.height:

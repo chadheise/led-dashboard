@@ -501,7 +501,8 @@ class StocksApp(DisplayApp):
         logo_inner = max(1, icon_size - 2) if logo is not None else 0
 
         # Choose single-line or two-line layout based on available width
-        if icon_w + sym_img.width + prc_img.width + arr_w + chg_img.width <= slot_w:
+        # (1px margin each side — content starts at x=1)
+        if icon_w + sym_img.width + prc_img.width + arr_w + chg_img.width <= slot_w - 2:
             # Everything fits on one line
             header_h = max(cap_h, icon_size) if logo is not None else cap_h
             header_img = Image.new("RGB", (slot_w, header_h), (0, 0, 0))
@@ -777,7 +778,8 @@ class StocksApp(DisplayApp):
             px = x0 + margin
             img.paste(r2_prc, (px, ctr(r2_cap, row2_y, row_h))); px += r2_prc.width
             img.paste(r2_arr, (px, ctr(r2_arr.height, row2_y, row_h))); px += r2_arr.width + r2_gap
-            img.paste(r2_chg, (px, ctr(r2_chg.height, row2_y, row_h)))
+            if r2_chg.width <= max(0, chg_budget):  # drop rather than clip the change
+                img.paste(r2_chg, (px, ctr(r2_chg.height, row2_y, row_h)))
 
         else:
             # ── Single row, very short slot — shrink to fit ───────────────────────
