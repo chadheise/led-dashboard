@@ -39,6 +39,11 @@ _FLAGCDN_BASE = "https://flagcdn.com/w80/{code}.png"
 _LOGO_TTL_SECONDS: float = 30 * 24 * 3600   # 30 days
 _TEAMS_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
 
+# How long the last successful scoreboard fetch may stand in for a failed one.
+# Long enough to ride out transient API errors between 60s refresh cycles,
+# short enough that a real outage doesn't show hours-stale live scores.
+_SCORES_FALLBACK_TTL_SECONDS: float = 15 * 60
+
 
 def _flag_url(abbr: str) -> str | None:
     code = _FIFA_FLAGS.get(abbr.upper())
@@ -73,6 +78,8 @@ class ESPNSportsLibrary(Library):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._logo_cache: dict[str, Image.Image | None] = {}
+        # league id → (fetched_at, games): fallback when a fetch fails
+        self._scores_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -414,8 +421,8 @@ class ESPNSportsLibrary(Library):
                 return True
         return False
 
-    @staticmethod
     async def _fetch_league(
+        self,
         client: httpx.AsyncClient,
         league: str,
         days_ahead: int = 1,
@@ -443,8 +450,20 @@ class ESPNSportsLibrary(Library):
         params["dates"] = f"{start_date:%Y%m%d}-{end_date:%Y%m%d}"
         try:
             resp = await client.get(url, params=params)
+            resp.raise_for_status()
             data = resp.json()
-        except Exception:
+        except Exception as exc:
+            # A transient API failure must not blank the display: serve the
+            # last successful fetch for this league while it is still fresh.
+            cached = self._scores_cache.get(league)
+            if cached is not None and time.time() - cached[0] < _SCORES_FALLBACK_TTL_SECONDS:
+                logger.warning(
+                    "Scoreboard fetch failed for %s (%s); serving cached games", league, exc
+                )
+                return [dict(g) for g in cached[1]]
+            logger.warning(
+                "Scoreboard fetch failed for %s (%s); no fresh cache available", league, exc
+            )
             return []
 
         games: list[dict[str, Any]] = []
@@ -599,4 +618,5 @@ class ESPNSportsLibrary(Library):
                 if (g.get("home_rank") or 999) <= 25
                 or (g.get("away_rank") or 999) <= 25
             ]
+        self._scores_cache[league] = (time.time(), games)
         return games

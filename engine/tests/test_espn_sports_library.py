@@ -18,8 +18,13 @@ from typing import Any
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, data: dict[str, Any]) -> None:
         self._data = data
+
+    def raise_for_status(self) -> None:
+        pass
 
     def json(self) -> dict[str, Any]:
         return self._data
@@ -62,7 +67,7 @@ def test_fetch_league_handles_null_curated_rank_and_status() -> None:
         ]
     }
 
-    games = asyncio.run(ESPNSportsLibrary._fetch_league(_FakeClient(data), "fifa.world"))
+    games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "fifa.world"))
 
     assert len(games) == 1
     game = games[0]
@@ -99,6 +104,6 @@ def test_fetch_league_skips_malformed_event_but_returns_others() -> None:
         ]
     }
 
-    games = asyncio.run(ESPNSportsLibrary._fetch_league(_FakeClient(data), "mlb"))
+    games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "mlb"))
 
     assert [g["id"] for g in games] == ["good"]
