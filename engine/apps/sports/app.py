@@ -258,9 +258,23 @@ class SportsApp(DisplayApp):
 
         favorite_teams = list(self.config.get("favorite_teams") or [])
 
+        days_ahead = 0
+        if self.config.get("show_upcoming_games", True):
+            upcoming_secs = _duration_to_seconds(
+                self.config.get("upcoming_game_window", {"days": 1})
+            )
+            days_ahead = max(1, math.ceil(upcoming_secs / 86400))
+
+        completed_secs = _duration_to_seconds(
+            self.config.get("completed_game_window", {"days": 1})
+        )
+        days_behind = max(1, math.ceil(completed_secs / 86400)) if completed_secs > 0 else 0
+
         games = await self._espn.fetch_scores(
             self._get_leagues(),
             favorite_teams=favorite_teams if favorite_teams else None,
+            days_ahead=days_ahead,
+            days_behind=days_behind,
         )
 
         self._games = self._filter_by_time_window(games)
