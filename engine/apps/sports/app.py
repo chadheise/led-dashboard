@@ -494,6 +494,28 @@ class SportsApp(DisplayApp):
         self._marquee.speed = float(self.config.get("marquee_speed", 1.5))
         self._marquee.render(self.canvas, self._marquee_strip)
 
+    def _resolve_stagger_indices(self, n: int, n_games: int) -> list[int]:
+        """Map each slot's independent rotation index to a game index.
+
+        Each slot advances on its own timer, so two slots' raw indices can
+        land on the same game mod n_games (e.g. 3 games with 2 slots/screen).
+        When there are at least as many games as slots, nudge a colliding
+        slot forward to the next game not already shown elsewhere on screen
+        this frame, so the same game never appears in two sections at once.
+        """
+        if n_games <= 0:
+            return [0] * n
+        used: set[int] = set()
+        result: list[int] = []
+        for i in range(n):
+            idx = self._stagger_slot_idx[i] % n_games
+            if n_games >= n:
+                while idx in used:
+                    idx = (idx + 1) % n_games
+            used.add(idx)
+            result.append(idx)
+        return result
+
     def _render_staggered_frame(self) -> None:
         n = self._scores_per_screen()
         seconds_per_score = self._seconds_per_score()
@@ -515,8 +537,10 @@ class SportsApp(DisplayApp):
         w = self.canvas.width
         img = Image.new("RGB", (w, h), (0, 0, 0))
 
+        game_indices = self._resolve_stagger_indices(n, n_games)
+
         for i in range(n):
-            game_idx = self._stagger_slot_idx[i] % max(1, n_games)
+            game_idx = game_indices[i]
             game = self._games[game_idx]
             x_off = i * card_w
             actual_w = card_w if i < n - 1 else w - x_off
