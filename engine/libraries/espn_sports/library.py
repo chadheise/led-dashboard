@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar
@@ -81,10 +82,12 @@ class ESPNSportsLibrary(Library):
         self,
         leagues: list[str],
         favorite_teams: list[str] | None = None,
+        days_ahead: int = 1,
+        days_behind: int = 1,
     ) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             results = await asyncio.gather(
-                *[self._fetch_league(client, lg) for lg in leagues],
+                *[self._fetch_league(client, lg, days_ahead, days_behind) for lg in leagues],
                 return_exceptions=True,
             )
         all_games: list[dict[str, Any]] = []
@@ -412,6 +415,8 @@ class ESPNSportsLibrary(Library):
     async def _fetch_league(
         client: httpx.AsyncClient,
         league: str,
+        days_ahead: int = 1,
+        days_behind: int = 1,
     ) -> list[dict[str, Any]]:
         entry = _LEAGUE_BY_ID.get(league, {"sport": "football", "league": league})
         sport = entry["sport"]
@@ -426,6 +431,13 @@ class ESPNSportsLibrary(Library):
         groups = entry.get("groups")
         if groups:
             params["groups"] = groups
+        # Without an explicit date range, ESPN's scoreboard endpoint only
+        # returns a narrow default window (often just "today"), which can
+        # hide most of a tournament's upcoming fixtures (e.g. World Cup).
+        today = datetime.now(timezone.utc).date()
+        start_date = today - timedelta(days=max(0, days_behind))
+        end_date = today + timedelta(days=max(0, days_ahead))
+        params["dates"] = f"{start_date:%Y%m%d}-{end_date:%Y%m%d}"
         try:
             resp = await client.get(url, params=params)
             data = resp.json()

@@ -123,10 +123,10 @@ def _compose_status(
             down_str = ["1st", "2nd", "3rd", "4th"][min(int(down) - 1, 3)]
             status = f"{status} {down_str}&{distance}"
 
-    elif state == "pre" and not game.get("series_summary") and tz is not None:
+    elif state == "pre" and not game.get("series_summary"):
         start_raw = game.get("start_time")
         if start_raw:
-            formatted = _format_start_time(start_raw, tz, time_format, now)
+            formatted = _format_start_time(start_raw, tz or datetime.timezone.utc, time_format, now)
             if formatted:
                 status = formatted
 

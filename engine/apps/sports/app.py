@@ -35,7 +35,7 @@ _UNIT_SECONDS: dict[str, float] = {
     "years": 31536000,
 }
 
-_FPS = 30  # assumed display frame rate for seconds → frames conversion
+_FPS = 30  # only used to convert legacy "frames_per_game" configs to seconds
 
 _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 _ANIM_FRAMES = 8             # sprite animation cycle length
@@ -189,7 +189,7 @@ class SportsApp(DisplayApp):
 
         # Paginate state
         self._page_idx = 0
-        self._frame_count = 0
+        self._page_started_at = self._now()
 
         # Marquee state
         self._marquee_strip: Image.Image | None = None
@@ -205,7 +205,7 @@ class SportsApp(DisplayApp):
 
         # Staggered state
         self._stagger_slot_idx: list[int] = []
-        self._stagger_slot_counter: list[int] = []
+        self._stagger_slot_started_at: list[float] = []
 
     def _get_user_tz(self) -> ZoneInfo | None:
         """Return the user's timezone, re-computing only when the stored location changes."""
@@ -238,13 +238,13 @@ class SportsApp(DisplayApp):
     def _scores_per_screen(self) -> int:
         return max(1, min(4, int(self.config.get("scores_per_screen", 1))))
 
-    def _frames_per_score(self) -> int:
+    def _seconds_per_score(self) -> float:
         # Support old "frames_per_game" field for backwards compat
-        seconds = int(self.config.get(
+        seconds = self.config.get(
             "seconds_per_score",
             max(1, int(self.config.get("frames_per_game", 150)) // _FPS),
-        ))
-        return max(1, seconds) * _FPS
+        )
+        return max(1.0, float(seconds))
 
 
     async def fetch_data(self) -> None:
@@ -258,9 +258,23 @@ class SportsApp(DisplayApp):
 
         favorite_teams = list(self.config.get("favorite_teams") or [])
 
+        days_ahead = 0
+        if self.config.get("show_upcoming_games", True):
+            upcoming_secs = _duration_to_seconds(
+                self.config.get("upcoming_game_window", {"days": 1})
+            )
+            days_ahead = max(1, math.ceil(upcoming_secs / 86400))
+
+        completed_secs = _duration_to_seconds(
+            self.config.get("completed_game_window", {"days": 1})
+        )
+        days_behind = max(1, math.ceil(completed_secs / 86400)) if completed_secs > 0 else 0
+
         games = await self._espn.fetch_scores(
             self._get_leagues(),
             favorite_teams=favorite_teams if favorite_teams else None,
+            days_ahead=days_ahead,
+            days_behind=days_behind,
         )
 
         self._games = self._filter_by_time_window(games)
@@ -360,18 +374,19 @@ class SportsApp(DisplayApp):
 
     def _init_stagger_state(self) -> None:
         n = self._scores_per_screen()
-        frames_per_score = self._frames_per_score()
+        seconds_per_score = self._seconds_per_score()
         stagger_delay_s = max(1, int(self.config.get("stagger_delay", 2)))
-        stagger_offset = min(stagger_delay_s * _FPS, frames_per_score // max(1, n))
+        offset_s = min(float(stagger_delay_s), seconds_per_score / max(1, n))
+        now = self._now()
         self._stagger_slot_idx = list(range(n))
-        self._stagger_slot_counter = [i * stagger_offset for i in range(n)]
+        self._stagger_slot_started_at = [now - i * offset_s for i in range(n)]
 
     async def should_display(self) -> bool:
         return bool(self._games)
 
     async def on_activate(self) -> None:
         self._page_idx = 0
-        self._frame_count = 0
+        self._page_started_at = self._now()
         self._marquee.reset(self.canvas)
         self._marquee_strip = None
         self._init_stagger_state()
@@ -392,7 +407,7 @@ class SportsApp(DisplayApp):
 
     def _render_paginate_frame(self) -> None:
         n = self._scores_per_screen()
-        frames_per_score = self._frames_per_score()
+        seconds_per_score = self._seconds_per_score()
 
         start = self._page_idx * n
         page_games = self._games[start : start + n]
@@ -402,9 +417,8 @@ class SportsApp(DisplayApp):
 
         self._draw_games(page_games, n)
 
-        self._frame_count += 1
-        if self._frame_count >= frames_per_score:
-            self._frame_count = 0
+        if self._now() - self._page_started_at >= seconds_per_score:
+            self._page_started_at = self._now()
             max_pages = max(1, math.ceil(len(self._games) / n))
             self._page_idx = (self._page_idx + 1) % max_pages
 
@@ -464,18 +478,18 @@ class SportsApp(DisplayApp):
 
     def _render_staggered_frame(self) -> None:
         n = self._scores_per_screen()
-        frames_per_score = self._frames_per_score()
+        seconds_per_score = self._seconds_per_score()
         n_games = len(self._games)
 
         # Lazily initialize stagger state when n changes or first run
         if len(self._stagger_slot_idx) != n:
             self._init_stagger_state()
 
-        # Advance each slot's counter independently
+        # Advance each slot's timer independently
+        now = self._now()
         for i in range(n):
-            self._stagger_slot_counter[i] += 1
-            if self._stagger_slot_counter[i] >= frames_per_score:
-                self._stagger_slot_counter[i] = 0
+            if now - self._stagger_slot_started_at[i] >= seconds_per_score:
+                self._stagger_slot_started_at[i] = now
                 self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + n) % max(1, n_games)
 
         card_w = self.canvas.width // n
