@@ -238,6 +238,11 @@ class SportsApp(DisplayApp):
     def _scores_per_screen(self) -> int:
         return max(1, min(4, int(self.config.get("scores_per_screen", 1))))
 
+    def _active_slot_count(self) -> int:
+        """Slots to show on screen at once: never more than the number of
+        games, so a single game isn't duplicated to fill empty slots."""
+        return min(self._scores_per_screen(), max(1, len(self._games)))
+
     def _seconds_per_score(self) -> float:
         # Support old "frames_per_game" field for backwards compat
         seconds = self.config.get(
@@ -391,7 +396,7 @@ class SportsApp(DisplayApp):
         return result
 
     def _init_stagger_state(self) -> None:
-        n = self._scores_per_screen()
+        n = self._active_slot_count()
         seconds_per_score = self._seconds_per_score()
         stagger_delay_s = max(1, int(self.config.get("stagger_delay", 2)))
         offset_s = min(float(stagger_delay_s), seconds_per_score / max(1, n))
@@ -444,7 +449,7 @@ class SportsApp(DisplayApp):
         if not self._games:
             self._marquee_celeb_state = {}
             return None
-        n = self._scores_per_screen()
+        n = self._active_slot_count()
         card_w = self.canvas.width // n
         h = self.canvas.height
         strip = Image.new("RGB", (card_w * len(self._games), h), (0, 0, 0))
@@ -517,7 +522,7 @@ class SportsApp(DisplayApp):
         return result
 
     def _render_staggered_frame(self) -> None:
-        n = self._scores_per_screen()
+        n = self._active_slot_count()
         seconds_per_score = self._seconds_per_score()
         n_games = len(self._games)
 
@@ -558,6 +563,7 @@ class SportsApp(DisplayApp):
     def _draw_games(self, games: list[dict[str, Any]], n_cols: int) -> None:
         w, h = self.canvas.width, self.canvas.height
         img = Image.new("RGB", (w, h))
+        n_cols = min(n_cols, max(1, len(games)))
         slot_w = w // n_cols
 
         for i, game in enumerate(games):
