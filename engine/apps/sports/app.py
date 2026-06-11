@@ -111,6 +111,23 @@ class SportsApp(DisplayApp):
                 "enum": ["paginate", "marquee", "staggered"],
                 "default": "paginate",
             },
+            "live_game_mode": {
+                "type": "boolean",
+                "title": "Live game spotlight",
+                "description": (
+                    "When a qualifying game is live, dedicate 3/4 of the screen "
+                    "to it and cycle the other games through the remaining 1/4."
+                ),
+                "default": False,
+            },
+            "live_game_source": {
+                "type": "string",
+                "title": "Spotlight which live games",
+                "description": "Which live games qualify for the spotlight.",
+                "enum": ["any", "favorites"],
+                "x-enum-labels": {"any": "Any live game", "favorites": "Favorite teams only"},
+                "default": "favorites",
+            },
             "scores_per_screen": {
                 "type": "integer",
                 "title": "Scores per screen",
@@ -207,6 +224,12 @@ class SportsApp(DisplayApp):
         self._stagger_slot_idx: list[int] = []
         self._stagger_slot_started_at: list[float] = []
 
+        # Live game spotlight state
+        self._featured_idx = 0
+        self._featured_started_at = self._now()
+        self._sidebar_idx = 0
+        self._sidebar_started_at = self._now()
+
     def _get_user_tz(self) -> ZoneInfo | None:
         """Return the user's timezone, re-computing only when the stored location changes."""
         loc_cfg = self.library_configs.get("location", {}).get("location", {})
@@ -251,6 +274,24 @@ class SportsApp(DisplayApp):
         )
         return max(1.0, float(seconds))
 
+    def _featured_live_games(self) -> list[dict[str, Any]]:
+        """Live games eligible for the spotlight, in ``self._games`` order.
+
+        Empty unless ``live_game_mode`` is on. ``live_game_source`` selects
+        whether *any* live game qualifies, or only those matching
+        ``favorite_teams`` (which also covers favorited World Cup teams).
+        """
+        if not self.config.get("live_game_mode", False):
+            return []
+        source = self.config.get("live_game_source", "favorites")
+        favorite_teams = list(self.config.get("favorite_teams") or [])
+        result: list[dict[str, Any]] = []
+        for game in self._games:
+            if game.get("state") != "in":
+                continue
+            if source == "any" or self._espn._matches_favorites(game, favorite_teams):
+                result.append(game)
+        return result
 
     async def fetch_data(self) -> None:
         game = _DEBUG_GAME_BY_ID.get(self.config.get("debug_game", ""))
@@ -419,6 +460,11 @@ class SportsApp(DisplayApp):
         if not self._games:
             return  # blank canvas — scene manager has already cleared it
 
+        featured_games = self._featured_live_games()
+        if featured_games:
+            self._render_featured_frame(featured_games)
+            return
+
         display_mode = self.config.get("display_mode", "paginate")
 
         if display_mode == "marquee":
@@ -555,6 +601,50 @@ class SportsApp(DisplayApp):
                 actual_w -= 1
             card = self._render_slot_image(game, actual_w, h)
             img.paste(card, (x_off, 0))
+
+        blit(self.canvas, img)
+
+    def _next_featured_game(self, featured_games: list[dict[str, Any]]) -> dict[str, Any]:
+        """Cycle the spotlight slot through every qualifying live game."""
+        now = self._now()
+        if now - self._featured_started_at >= self._seconds_per_score():
+            self._featured_started_at = now
+            self._featured_idx += 1
+        self._featured_idx %= len(featured_games)
+        return featured_games[self._featured_idx]
+
+    def _next_sidebar_game(self, others: list[dict[str, Any]]) -> dict[str, Any]:
+        """Cycle the sidebar slot through every non-featured game."""
+        now = self._now()
+        if now - self._sidebar_started_at >= self._seconds_per_score():
+            self._sidebar_started_at = now
+            self._sidebar_idx += 1
+        self._sidebar_idx %= len(others)
+        return others[self._sidebar_idx]
+
+    def _render_featured_frame(self, featured_games: list[dict[str, Any]]) -> None:
+        """Spotlight a live game across the left 3/4 of the screen, cycling
+        the rest of the games through the remaining 1/4."""
+        w, h = self.canvas.width, self.canvas.height
+        featured = self._next_featured_game(featured_games)
+        others = [g for g in self._games if g is not featured]
+
+        if not others:
+            card = self._render_slot_image(featured, w, h)
+            blit(self.canvas, card)
+            return
+
+        main_w = max(1, (w * 3) // 4)
+        side_w = w - main_w
+
+        img = Image.new("RGB", (w, h), (0, 0, 0))
+        main_card = self._render_slot_image(featured, main_w, h)
+        img.paste(main_card, (0, 0))
+
+        other = self._next_sidebar_game(others)
+        side_card = self._render_slot_image(other, side_w - 1, h)
+        ImageDraw.Draw(img).line([(main_w, 0), (main_w, h - 1)], fill=(35, 35, 35))
+        img.paste(side_card, (main_w + 1, 0))
 
         blit(self.canvas, img)
 
