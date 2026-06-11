@@ -277,7 +277,7 @@ class SportsApp(DisplayApp):
             days_behind=days_behind,
         )
 
-        self._games = self._filter_by_time_window(games)
+        self._games = self._filter_by_time_window(self._dedupe_games(games))
 
         self._update_celebrations()
 
@@ -320,6 +320,24 @@ class SportsApp(DisplayApp):
             pulse_on=int(elapsed) % 2 == 0,
             anim_frame=int(elapsed * _ANIM_FPS) % _ANIM_FRAMES,
         )
+
+    def _dedupe_games(self, games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Drop repeat entries for the same game.
+
+        Selecting multiple leagues that overlap (e.g. two NCAAF conference
+        filters) can return the same inter-conference matchup from each
+        fetch, which would otherwise show the same game in two sections at
+        once when scores_per_screen > 1.
+        """
+        seen: set[str] = set()
+        result: list[dict[str, Any]] = []
+        for game in games:
+            key = game_key(game)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(game)
+        return result
 
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
