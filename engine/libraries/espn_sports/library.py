@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,8 @@ import httpx
 from PIL import Image
 
 from libraries.base import Library
+
+logger = logging.getLogger(__name__)
 
 
 _LEAGUES_FILE = Path(__file__).parent / "leagues.json"
@@ -446,146 +449,150 @@ class ESPNSportsLibrary(Library):
 
         games: list[dict[str, Any]] = []
         for event in data.get("events", []):
-            comp = event.get("competitions", [{}])[0]
-            competitors = comp.get("competitors", [])
-            if len(competitors) < 2:
+            try:
+                comp = event.get("competitions", [{}])[0]
+                competitors = comp.get("competitors", [])
+                if len(competitors) < 2:
+                    continue
+                home = next(
+                    (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
+                )
+                away = next(
+                    (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
+                )
+                status_type = (event.get("status") or {}).get("type") or {}
+
+                home_team = home.get("team", {})
+                away_team = away.get("team", {})
+
+                series = comp.get("series", {})
+                series_summary = series.get("summary") if series else None
+
+                # Team ranking (for NCAAF top-25 filtering)
+                home_rank_raw = (home.get("curatedRank") or {}).get("current")
+                away_rank_raw = (away.get("curatedRank") or {}).get("current")
+                home_rank: int | None = int(home_rank_raw) if home_rank_raw else None
+                away_rank: int | None = int(away_rank_raw) if away_rank_raw else None
+
+                # Conference (for display and post-fetch filtering)
+                home_groups = home_team.get("groups", [])
+                away_groups = away_team.get("groups", [])
+                home_conf: str | None = home_groups[0].get("name") if home_groups else None
+                away_conf: str | None = away_groups[0].get("name") if away_groups else None
+
+                # In-game situational data (football: down/distance/possession; baseball: runners/outs)
+                situation = comp.get("situation") or {}
+
+                # Most recent play, when the scoreboard includes one (live games).
+                # Normalized defensively — celebration detection degrades gracefully
+                # when ESPN omits it for a sport or game.
+                lp = situation.get("lastPlay") or {}
+                last_play: dict[str, str] | None = None
+                if lp:
+                    last_play = {
+                        "id": str(lp.get("id") or ""),
+                        "type_text": str(((lp.get("type") or {}).get("text")) or ""),
+                        "text": str(lp.get("text") or ""),
+                        "team_id": str(((lp.get("team") or {}).get("id")) or ""),
+                    }
+
+                # Team records (for football display)
+                home_record: str | None = next(
+                    (r.get("summary") for r in home.get("records", []) if r.get("name") == "overall"),
+                    None,
+                )
+                away_record: str | None = next(
+                    (r.get("summary") for r in away.get("records", []) if r.get("name") == "overall"),
+                    None,
+                )
+
+                # Match context note (soccer: group name or knockout round)
+                notes = comp.get("notes") or []
+                match_note: str = notes[0].get("headline", "") if notes else ""
+
+                # Soccer: goal times from match details and group standings points
+                home_goals: list[str] = []
+                away_goals: list[str] = []
+                home_points: int | None = None
+                away_points: int | None = None
+                if sport == "soccer":
+                    ht_id = home_team.get("id", "")
+                    at_id = away_team.get("id", "")
+                    for detail in comp.get("details") or []:
+                        d_type = ((detail.get("type") or {}).get("text") or "").lower()
+                        if "goal" not in d_type:
+                            continue
+                        clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
+                        scoring_id = ((detail.get("team") or {}).get("id") or "")
+                        is_og = "own" in d_type
+                        if is_og:
+                            if scoring_id == ht_id:
+                                away_goals.append(f"{clock_val}(og)")
+                            elif scoring_id == at_id:
+                                home_goals.append(f"{clock_val}(og)")
+                        else:
+                            if scoring_id == ht_id:
+                                home_goals.append(clock_val)
+                            elif scoring_id == at_id:
+                                away_goals.append(clock_val)
+                    for stat in home.get("statistics") or []:
+                        if str(stat.get("name", "")).lower() in ("points", "pts"):
+                            try:
+                                home_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
+                            except (ValueError, TypeError):
+                                pass
+                    for stat in away.get("statistics") or []:
+                        if str(stat.get("name", "")).lower() in ("points", "pts"):
+                            try:
+                                away_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
+                            except (ValueError, TypeError):
+                                pass
+
+                games.append(
+                    {
+                        "id": str(event.get("id") or ""),
+                        "league": league,
+                        "sport": sport,
+                        "home_abbr": home_team.get("abbreviation", "???"),
+                        "away_abbr": away_team.get("abbreviation", "???"),
+                        "home_name": home_team.get("displayName", ""),
+                        "away_name": away_team.get("displayName", ""),
+                        "home_location": home_team.get("location", ""),
+                        "away_location": away_team.get("location", ""),
+                        "home_nickname": home_team.get("name", ""),
+                        "away_nickname": away_team.get("name", ""),
+                        "home_score": home.get("score", "-"),
+                        "away_score": away.get("score", "-"),
+                        "home_color": home_team.get("color", "444444"),
+                        "away_color": away_team.get("color", "444444"),
+                        "home_alt_color": home_team.get("alternateColor", "aaaaaa"),
+                        "away_alt_color": away_team.get("alternateColor", "aaaaaa"),
+                        "home_logo_url": _flag_url(home_team.get("abbreviation", "")) if use_flags else home_team.get("logo"),
+                        "away_logo_url": _flag_url(away_team.get("abbreviation", "")) if use_flags else away_team.get("logo"),
+                        "status": status_type.get("shortDetail", "Scheduled"),
+                        "state": status_type.get("state", "pre"),
+                        "series_summary": series_summary,
+                        "start_time": comp.get("date"),
+                        "home_rank": home_rank,
+                        "away_rank": away_rank,
+                        "home_conf": home_conf,
+                        "away_conf": away_conf,
+                        "situation": situation,
+                        "last_play": last_play,
+                        "home_id": home_team.get("id", ""),
+                        "away_id": away_team.get("id", ""),
+                        "home_record": home_record,
+                        "away_record": away_record,
+                        "match_note": match_note,
+                        "home_goals": home_goals,
+                        "away_goals": away_goals,
+                        "home_points": home_points,
+                        "away_points": away_points,
+                    }
+                )
+            except Exception as exc:
+                logger.warning("Skipping malformed %s event: %s", league, exc)
                 continue
-            home = next(
-                (c for c in competitors if c.get("homeAway") == "home"), competitors[0]
-            )
-            away = next(
-                (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
-            )
-            status_type = event.get("status", {}).get("type", {})
-
-            home_team = home.get("team", {})
-            away_team = away.get("team", {})
-
-            series = comp.get("series", {})
-            series_summary = series.get("summary") if series else None
-
-            # Team ranking (for NCAAF top-25 filtering)
-            home_rank_raw = home.get("curatedRank", {}).get("current")
-            away_rank_raw = away.get("curatedRank", {}).get("current")
-            home_rank: int | None = int(home_rank_raw) if home_rank_raw else None
-            away_rank: int | None = int(away_rank_raw) if away_rank_raw else None
-
-            # Conference (for display and post-fetch filtering)
-            home_groups = home_team.get("groups", [])
-            away_groups = away_team.get("groups", [])
-            home_conf: str | None = home_groups[0].get("name") if home_groups else None
-            away_conf: str | None = away_groups[0].get("name") if away_groups else None
-
-            # In-game situational data (football: down/distance/possession; baseball: runners/outs)
-            situation = comp.get("situation") or {}
-
-            # Most recent play, when the scoreboard includes one (live games).
-            # Normalized defensively — celebration detection degrades gracefully
-            # when ESPN omits it for a sport or game.
-            lp = situation.get("lastPlay") or {}
-            last_play: dict[str, str] | None = None
-            if lp:
-                last_play = {
-                    "id": str(lp.get("id") or ""),
-                    "type_text": str(((lp.get("type") or {}).get("text")) or ""),
-                    "text": str(lp.get("text") or ""),
-                    "team_id": str(((lp.get("team") or {}).get("id")) or ""),
-                }
-
-            # Team records (for football display)
-            home_record: str | None = next(
-                (r.get("summary") for r in home.get("records", []) if r.get("name") == "overall"),
-                None,
-            )
-            away_record: str | None = next(
-                (r.get("summary") for r in away.get("records", []) if r.get("name") == "overall"),
-                None,
-            )
-
-            # Match context note (soccer: group name or knockout round)
-            notes = comp.get("notes") or []
-            match_note: str = notes[0].get("headline", "") if notes else ""
-
-            # Soccer: goal times from match details and group standings points
-            home_goals: list[str] = []
-            away_goals: list[str] = []
-            home_points: int | None = None
-            away_points: int | None = None
-            if sport == "soccer":
-                ht_id = home_team.get("id", "")
-                at_id = away_team.get("id", "")
-                for detail in comp.get("details") or []:
-                    d_type = ((detail.get("type") or {}).get("text") or "").lower()
-                    if "goal" not in d_type:
-                        continue
-                    clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
-                    scoring_id = ((detail.get("team") or {}).get("id") or "")
-                    is_og = "own" in d_type
-                    if is_og:
-                        if scoring_id == ht_id:
-                            away_goals.append(f"{clock_val}(og)")
-                        elif scoring_id == at_id:
-                            home_goals.append(f"{clock_val}(og)")
-                    else:
-                        if scoring_id == ht_id:
-                            home_goals.append(clock_val)
-                        elif scoring_id == at_id:
-                            away_goals.append(clock_val)
-                for stat in home.get("statistics") or []:
-                    if str(stat.get("name", "")).lower() in ("points", "pts"):
-                        try:
-                            home_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
-                        except (ValueError, TypeError):
-                            pass
-                for stat in away.get("statistics") or []:
-                    if str(stat.get("name", "")).lower() in ("points", "pts"):
-                        try:
-                            away_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
-                        except (ValueError, TypeError):
-                            pass
-
-            games.append(
-                {
-                    "id": str(event.get("id") or ""),
-                    "league": league,
-                    "sport": sport,
-                    "home_abbr": home_team.get("abbreviation", "???"),
-                    "away_abbr": away_team.get("abbreviation", "???"),
-                    "home_name": home_team.get("displayName", ""),
-                    "away_name": away_team.get("displayName", ""),
-                    "home_location": home_team.get("location", ""),
-                    "away_location": away_team.get("location", ""),
-                    "home_nickname": home_team.get("name", ""),
-                    "away_nickname": away_team.get("name", ""),
-                    "home_score": home.get("score", "-"),
-                    "away_score": away.get("score", "-"),
-                    "home_color": home_team.get("color", "444444"),
-                    "away_color": away_team.get("color", "444444"),
-                    "home_alt_color": home_team.get("alternateColor", "aaaaaa"),
-                    "away_alt_color": away_team.get("alternateColor", "aaaaaa"),
-                    "home_logo_url": _flag_url(home_team.get("abbreviation", "")) if use_flags else home_team.get("logo"),
-                    "away_logo_url": _flag_url(away_team.get("abbreviation", "")) if use_flags else away_team.get("logo"),
-                    "status": status_type.get("shortDetail", "Scheduled"),
-                    "state": status_type.get("state", "pre"),
-                    "series_summary": series_summary,
-                    "start_time": comp.get("date"),
-                    "home_rank": home_rank,
-                    "away_rank": away_rank,
-                    "home_conf": home_conf,
-                    "away_conf": away_conf,
-                    "situation": situation,
-                    "last_play": last_play,
-                    "home_id": home_team.get("id", ""),
-                    "away_id": away_team.get("id", ""),
-                    "home_record": home_record,
-                    "away_record": away_record,
-                    "match_note": match_note,
-                    "home_goals": home_goals,
-                    "away_goals": away_goals,
-                    "home_points": home_points,
-                    "away_points": away_points,
-                }
-            )
         if filter_mode == "top25":
             games = [
                 g for g in games

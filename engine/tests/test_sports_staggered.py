@@ -108,3 +108,102 @@ def test_render_staggered_frame_never_repeats_a_game_on_screen():
     assert app._stagger_slot_idx == [0, 0]  # raw indices do collide
     assert len(rendered_ids) == 2
     assert len(set(rendered_ids)) == 2  # but the displayed games are distinct
+
+
+def test_active_slot_count_capped_by_game_count():
+    app = _make_app({"scores_per_screen": 4})
+
+    app._games = [object()]
+    assert app._active_slot_count() == 1
+
+    app._games = [object(), object(), object()]
+    assert app._active_slot_count() == 3
+
+    app._games = [object()] * 5
+    assert app._active_slot_count() == 4  # capped at scores_per_screen
+
+
+def test_render_staggered_frame_single_game_uses_one_full_width_slot():
+    """A single game with scores_per_screen=4 should render once, full
+    width — not the same game repeated across all 4 slots."""
+    from PIL import Image
+
+    from tests.fixtures.sports import _game
+
+    games = [
+        _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
+              away_score="50", home_score="48", status="Q3", state="in", id="1"),
+    ]
+
+    app = _make_app({
+        "display_mode": "staggered",
+        "scores_per_screen": 4,
+        "seconds_per_score": 5,
+        "stagger_delay": 2,
+    }, w=320, h=64)
+    app._games = games
+    app._logos = {}
+
+    rendered: list[tuple[str, int]] = []
+
+    def fake_render_slot_image(game: Any, w: int, h: int) -> Image.Image:
+        rendered.append((game["id"], w))
+        return Image.new("RGB", (max(1, w), max(1, h)))
+
+    app._render_slot_image = fake_render_slot_image
+
+    now = 1000.0
+    app._now = lambda: now
+    app._init_stagger_state()
+    assert app._stagger_slot_idx == [0]
+
+    app._render_staggered_frame()
+
+    assert rendered == [("1", 320)]
+
+
+def test_draw_games_single_game_uses_full_width():
+    """Paginate mode: a lone game on a 4-up page should fill the screen
+    instead of being squeezed into one quarter-width slot."""
+    from PIL import Image
+
+    from tests.fixtures.sports import _game
+
+    games = [
+        _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
+              away_score="50", home_score="48", status="Q3", state="in", id="1"),
+    ]
+
+    app = _make_app({"scores_per_screen": 4}, w=320, h=64)
+    app._games = games
+    app._logos = {}
+
+    rendered: list[tuple[str, int]] = []
+
+    def fake_render_slot_image(game: Any, w: int, h: int) -> Image.Image:
+        rendered.append((game["id"], w))
+        return Image.new("RGB", (max(1, w), max(1, h)))
+
+    app._render_slot_image = fake_render_slot_image
+
+    app._draw_games(games, 4)
+
+    assert rendered == [("1", 320)]
+
+
+def test_build_marquee_strip_single_game_full_width():
+    from tests.fixtures.sports import _game
+
+    games = [
+        _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
+              away_score="50", home_score="48", status="Q3", state="in", id="1"),
+    ]
+
+    app = _make_app({"scores_per_screen": 4}, w=320, h=64)
+    app._games = games
+    app._logos = {}
+
+    strip = app._build_marquee_strip()
+
+    assert strip is not None
+    assert strip.width == 320
