@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import logging
 from typing import Any, ClassVar
 
@@ -85,6 +86,21 @@ class LocationLibrary(Library):
             logger.warning("Timezone lookup failed: %s", exc)
             return None
 
+    def get_fallback_offset(self) -> datetime.timezone | None:
+        """A rough fixed UTC offset derived from longitude alone.
+
+        Used when an IANA timezone can't be resolved — e.g. `timezonefinder`
+        (and its native dependencies: numpy, h3, cffi) failed to install or
+        import on the host, which silently leaves `get_timezone()` returning
+        `None`. This won't observe DST, but converts pre-game times to
+        roughly the viewer's local time rather than leaving them in UTC.
+        """
+        lat, lon = self.get_latitude(), self.get_longitude()
+        if lat == 0.0 and lon == 0.0:
+            return None
+        hours = max(-12, min(14, round(lon / 15)))
+        return datetime.timezone(datetime.timedelta(hours=hours))
+
     async def get_city_country(self) -> dict[str, str]:
         lat, lon = self.get_latitude(), self.get_longitude()
         if lat == 0.0 and lon == 0.0:
@@ -119,6 +135,10 @@ class LocationLibrary(Library):
             try:
                 from timezonefinder import TimezoneFinder  # type: ignore[import]
                 self._tf = TimezoneFinder()
-            except ImportError:
-                logger.warning("timezonefinder not installed; timezone lookups unavailable")
+            except Exception as exc:
+                logger.warning(
+                    "timezonefinder unavailable (%s); falling back to a "
+                    "longitude-based UTC offset for local times",
+                    exc,
+                )
         return self._tf

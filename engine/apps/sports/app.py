@@ -251,8 +251,10 @@ class SportsApp(DisplayApp):
         if lat == 0.0 and lon == 0.0:
             self._user_tz = None
             return None
-        tz_str = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        self._user_tz = resolve_zone(tz_str) if tz_str else None
+        location_lib = LocationLibrary(self.library_configs.get("location", {}))
+        tz_str = location_lib.get_timezone()
+        tz = resolve_zone(tz_str) if tz_str else None
+        self._user_tz = tz or location_lib.get_fallback_offset()
         return self._user_tz
 
     def _get_leagues(self) -> list[str]:

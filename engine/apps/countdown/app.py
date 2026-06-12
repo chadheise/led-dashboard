@@ -258,8 +258,10 @@ class CountdownApp(DisplayApp):
             self._tz = None
             return None
 
-        tz_name = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        self._tz = resolve_zone(tz_name) if tz_name else None
+        location_lib = LocationLibrary(self.library_configs.get("location", {}))
+        tz_name = location_lib.get_timezone()
+        tz = resolve_zone(tz_name) if tz_name else None
+        self._tz = tz or location_lib.get_fallback_offset()
         return self._tz
 
     # ── Data fetching ────────────────────────────────────────────────────────────
