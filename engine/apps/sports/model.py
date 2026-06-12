@@ -128,7 +128,9 @@ def _compose_status(
         if start_raw:
             formatted = _format_start_time(start_raw, tz or datetime.timezone.utc, time_format, now)
             if formatted:
-                status = formatted
+                # Without a resolved user timezone, the time above is UTC — label
+                # it so it isn't mistaken for a (wrongly) converted local time.
+                status = formatted if tz is not None else f"{formatted} UTC"
 
     return status
 

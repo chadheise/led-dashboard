@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from PIL import Image
 
@@ -14,6 +14,7 @@ from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, can_fit_text
 from libraries.location.library import LocationLibrary
+from libraries.timezones.library import resolve_zone
 from libraries.holidays.library import (
     holiday_icon_img,
     holiday_icons,
@@ -258,13 +259,7 @@ class CountdownApp(DisplayApp):
             return None
 
         tz_name = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        if not tz_name:
-            self._tz = None
-            return None
-        try:
-            self._tz = ZoneInfo(tz_name)
-        except ZoneInfoNotFoundError:
-            self._tz = None
+        self._tz = resolve_zone(tz_name) if tz_name else None
         return self._tz
 
     # ── Data fetching ────────────────────────────────────────────────────────────

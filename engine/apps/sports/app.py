@@ -7,7 +7,7 @@ import math
 import time
 from pathlib import Path
 from typing import Any, ClassVar
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from PIL import Image, ImageDraw
 
@@ -18,6 +18,7 @@ from marquee import Marquee
 from libraries.canvas_utils.library import blit
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 from libraries.location.library import LocationLibrary
+from libraries.timezones.library import resolve_zone
 
 from .cards import render_card
 from .events import Celebration, GameSnapshot, detect_events, game_key, make_snapshot
@@ -251,13 +252,7 @@ class SportsApp(DisplayApp):
             self._user_tz = None
             return None
         tz_str = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        if not tz_str:
-            self._user_tz = None
-            return None
-        try:
-            self._user_tz = ZoneInfo(tz_str)
-        except ZoneInfoNotFoundError:
-            self._user_tz = None
+        self._user_tz = resolve_zone(tz_str) if tz_str else None
         return self._user_tz
 
     def _get_leagues(self) -> list[str]:
