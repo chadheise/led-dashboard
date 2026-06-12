@@ -254,7 +254,15 @@ class SportsApp(DisplayApp):
         location_lib = LocationLibrary(self.library_configs.get("location", {}))
         tz_str = location_lib.get_timezone()
         tz = resolve_zone(tz_str) if tz_str else None
-        self._user_tz = tz or location_lib.get_fallback_offset()
+        if tz is None:
+            fallback = location_lib.get_fallback_offset()
+            logger.warning(
+                "No IANA timezone resolved for location (%.4f, %.4f) (got %r); "
+                "using fixed offset %s for pre-game times",
+                lat, lon, tz_str, fallback,
+            )
+            tz = fallback
+        self._user_tz = tz
         return self._user_tz
 
     def _get_leagues(self) -> list[str]:

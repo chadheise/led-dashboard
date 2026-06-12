@@ -7,12 +7,22 @@ times are still converted toward the viewer's local time instead of UTC.
 from __future__ import annotations
 
 import datetime
+from zoneinfo import ZoneInfo
 
 from libraries.location.library import LocationLibrary
 
 
-def _library(lat: float, lon: float) -> LocationLibrary:
-    return LocationLibrary({"location": {"latitude": lat, "longitude": lon, "name": ""}})
+def _library(lat: float, lon: float, timezone: str = "") -> LocationLibrary:
+    return LocationLibrary(
+        {"location": {"latitude": lat, "longitude": lon, "name": "", "timezone": timezone}}
+    )
+
+
+def test_get_timezone_prefers_client_resolved_value():
+    # The map picker resolves this in the browser and stores it alongside
+    # the coordinates — no timezonefinder call needed when present.
+    lib = _library(34.0522, -118.2437, timezone="America/Los_Angeles")
+    assert lib.get_timezone() == "America/Los_Angeles"
 
 
 def test_fallback_offset_derived_from_longitude():
@@ -62,3 +72,20 @@ def test_sports_app_uses_offset_fallback_when_timezonefinder_unavailable(monkeyp
 def test_sports_app_returns_none_tz_without_configured_location():
     app = _sports_app({})
     assert app._get_user_tz() is None
+
+
+def test_sports_app_uses_client_resolved_timezone():
+    library_configs = {
+        "location": {
+            "location": {
+                "latitude": 34.0522,
+                "longitude": -118.2437,
+                "name": "Los Angeles, US",
+                "timezone": "America/Los_Angeles",
+            },
+            "time_format": "12h",
+            "date_format": "MM/DD/YYYY",
+        }
+    }
+    app = _sports_app(library_configs)
+    assert app._get_user_tz() == ZoneInfo("America/Los_Angeles")

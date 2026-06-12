@@ -1,10 +1,23 @@
 import 'leaflet/dist/leaflet.css'
 import L from 'leaflet'
 import { useEffect, useRef, useState } from 'react'
+import tzlookup from 'tz-lookup'
 import iconUrl from 'leaflet/dist/images/marker-icon.png'
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png'
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png'
 import { C, F, fieldStyle } from '../theme'
+
+// Resolve a lat/lon to an IANA timezone in the browser — a pure JS lookup
+// with no native dependencies, so it works reliably regardless of what's
+// installed on the server (e.g. timezonefinder on a Raspberry Pi).
+function resolveTimezone(lat: number, lng: number): string | undefined {
+  try {
+    return tzlookup(lat, lng)
+  } catch {
+    // Open ocean / poles — no timezone polygon at this point.
+    return undefined
+  }
+}
 
 // Fix Leaflet's broken default icon paths when bundled with Vite
 const DEFAULT_ICON = L.icon({
@@ -24,6 +37,7 @@ export interface LocationValue {
   longitude: number
   radius_km?: number
   name?: string
+  timezone?: string
 }
 
 interface Suggestion {
@@ -94,14 +108,17 @@ export default function LocationMapInput({
 
   const emit = (patch: Partial<{ latitude: number; longitude: number; radius_km: number; name: string }>) => {
     const { lat: curLat, lng: curLng, radius: curRadius, showRadius: curShow, name: curName } = locRef.current
-    const next: LocationValue = {
-      latitude:  'latitude'  in patch ? patch.latitude!  : curLat,
-      longitude: 'longitude' in patch ? patch.longitude! : curLng,
-    }
+    const newLat = 'latitude'  in patch ? patch.latitude!  : curLat
+    const newLng = 'longitude' in patch ? patch.longitude! : curLng
+    const next: LocationValue = { latitude: newLat, longitude: newLng }
     if (curShow) next.radius_km = 'radius_km' in patch ? patch.radius_km! : curRadius
     // Preserve the saved name unless the patch explicitly provides one (including '')
     const nextName = 'name' in patch ? patch.name! : curName
     if (nextName) next.name = nextName
+    // Re-resolve whenever the pin moves so the stored timezone always
+    // matches the current coordinates.
+    const timezone = resolveTimezone(newLat, newLng)
+    if (timezone) next.timezone = timezone
     onChangeRef.current(next)
   }
 

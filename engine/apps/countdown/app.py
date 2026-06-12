@@ -261,7 +261,15 @@ class CountdownApp(DisplayApp):
         location_lib = LocationLibrary(self.library_configs.get("location", {}))
         tz_name = location_lib.get_timezone()
         tz = resolve_zone(tz_name) if tz_name else None
-        self._tz = tz or location_lib.get_fallback_offset()
+        if tz is None:
+            fallback = location_lib.get_fallback_offset()
+            logger.warning(
+                "No IANA timezone resolved for location (%.4f, %.4f) (got %r); "
+                "using fixed offset %s",
+                lat, lon, tz_name, fallback,
+            )
+            tz = fallback
+        self._tz = tz
         return self._tz
 
     # ── Data fetching ────────────────────────────────────────────────────────────
