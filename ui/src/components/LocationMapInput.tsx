@@ -122,6 +122,20 @@ export default function LocationMapInput({
     onChangeRef.current(next)
   }
 
+  // ── Backfill the timezone for locations saved before it existed ──────────
+  // Configs saved by older versions have coordinates but no timezone. Without
+  // this, re-saving the settings untouched would persist the old object
+  // unchanged and times would keep falling back to UTC. Emitting here puts the
+  // resolved timezone into the form value as soon as the picker renders, so a
+  // plain Save persists it. Also corrects a stale timezone if it ever
+  // disagrees with the coordinates.
+  useEffect(() => {
+    if (lat === 0 && lng === 0) return
+    const resolved = resolveTimezone(lat, lng)
+    if (resolved && resolved !== loc.timezone) emit({})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lat, lng, loc.timezone])
+
   // ── Map initialisation (once on mount) ────────────────────────────────────
 
   useEffect(() => {
@@ -470,6 +484,16 @@ export default function LocationMapInput({
           />
         </label>
       </div>
+
+      {/* Current timezone for the selected location */}
+      {(lat !== 0 || lng !== 0) && (
+        <span style={{ fontSize: F.size.sm, color: C.textMuted, fontFamily: F.family }}>
+          Time zone:{' '}
+          <span style={{ color: C.textSecondary }}>
+            {loc.timezone || resolveTimezone(lat, lng) || 'Unknown'}
+          </span>
+        </span>
+      )}
 
       {/* Radius slider */}
       {showRadius && (

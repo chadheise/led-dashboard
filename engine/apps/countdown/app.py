@@ -232,7 +232,7 @@ class CountdownApp(DisplayApp):
         self._icon_id: str | None = None
         self._resolved: bool = False
         self._fetched_once: bool = False
-        self._tz_key: tuple[float, float] | None = None
+        self._tz_key: tuple[float, float, str] | None = None
         self._tz: ZoneInfo | None = None
 
     # ── Timezone resolution ─────────────────────────────────────────────────────
@@ -248,8 +248,11 @@ class CountdownApp(DisplayApp):
         loc_cfg = self.library_configs.get("location", {}).get("location", {})
         lat = float(loc_cfg.get("latitude", 0.0)) if isinstance(loc_cfg, dict) else 0.0
         lon = float(loc_cfg.get("longitude", 0.0)) if isinstance(loc_cfg, dict) else 0.0
+        stored_tz = str(loc_cfg.get("timezone") or "") if isinstance(loc_cfg, dict) else ""
 
-        key = (lat, lon)
+        # The stored timezone is part of the key so a config update that only
+        # adds/changes the timezone (same pin) invalidates the cache too.
+        key = (lat, lon, stored_tz)
         if key == self._tz_key:
             return self._tz
 

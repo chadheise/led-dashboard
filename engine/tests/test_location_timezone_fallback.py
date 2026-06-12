@@ -68,3 +68,23 @@ def test_sports_app_uses_client_resolved_timezone():
     }
     app = _sports_app(library_configs)
     assert app._get_user_tz() == ZoneInfo("America/Los_Angeles")
+
+
+def test_sports_app_tz_cache_invalidated_by_timezone_change():
+    # A config update that only adds/changes the timezone (same coordinates)
+    # must not be masked by the (lat, lon) cache.
+    library_configs = {
+        "location": {
+            "location": {
+                "latitude": 34.0522,
+                "longitude": -118.2437,
+                "name": "Los Angeles, US",
+                "timezone": "America/New_York",
+            }
+        }
+    }
+    app = _sports_app(library_configs)
+    assert app._get_user_tz() == ZoneInfo("America/New_York")
+
+    app.library_configs["location"]["location"]["timezone"] = "America/Los_Angeles"
+    assert app._get_user_tz() == ZoneInfo("America/Los_Angeles")
