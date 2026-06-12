@@ -187,6 +187,12 @@ class SportsApp(DisplayApp):
                 "default": 60,
                 "minimum": 10,
             },
+            "live_refresh_interval": {
+                "type": "number",
+                "title": "Live game refresh interval (seconds)",
+                "default": 15,
+                "minimum": 5,
+            },
             "debug_game": {
                 "type": "string",
                 "title": "Debug game",
@@ -264,6 +270,23 @@ class SportsApp(DisplayApp):
             )
         self._user_tz = tz
         return self._user_tz
+
+    @property
+    def refresh_interval(self) -> float:
+        """Poll fast while a game is live, slow otherwise.
+
+        ``_fetch_loop`` re-reads this after every fetch, so the cadence
+        tightens to ``live_refresh_interval`` only while a tracked game is in
+        progress and relaxes to ``refresh_interval`` afterward, keeping API
+        load bounded (one request per league). An in-flight celebration lives
+        ``_CELEBRATION_SECONDS`` regardless of cadence, so relaxing the
+        interval at the final whistle never cuts one short.
+        """
+        idle = float(self.config.get("refresh_interval", 60.0))
+        live = max(5.0, float(self.config.get("live_refresh_interval", 15.0)))
+        if any(g.get("state") == "in" for g in self._games):
+            return min(live, idle)  # never slower than idle
+        return idle
 
     def _get_leagues(self) -> list[str]:
         raw = self.config.get("leagues", self.config.get("league", []))

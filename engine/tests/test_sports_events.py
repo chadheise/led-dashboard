@@ -142,6 +142,53 @@ def test_soccer_unparseable_scores_no_crash_no_event():
     assert _detect(_soccer(), _soccer(away_score="-", home_score="-")) == []
 
 
+def test_soccer_goal_minute_fires_before_score():
+    # ESPN populates the goal-minute list a poll before the score field; the
+    # celebration should fire immediately off the goal-minute list.
+    events = _detect(_soccer(), _soccer(home_score="0", home_goals=["67'"]))
+    assert [(e.kind, e.side) for e in events] == [("goal", "home")]
+
+
+def test_soccer_goal_minute_then_score_single_event():
+    # poll1: goal-minute appears, score still stale → fires once.
+    # poll2: score catches up → silent (no double-fire).
+    g1 = _soccer()
+    snaps = _snaps(g1)
+    g2 = _soccer(home_score="0", home_goals=["67'"])
+    events = detect_events(snaps, [g2])
+    assert [(e.kind, e.side) for e in events] == [("goal", "home")]
+    snaps = {game_key(g2): make_snapshot(g2, snaps[game_key(g2)])}
+    g3 = _soccer(home_score="1", home_goals=["67'"])
+    assert detect_events(snaps, [g3]) == []
+
+
+def test_soccer_own_goal_single_event_for_benefiting_side():
+    # An own goal lands on the benefiting side's goal list *and* bumps that
+    # side's score — both signals agree, so exactly one event for that side.
+    events = _detect(_soccer(), _soccer(home_score="1", home_goals=["40'(og)"]))
+    assert [(e.kind, e.side) for e in events] == [("goal", "home")]
+
+
+def test_soccer_var_disallowed_goal_no_replay():
+    # 0 → 1 (fires), 1 → 0 (VAR disallow, silent), 0 → 1 again (silent: the
+    # monotonic goal_max guard suppresses the re-add).
+    g1 = _soccer(home_goals=["67'"])
+    snaps = _snaps(_soccer())
+    assert [(e.kind, e.side) for e in detect_events(snaps, [g1])] == [("goal", "home")]
+    snaps = {game_key(g1): make_snapshot(g1, snaps[game_key(g1)])}
+    g2 = _soccer(home_goals=[])
+    assert detect_events(snaps, [g2]) == []
+    snaps = {game_key(g2): make_snapshot(g2, snaps[game_key(g2)])}
+    g3 = _soccer(home_goals=["67'"])
+    assert detect_events(snaps, [g3]) == []
+
+
+def test_soccer_goal_minute_at_final_whistle_fires():
+    # in → post where the winning goal appears only in the goal-minute list.
+    events = _detect(_soccer(), _soccer(home_goals=["90'"], state="post"))
+    assert [(e.kind, e.side) for e in events] == [("goal", "home")]
+
+
 # ── Football ───────────────────────────────────────────────────────────────────
 
 
@@ -243,3 +290,10 @@ def test_snapshot_carries_max_score_forward():
     snap2 = make_snapshot(_soccer(home_score="0"), snap1)
     assert snap2.home_max_score == 2
     assert snap2.home_score == 0
+
+
+def test_snapshot_carries_goal_max_forward():
+    snap1 = make_snapshot(_soccer(home_goals=["12'", "55'"]))
+    snap2 = make_snapshot(_soccer(home_goals=[]), snap1)
+    assert snap2.home_goal_max == 2
+    assert snap2.home_goal_count == 0
