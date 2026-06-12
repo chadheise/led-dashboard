@@ -255,13 +255,11 @@ class SportsApp(DisplayApp):
         tz_str = location_lib.get_timezone()
         tz = resolve_zone(tz_str) if tz_str else None
         if tz is None:
-            fallback = location_lib.get_fallback_offset()
             logger.warning(
                 "No IANA timezone resolved for location (%.4f, %.4f) (got %r); "
-                "using fixed offset %s for pre-game times",
-                lat, lon, tz_str, fallback,
+                "pre-game times will show in UTC",
+                lat, lon, tz_str,
             )
-            tz = fallback
         self._user_tz = tz
         return self._user_tz
 
