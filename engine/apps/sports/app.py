@@ -209,7 +209,7 @@ class SportsApp(DisplayApp):
         super().__init__(config, canvas, global_config, library_configs)
         self._espn = ESPNSportsLibrary(self.library_configs.get("espn_sports", {}))
         self._user_tz: ZoneInfo | None = None
-        self._user_tz_key: tuple[float, float] | None = None  # cached (lat, lon) → tz
+        self._user_tz_key: tuple[float, float, str] | None = None  # cached (lat, lon, tz) → tz
         self._games: list[dict[str, Any]] = []
         self._logos: dict[str, Image.Image | None] = {}
 
@@ -244,7 +244,9 @@ class SportsApp(DisplayApp):
         loc_cfg = self.library_configs.get("location", {}).get("location", {})
         lat = float(loc_cfg.get("latitude", 0.0))
         lon = float(loc_cfg.get("longitude", 0.0))
-        key = (lat, lon)
+        # The stored timezone is part of the key so a config update that only
+        # adds/changes the timezone (same pin) invalidates the cache too.
+        key = (lat, lon, str(loc_cfg.get("timezone") or ""))
         if key == self._user_tz_key:
             return self._user_tz
         self._user_tz_key = key
