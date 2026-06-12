@@ -33,6 +33,8 @@ class GameSnapshot:
     home_max_score: int
     away_goal_count: int
     home_goal_count: int
+    away_goal_max: int
+    home_goal_max: int
     last_play_id: str
 
 
@@ -71,6 +73,8 @@ def _parse_score(raw: Any) -> int | None:
 def make_snapshot(game: Mapping[str, Any], prev: GameSnapshot | None = None) -> GameSnapshot:
     away = _parse_score(game.get("away_score"))
     home = _parse_score(game.get("home_score"))
+    away_goals = len(game.get("away_goals") or [])
+    home_goals = len(game.get("home_goals") or [])
     last_play = game.get("last_play") or {}
     return GameSnapshot(
         state=str(game.get("state", "pre")),
@@ -78,8 +82,10 @@ def make_snapshot(game: Mapping[str, Any], prev: GameSnapshot | None = None) -> 
         home_score=home,
         away_max_score=max(away or 0, prev.away_max_score if prev else 0),
         home_max_score=max(home or 0, prev.home_max_score if prev else 0),
-        away_goal_count=len(game.get("away_goals") or []),
-        home_goal_count=len(game.get("home_goals") or []),
+        away_goal_count=away_goals,
+        home_goal_count=home_goals,
+        away_goal_max=max(away_goals, prev.away_goal_max if prev else 0),
+        home_goal_max=max(home_goals, prev.home_goal_max if prev else 0),
         last_play_id=str(last_play.get("id") or ""),
     )
 
@@ -116,19 +122,22 @@ def _score_deltas(prev: GameSnapshot, snap: GameSnapshot) -> dict[str, int]:
 def _detect_soccer(
     key: str, game: Mapping[str, Any], prev: GameSnapshot, snap: GameSnapshot
 ) -> list[SportEvent]:
-    deltas = _score_deltas(prev, snap)
-    events = [
-        SportEvent(key, "goal", side) for side in ("away", "home") if deltas[side] > 0
-    ]
-    if events:
-        return events
-    # Scores unparseable (or stale) — fall back on the goal-minute lists.
-    return [
-        SportEvent(key, "goal", side)
-        for side in ("away", "home")
-        if getattr(snap, f"{side}_score") is None
-        and getattr(snap, f"{side}_goal_count") > getattr(prev, f"{side}_goal_count")
-    ]
+    # Fire as soon as *either* the score or the goal-minute list advances —
+    # whichever ESPN exposes first. The goal-minute ``details[]`` array is
+    # often updated a poll or two before the ``score`` field, so keying off it
+    # too makes celebrations land closer to realtime. A single guard against
+    # the max-ever of *both* counters (soccer scores move 1:1 with goals)
+    # collapses the lead/lag into exactly one event per side.
+    events: list[SportEvent] = []
+    for side in ("away", "home"):
+        prev_max = max(
+            getattr(prev, f"{side}_max_score"), getattr(prev, f"{side}_goal_max")
+        )
+        score = getattr(snap, f"{side}_score")
+        goal_count = getattr(snap, f"{side}_goal_count")
+        if (score is not None and score > prev_max) or goal_count > prev_max:
+            events.append(SportEvent(key, "goal", side))
+    return events
 
 
 def _detect_football(

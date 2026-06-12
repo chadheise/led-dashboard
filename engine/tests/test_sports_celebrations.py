@@ -113,6 +113,56 @@ def test_vanished_game_prunes_celebration():
     assert app._celebrations == {}
 
 
+def test_goal_minute_leads_score_single_celebration():
+    # ESPN exposes the goal-minute list before the score field. The celebration
+    # should fire on the poll the minute appears and not re-fire when the score
+    # catches up a poll later.
+    app = _make_app()
+    base = _soccer_game("0")  # home_score "0", home_goals []
+    minute_only = dict(base, home_score="0", home_goals=["80'"])  # score stale
+    score_caught_up = dict(base, home_score="1", home_goals=["80'"])
+    _patch_fetch(app, [[base], [minute_only], [score_caught_up]])
+
+    now = 100.0
+    app._now = lambda: now
+
+    asyncio.run(app.fetch_data())  # first observation, no celebration
+    assert app._celebrations == {}
+
+    now = 115.0
+    asyncio.run(app.fetch_data())  # goal-minute appears → fires
+    assert "401" in app._celebrations
+    assert app._celebrations["401"].started_at == 115.0
+
+    now = 130.0
+    asyncio.run(app.fetch_data())  # score catches up → no re-fire
+    assert app._celebrations["401"].started_at == 115.0
+
+
+def test_refresh_interval_adapts_to_live_games():
+    app = _make_app({"refresh_interval": 60, "live_refresh_interval": 15})
+
+    app._games = []
+    assert app.refresh_interval == 60  # no games → idle
+
+    app._games = [{"state": "in"}, {"state": "pre"}]
+    assert app.refresh_interval == 15  # a live game → fast
+
+    app._games = [{"state": "post"}, {"state": "pre"}]
+    assert app.refresh_interval == 60  # nothing live → idle
+
+
+def test_refresh_interval_clamps_misconfiguration():
+    # live slower than idle is clamped to idle; sub-floor live is clamped up.
+    slow_live = _make_app({"refresh_interval": 30, "live_refresh_interval": 90})
+    slow_live._games = [{"state": "in"}]
+    assert slow_live.refresh_interval == 30
+
+    tiny_live = _make_app({"refresh_interval": 60, "live_refresh_interval": 1})
+    tiny_live._games = [{"state": "in"}]
+    assert tiny_live.refresh_interval == 5
+
+
 def test_paginate_celebration_frame_snapshot(snapshot_update: bool):
     """One full paginate frame with a live celebration, both pulse phases."""
     from apps.sports.app import SportsApp
