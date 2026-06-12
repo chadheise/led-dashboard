@@ -86,6 +86,15 @@ def test_fetch_failure_without_cache_returns_empty() -> None:
     assert asyncio.run(lib._fetch_league(client, "fifa.world")) == []
 
 
+def test_fetch_retries_once_after_transient_error() -> None:
+    """A single dropped connection shouldn't fall back to cache/empty if a
+    retry would have succeeded."""
+    lib = ESPNSportsLibrary({})
+    client = _StubClient([RuntimeError("connection reset"), _espn_payload()])
+    games = asyncio.run(lib._fetch_league(client, "fifa.world"))
+    assert [g["home_abbr"] for g in games] == ["USA"]
+
+
 def test_fetch_failure_ignores_stale_cache() -> None:
     lib = ESPNSportsLibrary({})
     client = _StubClient([_espn_payload(), RuntimeError("timeout")])
