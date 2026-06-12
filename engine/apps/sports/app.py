@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import math
 import time
 from pathlib import Path
@@ -22,6 +23,8 @@ from .cards import render_card
 from .events import Celebration, GameSnapshot, detect_events, game_key, make_snapshot
 from .model import CelebrationView, build_game_view
 
+logger = logging.getLogger(__name__)
+
 
 _LEAGUE_IDS = [e["id"] for e in _LEAGUES]
 _LEAGUE_LABELS = {e["id"]: e["label"] for e in _LEAGUES}
@@ -38,6 +41,11 @@ _UNIT_SECONDS: dict[str, float] = {
 _FPS = 30  # only used to convert legacy "frames_per_game" configs to seconds
 
 _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
+
+# Keep "pre" games whose scheduled start has passed: ESPN can lag flipping a
+# game to "in", and delayed kickoffs stay "pre" past start. Matches the 4h
+# approximate game length used for completed games.
+_PRE_START_GRACE_SECONDS = 4 * 3600
 _ANIM_FRAMES = 8             # sprite animation cycle length
 _ANIM_FPS = 8                # sprite frames per second
 
@@ -431,7 +439,7 @@ class SportsApp(DisplayApp):
                     result.append(game)
                     continue
                 secs_until = (start - now).total_seconds()
-                if 0 <= secs_until <= upcoming_secs:
+                if -_PRE_START_GRACE_SECONDS <= secs_until <= upcoming_secs:
                     result.append(game)
 
         return result
@@ -675,11 +683,21 @@ class SportsApp(DisplayApp):
         text), then delegates to the tiered card layouts in cards.py.
         """
         loc_cfg = self.library_configs.get("location", {})
-        view = build_game_view(
-            game,
-            self._logos,
-            tz=self._get_user_tz(),
-            time_format=str(loc_cfg.get("time_format", "12h")),
-            celebration=self._celebration_view(game_key(game)),
-        )
-        return render_card(view, w, h).image
+        try:
+            view = build_game_view(
+                game,
+                self._logos,
+                tz=self._get_user_tz(),
+                time_format=str(loc_cfg.get("time_format", "12h")),
+                celebration=self._celebration_view(game_key(game)),
+            )
+            return render_card(view, w, h).image
+        except Exception:
+            # One bad game must not blank the whole frame (the scene manager
+            # catches render errors after the canvas is already cleared).
+            logger.warning(
+                "Failed to render card for %s %s @ %s",
+                game.get("league"), game.get("away_abbr"), game.get("home_abbr"),
+                exc_info=True,
+            )
+            return Image.new("RGB", (w, h), (0, 0, 0))

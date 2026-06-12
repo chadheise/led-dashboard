@@ -39,6 +39,21 @@ _FLAGCDN_BASE = "https://flagcdn.com/w80/{code}.png"
 _LOGO_TTL_SECONDS: float = 30 * 24 * 3600   # 30 days
 _TEAMS_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
 
+# How long the last successful scoreboard fetch may stand in for a failed one.
+# Long enough to ride out transient API errors between 60s refresh cycles,
+# short enough that a real outage doesn't show hours-stale live scores.
+_SCORES_FALLBACK_TTL_SECONDS: float = 15 * 60
+
+# Connect fast-fails so an unreachable host doesn't tie up the gather, while
+# read gets extra headroom for large multi-day payloads (e.g. a 14+ day
+# World Cup date range) that can take longer than a typical single-day fetch.
+_SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
+
+# One immediate retry absorbs a one-off connection blip (reset, DNS hiccup)
+# without waiting a full refresh cycle and falling back to cached/empty games.
+_FETCH_RETRIES = 1
+_FETCH_RETRY_DELAY_SECONDS = 0.25
+
 
 def _flag_url(abbr: str) -> str | None:
     code = _FIFA_FLAGS.get(abbr.upper())
@@ -73,6 +88,11 @@ class ESPNSportsLibrary(Library):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._logo_cache: dict[str, Image.Image | None] = {}
+        # league id → (fetched_at, games): fallback when a fetch fails
+        self._scores_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        # Reused across fetch cycles so the ~60s refresh loop doesn't pay a
+        # fresh TCP/TLS handshake to ESPN every time.
+        self._client: httpx.AsyncClient | None = None
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -88,11 +108,11 @@ class ESPNSportsLibrary(Library):
         days_ahead: int = 1,
         days_behind: int = 1,
     ) -> list[dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            results = await asyncio.gather(
-                *[self._fetch_league(client, lg, days_ahead, days_behind) for lg in leagues],
-                return_exceptions=True,
-            )
+        client = self._get_client()
+        results = await asyncio.gather(
+            *[self._fetch_league(client, lg, days_ahead, days_behind) for lg in leagues],
+            return_exceptions=True,
+        )
         all_games: list[dict[str, Any]] = []
         for result in results:
             if isinstance(result, list):
@@ -384,6 +404,27 @@ class ESPNSportsLibrary(Library):
 
     # ── Internal helpers ───────────────────────────────────────────────────────
 
+    def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=_SCOREBOARD_TIMEOUT)
+        return self._client
+
+    @staticmethod
+    async def _get_scoreboard(
+        client: httpx.AsyncClient, url: str, params: dict[str, str]
+    ) -> dict[str, Any]:
+        last_exc: Exception = RuntimeError("unreachable")
+        for attempt in range(_FETCH_RETRIES + 1):
+            try:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+                return resp.json()
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _FETCH_RETRIES:
+                    await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
+        raise last_exc
+
     @staticmethod
     async def _download_logo(url: str) -> Image.Image | None:
         try:
@@ -414,8 +455,8 @@ class ESPNSportsLibrary(Library):
                 return True
         return False
 
-    @staticmethod
     async def _fetch_league(
+        self,
         client: httpx.AsyncClient,
         league: str,
         days_ahead: int = 1,
@@ -442,9 +483,19 @@ class ESPNSportsLibrary(Library):
         end_date = today + timedelta(days=max(0, days_ahead))
         params["dates"] = f"{start_date:%Y%m%d}-{end_date:%Y%m%d}"
         try:
-            resp = await client.get(url, params=params)
-            data = resp.json()
-        except Exception:
+            data = await self._get_scoreboard(client, url, params)
+        except Exception as exc:
+            # A transient API failure must not blank the display: serve the
+            # last successful fetch for this league while it is still fresh.
+            cached = self._scores_cache.get(league)
+            if cached is not None and time.time() - cached[0] < _SCORES_FALLBACK_TTL_SECONDS:
+                logger.warning(
+                    "Scoreboard fetch failed for %s (%s); serving cached games", league, exc
+                )
+                return [dict(g) for g in cached[1]]
+            logger.warning(
+                "Scoreboard fetch failed for %s (%s); no fresh cache available", league, exc
+            )
             return []
 
         games: list[dict[str, Any]] = []
@@ -599,4 +650,5 @@ class ESPNSportsLibrary(Library):
                 if (g.get("home_rank") or 999) <= 25
                 or (g.get("away_rank") or 999) <= 25
             ]
+        self._scores_cache[league] = (time.time(), games)
         return games

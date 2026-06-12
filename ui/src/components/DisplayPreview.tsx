@@ -100,7 +100,10 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
   }, [wsUrl, scale])
 
   return (
-    <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'stretch', gap: 8 }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 8,
+      width: '100%', maxWidth: dims ? dims.w * scale : undefined,
+    }}>
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         fontSize: F.size.label, color: C.textMuted, fontFamily: F.family,
@@ -113,7 +116,10 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
       </div>
       <canvas
         ref={canvasRef}
-        style={{ border: `1px solid ${C.border}`, imageRendering: 'pixelated' }}
+        style={{
+          border: `1px solid ${C.border}`, imageRendering: 'pixelated',
+          width: '100%', height: 'auto', boxSizing: 'border-box',
+        }}
       />
     </div>
   )
