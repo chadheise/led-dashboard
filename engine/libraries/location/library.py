@@ -27,11 +27,12 @@ class LocationLibrary(Library):
                 "type": "object",
                 "title": "Home Location",
                 "x-input-type": "location",
-                "default": {"latitude": 0.0, "longitude": 0.0, "name": ""},
+                "default": {"latitude": 0.0, "longitude": 0.0, "name": "", "timezone": ""},
                 "properties": {
                     "latitude": {"type": "number", "default": 0.0},
                     "longitude": {"type": "number", "default": 0.0},
                     "name": {"type": "string", "default": ""},
+                    "timezone": {"type": "string", "default": ""},
                 },
             },
             "time_format": {
@@ -73,6 +74,19 @@ class LocationLibrary(Library):
         return str(self._config.get("date_format", "MM/DD/YYYY"))
 
     def get_timezone(self) -> str | None:
+        """The IANA timezone for the configured location.
+
+        The map picker resolves this client-side (in the browser, via a pure
+        JS lat/lon lookup with no native deps) and stores it alongside the
+        coordinates, so this is normally just a dict read. `timezonefinder`
+        is a server-side fallback for configs saved before that field
+        existed — its native dependencies (numpy, h3, cffi) are more likely
+        to be unavailable on a Raspberry Pi.
+        """
+        stored = self._config.get("location", {}).get("timezone")
+        if stored:
+            return str(stored)
+
         lat, lon = self.get_latitude(), self.get_longitude()
         if lat == 0.0 and lon == 0.0:
             return None
@@ -119,6 +133,6 @@ class LocationLibrary(Library):
             try:
                 from timezonefinder import TimezoneFinder  # type: ignore[import]
                 self._tf = TimezoneFinder()
-            except ImportError:
-                logger.warning("timezonefinder not installed; timezone lookups unavailable")
+            except Exception as exc:
+                logger.warning("timezonefinder unavailable: %s", exc)
         return self._tf

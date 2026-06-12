@@ -251,8 +251,16 @@ class SportsApp(DisplayApp):
         if lat == 0.0 and lon == 0.0:
             self._user_tz = None
             return None
-        tz_str = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        self._user_tz = resolve_zone(tz_str) if tz_str else None
+        location_lib = LocationLibrary(self.library_configs.get("location", {}))
+        tz_str = location_lib.get_timezone()
+        tz = resolve_zone(tz_str) if tz_str else None
+        if tz is None:
+            logger.warning(
+                "No IANA timezone resolved for location (%.4f, %.4f) (got %r); "
+                "pre-game times will show in UTC",
+                lat, lon, tz_str,
+            )
+        self._user_tz = tz
         return self._user_tz
 
     def _get_leagues(self) -> list[str]:

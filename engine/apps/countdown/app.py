@@ -258,8 +258,16 @@ class CountdownApp(DisplayApp):
             self._tz = None
             return None
 
-        tz_name = LocationLibrary(self.library_configs.get("location", {})).get_timezone()
-        self._tz = resolve_zone(tz_name) if tz_name else None
+        location_lib = LocationLibrary(self.library_configs.get("location", {}))
+        tz_name = location_lib.get_timezone()
+        tz = resolve_zone(tz_name) if tz_name else None
+        if tz is None:
+            logger.warning(
+                "No IANA timezone resolved for location (%.4f, %.4f) (got %r); "
+                "falling back to UTC",
+                lat, lon, tz_name,
+            )
+        self._tz = tz
         return self._tz
 
     # ── Data fetching ────────────────────────────────────────────────────────────
