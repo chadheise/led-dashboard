@@ -340,14 +340,9 @@ async def play_single_module(request: Request, module_id: str) -> dict[str, Any]
     if not module:
         raise HTTPException(404, "Module not found")
     request.app.state.active_single_module_id = module_id
-    entry = SMEntry(
-        app_id=module.app_id,
-        config=module.config,
-        duration=86400,
-        global_config=store.get_app_config(module.app_id),
-        library_configs=dict(store.state.library_configs),
+    await request.app.state.scene_manager.set_playlist(
+        [_single_module_entry(store, module)]
     )
-    await request.app.state.scene_manager.set_playlist([entry])
     return {"ok": True, "active_single_module_id": module_id}
 
 
@@ -470,7 +465,34 @@ async def _reload_scene_manager(
     await sm.set_playlist(entries)
 
 
+def _single_module_entry(store: Any, module: Module) -> SMEntry:
+    return SMEntry(
+        app_id=module.app_id,
+        config=module.config,
+        duration=86400,
+        global_config=store.get_app_config(module.app_id),
+        library_configs=dict(store.state.library_configs),
+    )
+
+
 async def _maybe_reload(request: Request) -> None:
+    """Reload the scene manager in place after a settings change.
+
+    Preserves whatever is currently on the display: if a single module is
+    playing it stays the active module (with its updated config), otherwise the
+    active playlist is reloaded. A settings change never switches the display to
+    a different playlist or module.
+    """
     store = request.app.state.store
+    single_id = getattr(request.app.state, "active_single_module_id", None)
+    if single_id:
+        module = store.state.modules.get(single_id)
+        if module:
+            await request.app.state.scene_manager.set_playlist(
+                [_single_module_entry(store, module)]
+            )
+            return
+        # The active single module no longer exists; fall back to the playlist.
+        request.app.state.active_single_module_id = None
     if store.state.active_playlist_id:
         await _reload_scene_manager(request)
