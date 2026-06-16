@@ -45,7 +45,9 @@ def _store(tmp_path) -> StateStore:
 
 
 def _request(store: StateStore, sm: FakeSceneManager, single_id: str | None = None):
-    state = SimpleNamespace(store=store, scene_manager=sm, active_single_module_id=single_id)
+    if single_id is not None:
+        store.set_active_single_module(single_id)
+    state = SimpleNamespace(store=store, scene_manager=sm)
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
@@ -98,7 +100,7 @@ async def test_deleted_single_module_falls_back_to_playlist(tmp_path):
 
     await _maybe_reload(request)
 
-    assert request.app.state.active_single_module_id is None
+    assert store.state.active_single_module_id is None
     assert len(sm.last) == 2
 
 
@@ -112,5 +114,5 @@ async def test_play_single_module_sets_active_id(tmp_path):
     result = await play_single_module(request, module_id)
 
     assert result["active_single_module_id"] == module_id
-    assert request.app.state.active_single_module_id == module_id
+    assert store.state.active_single_module_id == module_id
     assert len(sm.last) == 1

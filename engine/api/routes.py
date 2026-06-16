@@ -339,7 +339,7 @@ async def play_single_module(request: Request, module_id: str) -> dict[str, Any]
     module = store.state.modules.get(module_id)
     if not module:
         raise HTTPException(404, "Module not found")
-    request.app.state.active_single_module_id = module_id
+    store.set_active_single_module(module_id)
     await request.app.state.scene_manager.set_playlist(
         [_single_module_entry(store, module)]
     )
@@ -351,7 +351,7 @@ async def activate_playlist(request: Request, playlist_id: str) -> dict[str, Any
     store = request.app.state.store
     if playlist_id not in store.state.playlists:
         raise HTTPException(404, "Playlist not found")
-    request.app.state.active_single_module_id = None
+    store.set_active_single_module(None)
     store.set_active(playlist_id)
     await _reload_scene_manager(request, playlist_id)
     return {"ok": True, "active_playlist_id": playlist_id}
@@ -416,7 +416,7 @@ def get_status(request: Request) -> dict[str, Any]:
     sm = request.app.state.scene_manager
     active_pid = store.state.active_playlist_id
     active_pl = store.state.playlists.get(active_pid) if active_pid else None
-    single_id = getattr(request.app.state, "active_single_module_id", None)
+    single_id = store.state.active_single_module_id
     single_module = store.state.modules.get(single_id) if single_id else None
     return {
         **sm.get_status(),
@@ -484,7 +484,7 @@ async def _maybe_reload(request: Request) -> None:
     a different playlist or module.
     """
     store = request.app.state.store
-    single_id = getattr(request.app.state, "active_single_module_id", None)
+    single_id = store.state.active_single_module_id
     if single_id:
         module = store.state.modules.get(single_id)
         if module:
@@ -493,6 +493,6 @@ async def _maybe_reload(request: Request) -> None:
             )
             return
         # The active single module no longer exists; fall back to the playlist.
-        request.app.state.active_single_module_id = None
+        store.set_active_single_module(None)
     if store.state.active_playlist_id:
         await _reload_scene_manager(request)
