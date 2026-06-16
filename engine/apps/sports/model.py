@@ -68,6 +68,27 @@ def _rank_text(rank: Any) -> str:
     return f"#{rank}" if rank and rank <= 25 else ""
 
 
+def _soccer_score(game: dict[str, Any], side: str) -> str:
+    """Soccer score reconciled with the goal-minute list.
+
+    ESPN updates the goal-minute ``details[]`` array a poll or two before the
+    ``score`` field — and it's that array advancing which fires the goal
+    celebration. Reading the lagging ``score`` field alone would pulse the
+    *previous* score under a live celebration, so take the larger of the two:
+    soccer scores move 1:1 with goals, so the goal count is authoritative the
+    instant a goal lands. Using ``max`` keeps it idempotent — when the score
+    field finally catches up the value is unchanged, so the goal is counted
+    exactly once.
+    """
+    goals = len(game.get(f"{side}_goals") or [])
+    try:
+        parsed = int(str(game.get(f"{side}_score", "-")))
+    except (ValueError, TypeError):
+        # Unparseable score ("-"): fall back to the goal count once goals exist.
+        return str(goals) if goals else str(game.get(f"{side}_score", "-"))
+    return str(max(parsed, goals))
+
+
 def _possession_side(game: dict[str, Any]) -> str | None:
     """Return "away"/"home" for the team with the ball, None otherwise."""
     situation = game.get("situation") or {}
@@ -150,7 +171,12 @@ def _team_view(
     if rank_text:
         abbr = f"{rank_text} {abbr}" if side == "away" else f"{abbr} {rank_text}"
 
-    score = "" if game.get("state", "pre") == "pre" else str(game.get(f"{side}_score", "-"))
+    if game.get("state", "pre") == "pre":
+        score = ""
+    elif game.get("sport") == "soccer":
+        score = _soccer_score(game, side)
+    else:
+        score = str(game.get(f"{side}_score", "-"))
 
     logo_url = game.get(f"{side}_logo_url")
     logo = logos.get(logo_url) if logo_url else None
