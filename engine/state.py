@@ -48,6 +48,9 @@ class AppState(BaseModel):
     )
     playlists: dict[str, Playlist] = {}
     active_playlist_id: str | None = None
+    # When set, a single module is playing instead of the active playlist.
+    # Persisted so it is resumed on reboot.
+    active_single_module_id: str | None = None
     app_configs: dict[str, dict[str, Any]] = {}  # keyed by app_id
     library_configs: dict[str, dict[str, Any]] = {}  # keyed by library_id
     brightness: int | None = None  # 0-100; None means use config.yaml default
@@ -89,6 +92,8 @@ class StateStore:
         self._state.modules.pop(module_id, None)
         for pl in self._state.playlists.values():
             pl.items = [it for it in pl.items if it.module_id != module_id]
+        if self._state.active_single_module_id == module_id:
+            self._state.active_single_module_id = None
         self._save()
 
     # ── App configs ────────────────────────────────────────────────────────
@@ -134,6 +139,11 @@ class StateStore:
 
     def set_active(self, playlist_id: str | None) -> None:
         self._state.active_playlist_id = playlist_id
+        self._save()
+
+    def set_active_single_module(self, module_id: str | None) -> None:
+        """Record the single module playing instead of a playlist (None to clear)."""
+        self._state.active_single_module_id = module_id
         self._save()
 
     # ── Resolution ─────────────────────────────────────────────────────────

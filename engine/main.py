@@ -65,9 +65,35 @@ def _sm_entries(store: StateStore) -> list[PlaylistEntry]:
             config=e["config"],
             duration=e["duration"],
             global_config=e.get("global_config", {}),
+            library_configs=e.get("library_configs", {}),
         )
         for e in store.resolve()
     ]
+
+
+def _startup_entries(store: StateStore) -> list[PlaylistEntry]:
+    """Resume whatever was playing before the last shutdown.
+
+    A single module played via /play/module takes precedence over the active
+    playlist, mirroring the running behaviour so a reboot restores the display
+    to exactly what it was showing.
+    """
+    single_id = store.state.active_single_module_id
+    if single_id:
+        module = store.state.modules.get(single_id)
+        if module:
+            return [
+                PlaylistEntry(
+                    app_id=module.app_id,
+                    config=module.config,
+                    duration=86400,
+                    global_config=store.get_app_config(module.app_id),
+                    library_configs=dict(store.state.library_configs),
+                )
+            ]
+        # Stale reference (module deleted while powered off); clear it.
+        store.set_active_single_module(None)
+    return _sm_entries(store)
 
 
 async def _render_loop(scene_manager: SceneManager, fps: int) -> None:
@@ -120,7 +146,7 @@ def main() -> None:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        await scene_manager.set_playlist(_sm_entries(store))
+        await scene_manager.set_playlist(_startup_entries(store))
         await scene_manager.start()
         render_task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
         hot_reload_task: asyncio.Task | None = None
