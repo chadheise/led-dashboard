@@ -1,3 +1,4 @@
+from apps.color.app import ColorApp
 from apps.countdown.app import CountdownApp
 from apps.flights.app import FlightsApp
 from apps.sports.app import SportsApp
@@ -8,6 +9,7 @@ from apps.weather.app import WeatherApp
 from apps.world_clock.app import WorldClockApp
 
 APP_REGISTRY: dict[str, type] = {
+    ColorApp.id: ColorApp,
     TextApp.id: TextApp,
     StocksApp.id: StocksApp,
     SportsApp.id: SportsApp,
