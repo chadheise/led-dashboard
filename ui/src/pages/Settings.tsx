@@ -38,6 +38,43 @@ interface LibraryInfo {
     properties: Record<string, unknown>;
   };
   global_config: Record<string, unknown>;
+  has_status?: boolean;
+}
+
+interface StatusItem {
+  label: string;
+  value: string | number | null;
+  kind?: "timestamp";
+}
+
+interface StatusSection {
+  label: string;
+  items: StatusItem[];
+}
+
+interface LibraryStatus {
+  note?: string;
+  sections: StatusSection[];
+}
+
+/** Human-friendly relative time for a wall-clock epoch (seconds). */
+function formatTimestamp(epoch: number | string | null): string {
+  if (epoch === null || epoch === "") return "Never";
+  const secs = typeof epoch === "string" ? Number(epoch) : epoch;
+  if (!Number.isFinite(secs) || secs <= 0) return "Never";
+  const deltaMs = secs * 1000 - Date.now();
+  const future = deltaMs > 0;
+  const abs = Math.abs(deltaMs);
+  const mins = Math.round(abs / 60000);
+  const hours = Math.round(abs / 3_600_000);
+  const days = Math.round(abs / 86_400_000);
+  let rel: string;
+  if (abs < 45000) rel = "just now";
+  else if (mins < 60) rel = `${mins} min`;
+  else if (hours < 24) rel = `${hours} hr`;
+  else rel = `${days} day${days === 1 ? "" : "s"}`;
+  if (rel === "just now") return rel;
+  return future ? `in ${rel}` : `${rel} ago`;
 }
 
 type NavState =
@@ -58,6 +95,7 @@ export default function Settings() {
       : null;
   const [appConfigs, setAppConfigs] = useState<Record<string, Record<string, unknown>>>({});
   const [libConfigs, setLibConfigs] = useState<Record<string, Record<string, unknown>>>({});
+  const [libStatus, setLibStatus] = useState<LibraryStatus | null>(null);
   const [saved, setSaved] = useState(false);
   const [restored, setRestored] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
@@ -105,6 +143,33 @@ export default function Settings() {
     if (appId && !apps.some((a) => a.id === appId)) navigate("/settings", { replace: true });
     if (libId && !libraries.some((l) => l.id === libId)) navigate("/settings", { replace: true });
   }, [appId, libId, apps, libraries, navigate]);
+
+  // Fetch live usage status (budget/cost, cache) when viewing a library that
+  // reports it; refresh periodically so the panel stays current.
+  useEffect(() => {
+    const lib = libId ? libraries.find((l) => l.id === libId) : undefined;
+    if (!libId || !lib?.has_status) {
+      setLibStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const load = () => {
+      fetch(`/api/libraries/${libId}/status`)
+        .then((r) => r.json())
+        .then((d: { status: LibraryStatus | null }) => {
+          if (!cancelled) setLibStatus(d.status ?? null);
+        })
+        .catch(() => {
+          if (!cancelled) setLibStatus(null);
+        });
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [libId, libraries]);
 
   const goBack = () => {
     if (nav?.kind === "library" && nav.fromApp) {
@@ -285,6 +350,44 @@ export default function Settings() {
                 {selectedLib.name}
               </h2>
             </div>
+
+            {/* Live usage status (API budget/cost, caches) */}
+            {selectedLib.has_status && libStatus && (
+              <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16, marginBottom: 8 }}>
+                <div style={sectionLabelStyle}>USAGE & CACHE</div>
+                {libStatus.note && (
+                  <p style={{ color: C.textMuted, fontSize: F.size.sm, fontFamily: F.family, lineHeight: 1.6, marginTop: 8 }}>
+                    {libStatus.note}
+                  </p>
+                )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, marginTop: 12 }}>
+                  {libStatus.sections.map((section) => (
+                    <div
+                      key={section.label}
+                      style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6, padding: "12px 14px" }}
+                    >
+                      <div style={{ fontSize: F.size.xs, letterSpacing: F.tracking.wide, color: C.textMuted, fontFamily: F.family, marginBottom: 8 }}>
+                        {section.label.toUpperCase()}
+                      </div>
+                      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                        {section.items.map((item) => (
+                          <div key={item.label} style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: F.size.sm, fontFamily: F.family }}>
+                            <span style={{ color: C.textMuted }}>{item.label}</span>
+                            <span style={{ color: C.textPrimary, textAlign: "right" }}>
+                              {item.kind === "timestamp"
+                                ? formatTimestamp(item.value)
+                                : item.value === null || item.value === ""
+                                  ? "—"
+                                  : item.value}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>
               {Object.keys(selectedLib.global_config_schema?.properties ?? {}).length === 0 ? (
