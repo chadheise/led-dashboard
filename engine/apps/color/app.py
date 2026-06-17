@@ -18,19 +18,20 @@ _ROYGBV: list[tuple[int, int, int]] = [
 ]
 
 
-class ColorApp(DisplayApp):
-    id: ClassVar[str] = "color"
-    name: ClassVar[str] = "Color"
-    description: ClassVar[str] = "Fill the display with a solid color or a ROYGBV rainbow gradient"
-    icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20"/></svg>'
+class DebugApp(DisplayApp):
+    id: ClassVar[str] = "debug"
+    name: ClassVar[str] = "Debug"
+    description: ClassVar[str] = "Fill the display with a solid color, gradient, or stripe pattern for debugging"
+    icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>'
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
-        "title": "Color",
+        "title": "Debug",
         "properties": {
-            "mode": {
+            "pattern": {
                 "type": "string",
-                "title": "Display Mode",
-                "enum": ["solid", "gradient"],
+                "title": "Pattern",
+                "enum": ["solid", "gradient", "stripes_vertical", "stripes_horizontal", "stripes_diagonal_45", "stripes_diagonal_neg45"],
+                "enumNames": ["Solid", "Gradient (ROYGBV)", "Stripes — Vertical", "Stripes — Horizontal", "Stripes — Diagonal +45°", "Stripes — Diagonal −45°"],
                 "default": "solid",
             },
             "color": {
@@ -38,6 +39,13 @@ class ColorApp(DisplayApp):
                 "title": "Color",
                 "x-input-type": "color",
                 "default": "#FF0000",
+            },
+            "stripe_width": {
+                "type": "integer",
+                "title": "Stripe Width (px)",
+                "default": 4,
+                "minimum": 1,
+                "maximum": 32,
             },
         },
     }
@@ -60,9 +68,11 @@ class ColorApp(DisplayApp):
 
     def _build_image(self) -> None:
         w, h = self.canvas.width, self.canvas.height
-        mode = str(self.config.get("mode", "solid"))
+        pattern = str(self.config.get("pattern", "solid"))
+        color = parse_color(str(self.config.get("color", "#FF0000")))
+        sw = max(1, int(self.config.get("stripe_width", 4)))
 
-        if mode == "gradient":
+        if pattern == "gradient":
             img = Image.new("RGB", (w, h))
             stops = _ROYGBV
             n = len(stops) - 1
@@ -79,8 +89,21 @@ class ColorApp(DisplayApp):
                 )
                 for y in range(h):
                     img.putpixel((x, y), pixel)
+        elif pattern in ("stripes_vertical", "stripes_horizontal", "stripes_diagonal_45", "stripes_diagonal_neg45"):
+            img = Image.new("RGB", (w, h))
+            for y in range(h):
+                for x in range(w):
+                    if pattern == "stripes_vertical":
+                        idx = x
+                    elif pattern == "stripes_horizontal":
+                        idx = y
+                    elif pattern == "stripes_diagonal_45":
+                        idx = x + y
+                    else:  # stripes_diagonal_neg45
+                        idx = x - y
+                    pixel = color if (idx // sw) % 2 == 0 else (0, 0, 0)
+                    img.putpixel((x, y), pixel)
         else:
-            color = parse_color(str(self.config.get("color", "#FF0000")))
             img = Image.new("RGB", (w, h), color)
 
         self._image = img
