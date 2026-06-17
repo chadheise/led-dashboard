@@ -4,15 +4,37 @@ Ghost test harness — renders a static high-contrast pattern to make ghosting v
 
 Run with: sudo python tools/ghost_test.py
 
-Displays bright white elements on black, focused on panels 8-10 (the right-most
-panels in a 10-panel chain where ghosting is worst). Press Ctrl-C to exit.
+Draws directly in physical (library) coordinates, bypassing the HardwareCanvas
+logical-to-physical transform. This keeps the harness simple and independent of
+any app code.
+
+Physical canvas dimensions for this setup:
+  chain_length × cols  =  10 × 64  =  640 px wide
+  rows                 =  32           32 px tall
+
+Panels are addressed in physical-chain order (chain position 0 = rightmost visible
+panel = logical panel 10). The harness mirrors this so that logical panel numbers
+match what you see on the wall:
+
+  Logical  Physical-chain   Physical x range
+  panel 1  pos 9            576–639
+  panel 2  pos 8            512–575
+  ...
+  panel 8  pos 2            128–191
+  panel 9  pos 1             64–127
+  panel 10 pos 0              0– 63
+
+The test pattern:
+  • Panels 1–7  : solid BLACK (the "clean" reference side)
+  • Panels 8–10 : solid WHITE (the "problem" side — ghosting worst here)
+  • Gray dividers at every panel boundary
+  • Single white pixel rows at y=0 and y=31 across all panels (full-width reference lines)
 """
 
 import os
 import sys
 import time
 
-# Allow running from the engine/ directory or the tools/ subdirectory.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import yaml
@@ -54,7 +76,7 @@ def build_options(hw_cfg: dict) -> RGBMatrixOptions:
     return options
 
 
-def draw_rect(canvas, x: int, y: int, w: int, h: int, r: int, g: int, b: int) -> None:
+def fill_rect(canvas, x: int, y: int, w: int, h: int, r: int, g: int, b: int) -> None:
     for dy in range(h):
         for dx in range(w):
             canvas.SetPixel(x + dx, y + dy, r, g, b)
@@ -66,51 +88,58 @@ def main() -> None:
 
     options = build_options(hw_cfg)
 
+    chain = options.chain_length   # 10
+    phys_w = chain * options.cols  # 640  (physical canvas width)
+    phys_h = options.rows          # 32   (physical canvas height)
+    panel_w = options.cols         # 64   (each panel's physical width)
+
     print("Options:")
-    print(f"  rows={options.rows} cols={options.cols} chain={options.chain_length} parallel={options.parallel}")
+    print(f"  rows={options.rows} cols={options.cols} chain={chain} parallel={options.parallel}")
     print(f"  gpio_slowdown={options.gpio_slowdown} hardware_mapping={options.hardware_mapping}")
     print(f"  pwm_lsb_nanoseconds={hw_cfg.get('pwm_lsb_nanoseconds', '<default>')}")
     print(f"  pwm_bits={hw_cfg.get('pwm_bits', '<default>')}")
     print(f"  pwm_dither_bits={hw_cfg.get('pwm_dither_bits', '<default>')}")
     print(f"  panel_type={hw_cfg.get('panel_type', '<default>')}")
+    print(f"\nPhysical canvas: {phys_w}×{phys_h}")
     print()
 
     matrix = RGBMatrix(options=options)
     canvas = matrix.CreateFrameCanvas()
 
-    # Display dimensions (rotation 90: width = chain * rows, height = parallel * cols)
-    display_w = cfg["display"]["width"]   # 320
-    display_h = cfg["display"]["height"]  # 64
+    # Physical-chain position for logical panel N (1-indexed):
+    #   phys_pos = chain - N   (chain pos 0 = rightmost visible = logical panel 10)
+    # Physical x start = phys_pos * panel_w
 
-    # Hardware panel size in the rotated (logical) space
-    hw_rows = options.rows  # 32 — this is the logical WIDTH of each panel after 90° rotation
-    # hw_cols = options.cols  # 64 — logical HEIGHT
+    for logical_panel in range(1, chain + 1):
+        phys_pos = chain - logical_panel          # chain position (0 = rightmost)
+        px_start = phys_pos * panel_w
 
-    # Paint the canvas: white rectangles over panels 8, 9, 10 (0-indexed: 7, 8, 9)
-    # and a white text-like stripe across the full top.
+        if logical_panel >= 8:
+            # Solid white — the "problem" panels
+            fill_rect(canvas, px_start, 0, panel_w, phys_h, 255, 255, 255)
+        else:
+            # Solid black — the "clean" reference panels (just leave them; canvas starts black)
+            pass
 
-    # Full-width top stripe (panels 1-10)
-    draw_rect(canvas, 0, 0, display_w, 4, 255, 255, 255)
+        # Gray divider at the left edge of each panel (visible between panels)
+        canvas.SetPixel(px_start, 0, 128, 128, 128)
+        for y in range(phys_h):
+            canvas.SetPixel(px_start, y, 64, 64, 64)
 
-    # Label stripe: "GHOST TEST" in simple block letters — just solid rectangles per panel
-    # Solid white block covering right half of panels 8, 9, 10
-    panel8_start = 7 * hw_rows  # logical x-start of panel 8
-    draw_rect(canvas, panel8_start, 8, 3 * hw_rows, display_h - 16, 255, 255, 255)
-
-    # Thin white border around the entire display
-    draw_rect(canvas, 0, 0, display_w, 1, 255, 255, 255)
-    draw_rect(canvas, 0, display_h - 1, display_w, 1, 255, 255, 255)
-    draw_rect(canvas, 0, 0, 1, display_h, 255, 255, 255)
-    draw_rect(canvas, display_w - 1, 0, 1, display_h, 255, 255, 255)
-
-    # Panel boundary markers (thin white lines between each panel)
-    for p in range(1, options.chain_length):
-        x = p * hw_rows
-        draw_rect(canvas, x, 0, 1, display_h, 128, 128, 128)
+    # Full-width white lines at top and bottom rows (reference lines across all panels)
+    for x in range(phys_w):
+        canvas.SetPixel(x, 0, 255, 255, 255)
+        canvas.SetPixel(x, phys_h - 1, 255, 255, 255)
 
     canvas = matrix.SwapOnVSync(canvas)
 
-    print("Displaying ghost test pattern. Check panels 8-10 for ghosting.")
+    print("Ghost test pattern:")
+    print("  Panels 1–7  : solid BLACK")
+    print("  Panels 8–10 : solid WHITE")
+    print("  Top/bottom rows : white (full width)")
+    print("  Panel boundaries: gray dividers")
+    print()
+    print("Check the wall: any faint light on panels 1–7 is ghosting.")
     print("Press Ctrl-C to exit.")
 
     try:
