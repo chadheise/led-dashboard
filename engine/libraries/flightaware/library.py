@@ -24,11 +24,20 @@ _BUDGET_PATH = Path("data/flightaware_budget.json")
 # Module-level defaults — also used as schema defaults
 _DEFAULT_CACHE_TTL_DAYS: int = 7
 _DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
+_COST_PER_CALL: float = 0.005  # AeroAPI free-tier rate, ~$0.005 per query
+
+
+def _fmt_days(days: float) -> str:
+    whole = int(days)
+    if days == whole:
+        return f"{whole} day" if whole == 1 else f"{whole} days"
+    return f"{days:g} days"
 
 
 class FlightAwareLibrary(Library):
     id: ClassVar[str] = "flightaware"
     name: ClassVar[str] = "FlightAware AeroAPI"
+    has_status: ClassVar[bool] = True
     description: ClassVar[str] = "Flight enrichment (route, airline, aircraft type) via FlightAware AeroAPI"
     icon: ClassVar[str] = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
@@ -178,6 +187,57 @@ class FlightAwareLibrary(Library):
             tmp.rename(_BUDGET_PATH)
         except Exception as exc:
             logger.warning("FlightAware: budget save failed: %s", exc)
+
+    # ── Status (settings UI) ──────────────────────────────────────────────────
+
+    def get_status(self) -> dict[str, Any]:
+        """Budget cost + enrichment-cache summary for the settings UI.
+
+        Re-reads the on-disk budget and cache so the panel reflects the running
+        engine's usage, which lives in a separate library instance.
+        """
+        self._load_budget()
+        self._load_disk_cache()
+
+        calls = self._budget_calls
+        limit = self._budget_limit
+        cost_used = calls * _COST_PER_CALL
+        cost_limit = limit * _COST_PER_CALL
+
+        entries = len(self._enrichment_cache)
+        last_updated = max(
+            (ts for ts, _ in self._enrichment_cache.values()), default=None
+        )
+        ttl_days = float(self._config.get("cache_ttl_days", _DEFAULT_CACHE_TTL_DAYS))
+
+        return {
+            "sections": [
+                {
+                    "label": "Monthly budget",
+                    "items": [
+                        {"label": "API calls used", "value": f"{calls:,} / {limit:,}"},
+                        {
+                            "label": "Estimated cost",
+                            "value": f"${cost_used:.2f} / ${cost_limit:.2f}",
+                        },
+                        {"label": "Budget tier", "value": self.budget_tier},
+                        {"label": "Billing month", "value": self._budget_month},
+                    ],
+                },
+                {
+                    "label": "Enrichment cache",
+                    "items": [
+                        {"label": "Cached flights", "value": f"{entries:,}"},
+                        {
+                            "label": "Last cache update",
+                            "value": last_updated,
+                            "kind": "timestamp",
+                        },
+                        {"label": "Cache duration", "value": _fmt_days(ttl_days)},
+                    ],
+                },
+            ],
+        }
 
     # ── Public API ────────────────────────────────────────────────────────────
 

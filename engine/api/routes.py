@@ -167,6 +167,7 @@ def list_libraries(request: Request) -> list[dict[str, Any]]:
             "icon": cls.icon,
             "global_config_schema": cls.global_config_schema,
             "global_config": store.get_library_config(cls.id),
+            "has_status": cls.has_status,
         }
         for cls in LIBRARY_REGISTRY.values()
     ]
@@ -176,6 +177,22 @@ def list_libraries(request: Request) -> list[dict[str, Any]]:
 def get_library_config(request: Request, lib_id: str) -> dict[str, Any]:
     _require_library(lib_id)
     return request.app.state.store.get_library_config(lib_id)
+
+
+@router.get("/libraries/{lib_id}/status")
+def get_library_status(request: Request, lib_id: str) -> dict[str, Any]:
+    """Live usage status (API budget/cost, caches) for a library, if any."""
+    from libraries import LIBRARY_REGISTRY
+
+    _require_library(lib_id)
+    cls = LIBRARY_REGISTRY[lib_id]
+    config = request.app.state.store.get_library_config(lib_id)
+    try:
+        status = cls(config).get_status()
+    except Exception:
+        logger.exception("Failed to gather status for library %r", lib_id)
+        status = None
+    return {"status": status}
 
 
 @router.put("/libraries/{lib_id}/config")

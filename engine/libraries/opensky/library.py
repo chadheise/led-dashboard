@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import time
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
@@ -15,6 +17,8 @@ _TOKEN_URL = (
     "https://auth.opensky-network.org/auth/realms/opensky-network"
     "/protocol/openid-connect/token"
 )
+
+_STATUS_PATH = Path("data/opensky_status.json")
 
 # Module-level defaults — also used as schema defaults
 _DEFAULT_BACKOFF_BASE: int = 60    # seconds before first retry after 429
@@ -29,6 +33,7 @@ def _km_to_deg(km: float) -> float:
 class OpenSkyLibrary(Library):
     id: ClassVar[str] = "opensky"
     name: ClassVar[str] = "OpenSky Network"
+    has_status: ClassVar[bool] = True
     description: ClassVar[str] = "Real-time aircraft positions via the OpenSky Network API"
     icon: ClassVar[str] = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">'
@@ -91,6 +96,78 @@ class OpenSkyLibrary(Library):
     def _backoff_max(self) -> float:
         return float(self._config.get("backoff_max_seconds", _DEFAULT_BACKOFF_MAX))
 
+    # ── Status (settings UI) ──────────────────────────────────────────────────
+
+    def _save_status(
+        self, *, flight_count: int | None = None, throttled_for: float | None = None
+    ) -> None:
+        """Persist a small status snapshot so the settings UI can read live
+        usage even though it runs in a separate library instance.
+
+        Timestamps are wall-clock (``time.time()``) so they survive restarts and
+        are comparable across processes — unlike the monotonic clock used for
+        throttle bookkeeping.
+        """
+        now = time.time()
+        try:
+            prev: dict[str, Any] = {}
+            if _STATUS_PATH.exists():
+                prev = json.loads(_STATUS_PATH.read_text())
+            payload = {
+                "last_fetch_at": now if throttled_for is None else prev.get("last_fetch_at"),
+                "flight_count": flight_count
+                if flight_count is not None
+                else prev.get("flight_count"),
+                "throttled_until": now + throttled_for if throttled_for else 0,
+            }
+            _STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _STATUS_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.rename(_STATUS_PATH)
+        except Exception as exc:
+            logger.warning("OpenSky: status save failed: %s", exc)
+
+    def get_status(self) -> dict[str, Any]:
+        last_fetch: float | None = None
+        flight_count: int | None = None
+        throttled_until: float = 0.0
+        try:
+            if _STATUS_PATH.exists():
+                data = json.loads(_STATUS_PATH.read_text())
+                last_fetch = data.get("last_fetch_at")
+                flight_count = data.get("flight_count")
+                throttled_until = float(data.get("throttled_until") or 0)
+        except Exception as exc:
+            logger.warning("OpenSky: status load failed: %s", exc)
+
+        throttled = throttled_until > time.time()
+        live_items: list[dict[str, Any]] = [
+            {"label": "Last successful fetch", "value": last_fetch, "kind": "timestamp"},
+            {
+                "label": "Flights in range",
+                "value": str(flight_count) if flight_count is not None else "—",
+            },
+            {
+                "label": "Rate-limit status",
+                "value": "Throttled — serving stale data" if throttled else "OK",
+            },
+        ]
+        if throttled:
+            live_items.append(
+                {"label": "Retrying", "value": throttled_until, "kind": "timestamp"}
+            )
+
+        return {
+            "note": "OpenSky Network is free to use — there is no per-call cost.",
+            "sections": [
+                {
+                    "label": "Usage",
+                    "items": [{"label": "Estimated cost", "value": "Free (no cost)"}],
+                },
+                {"label": "Live data", "items": live_items},
+            ],
+        }
+
     async def fetch_flights(
         self,
         lat: float,
@@ -136,6 +213,7 @@ class OpenSkyLibrary(Library):
                 logger.warning(
                     "OpenSky: throttled (429), backing off %.0fs (showing stale data)", backoff
                 )
+                self._save_status(throttled_for=backoff)
                 return None
             if resp.status_code != 200:
                 logger.warning("OpenSky: HTTP %d, serving stale data", resp.status_code)
@@ -192,6 +270,7 @@ class OpenSkyLibrary(Library):
         flights.sort(key=lambda f: f["dist_km"] if f["dist_km"] is not None else 9999)
         result = flights[:max_flights]
         logger.info("OpenSky: %d flights in range (showing %d)", len(flights), len(result))
+        self._save_status(flight_count=len(flights))
         return result
 
     async def _get_token(self) -> str | None:
