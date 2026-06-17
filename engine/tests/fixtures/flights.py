@@ -179,12 +179,23 @@ _ENRICHED_DL = {
 }
 
 
-def _seed(flights: list[dict[str, Any]], enriched: dict[str, dict[str, Any]], *, logos: bool):
+def _seed(
+    flights: list[dict[str, Any]],
+    enriched: dict[str, dict[str, Any]],
+    *,
+    logos: bool = False,
+    logo_codes: dict[str, str] | None = None,
+):
+    """Seed app state for a snapshot fixture.
+
+    logo_codes maps IATA code → color hex for generated placeholder logos.
+    logos=True is shorthand for logo_codes={"DL": "c8102e"}.
+    """
     def seed(app: Any) -> None:
         app._flights = [dict(f) for f in flights]
         app._enriched = {k: dict(v) for k, v in enriched.items()}
-        if logos:
-            app._logos = {"DL": make_fixture_logo("DL", "c8102e")}
+        codes = logo_codes if logo_codes is not None else ({"DL": "c8102e"} if logos else {})
+        app._logos = {iata: make_fixture_logo(iata, color) for iata, color in codes.items()}
         app._fetched_once = True
         app._card_last_ts = time.monotonic()
         app._unit_ts = time.monotonic()
@@ -202,6 +213,11 @@ def _fixtures() -> dict[str, dict[str, Any]]:
         "card_enriched_metric": {
             "config": {"display_mode": "cards", "units": "metric"},
             "seed": _seed([_FLIGHT_DL], {"DL699": _ENRICHED_DL}, logos=False),
+        },
+        # UAL123 → ICAO prefix UAL → IATA UA; logo shown with no enrichment data
+        "card_callsign_logo": {
+            "config": {"display_mode": "cards", "units": "imperial"},
+            "seed": _seed([_FLIGHT_LARGE_JET], {}, logo_codes={"UA": "003087"}),
         },
         # ── one fixture per distinct aircraft-category icon ─────────────────
         "card_airplane_jet": {

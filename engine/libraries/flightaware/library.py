@@ -25,12 +25,99 @@ _CACHE_PATH = Path("data/flightaware_cache.json")
 _BUDGET_PATH = Path("data/flightaware_budget.json")
 _ROUTES_CACHE_PATH = Path("data/opensky_routes_cache.json")
 _AIRPORT_DB_PATH = Path("data/airports.csv")
+_LOGO_CACHE_DIR = Path("data/logos")
+_LOGO_META_PATH = Path("data/logo_meta.json")
+_DEFAULT_LOGO_CACHE_TTL_DAYS: float = 30.0
 
 # Module-level defaults — also used as schema defaults
 _DEFAULT_CACHE_TTL_DAYS: int = 7
 _DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
 _COST_PER_CALL: float = 0.005  # AeroAPI free-tier rate, ~$0.005 per query
 _ROUTES_CACHE_TTL_DAYS: float = 30.0  # Routes are very stable
+
+# ICAO 3-letter airline designator → IATA 2-letter code (for callsign prefix resolution)
+_ICAO_PREFIX_TO_IATA: dict[str, str] = {
+    "AAL": "AA",  # American Airlines
+    "DAL": "DL",  # Delta Air Lines
+    "UAL": "UA",  # United Airlines
+    "SWA": "WN",  # Southwest Airlines
+    "JBU": "B6",  # JetBlue Airways
+    "ASA": "AS",  # Alaska Airlines
+    "FFT": "F9",  # Frontier Airlines
+    "NKS": "NK",  # Spirit Airlines
+    "AAY": "G4",  # Allegiant Air
+    "SCX": "SY",  # Sun Country Airlines
+    "HAL": "HA",  # Hawaiian Airlines
+    "SKW": "OO",  # SkyWest Airlines
+    "RPA": "YX",  # Republic Airways
+    "EGF": "MQ",  # American Eagle (Envoy Air)
+    "PSA": "OH",  # PSA Airlines
+    "ASH": "YV",  # Mesa Airlines
+    "EDV": "9E",  # Endeavor Air
+    "GJS": "G7",  # GoJet Airlines
+    "PDT": "PT",  # Piedmont Airlines
+    "AWI": "ZW",  # Air Wisconsin
+    "ACA": "AC",  # Air Canada
+    "WJA": "WS",  # WestJet
+    "POE": "PD",  # Porter Airlines
+    "TSC": "TS",  # Air Transat
+    "AMX": "AM",  # Aeromexico
+    "LAN": "LA",  # LATAM Airlines
+    "AVA": "AV",  # Avianca
+    "BAW": "BA",  # British Airways
+    "DLH": "LH",  # Lufthansa
+    "AFR": "AF",  # Air France
+    "KLM": "KL",  # KLM
+    "IBE": "IB",  # Iberia
+    "VLG": "VY",  # Vueling
+    "EZY": "U2",  # easyJet
+    "RYR": "FR",  # Ryanair
+    "WZZ": "W6",  # Wizz Air
+    "SWR": "LX",  # Swiss International Air Lines
+    "AUA": "OS",  # Austrian Airlines
+    "BEL": "SN",  # Brussels Airlines
+    "FIN": "AY",  # Finnair
+    "SAS": "SK",  # SAS
+    "NAX": "DY",  # Norwegian
+    "LOT": "LO",  # LOT Polish Airlines
+    "TAP": "TP",  # TAP Air Portugal
+    "AEE": "A3",  # Aegean Airlines
+    "PGT": "PC",  # Pegasus Airlines
+    "THY": "TK",  # Turkish Airlines
+    "UAE": "EK",  # Emirates
+    "QTR": "QR",  # Qatar Airways
+    "ETD": "EY",  # Etihad Airways
+    "FDB": "FZ",  # flydubai
+    "ABY": "G9",  # Air Arabia
+    "OMA": "WY",  # Oman Air
+    "GFA": "GF",  # Gulf Air
+    "MEA": "ME",  # Middle East Airlines
+    "RJA": "RJ",  # Royal Jordanian
+    "MSR": "MS",  # EgyptAir
+    "ETH": "ET",  # Ethiopian Airlines
+    "SAA": "SA",  # South African Airways
+    "SIA": "SQ",  # Singapore Airlines
+    "CPA": "CX",  # Cathay Pacific
+    "JAL": "JL",  # Japan Airlines
+    "ANA": "NH",  # ANA (All Nippon Airways)
+    "KAL": "KE",  # Korean Air
+    "AAR": "OZ",  # Asiana Airlines
+    "CCA": "CA",  # Air China
+    "CES": "MU",  # China Eastern
+    "CSN": "CZ",  # China Southern
+    "IGO": "6E",  # IndiGo
+    "SEJ": "SG",  # SpiceJet
+    "AIC": "AI",  # Air India
+    "QFA": "QF",  # Qantas
+    "ANZ": "NZ",  # Air New Zealand
+    "AFL": "SU",  # Aeroflot
+    "SBI": "S7",  # Siberia Airlines (S7)
+    "UTA": "UT",  # UTair
+    "SDM": "FV",  # Rossiya Airlines
+    "SVR": "U6",  # Ural Airlines
+    "POB": "DP",  # Pobeda Airlines
+    "AUI": "PS",  # Ukraine International Airlines
+}
 
 # Static airline IATA code → display name (covers the vast majority of commercial traffic)
 _AIRLINE_NAMES: dict[str, str] = {
@@ -201,6 +288,24 @@ def _fmt_days(days: float) -> str:
     return f"{days:g} days"
 
 
+def iata_from_callsign(callsign: str) -> str | None:
+    """Return the IATA airline code for a callsign prefix, or None if unknown.
+
+    Tries the 3-letter ICAO designator (e.g. UAL→UA, BAW→BA) first, then
+    falls back to a 2-letter IATA prefix used directly in the callsign (e.g. DL699→DL).
+    """
+    if not callsign:
+        return None
+    cs = callsign.strip().upper()
+    if len(cs) >= 3:
+        iata = _ICAO_PREFIX_TO_IATA.get(cs[:3])
+        if iata:
+            return iata
+    if len(cs) >= 2 and cs[:2] in _AIRLINE_NAMES:
+        return cs[:2]
+    return None
+
+
 class FlightAwareLibrary(Library):
     id: ClassVar[str] = "flightaware"
     name: ClassVar[str] = "FlightAware AeroAPI"
@@ -249,6 +354,19 @@ class FlightAwareLibrary(Library):
                 "minimum": 100,
                 "maximum": 10000,
             },
+            "logo_cache_ttl_days": {
+                "type": "number",
+                "title": "Airline logo cache TTL (days)",
+                "description": (
+                    "How long to cache downloaded airline logos before re-fetching. "
+                    "Logos are stored on disk and rarely change — longer values reduce "
+                    "network requests."
+                ),
+                "default": _DEFAULT_LOGO_CACHE_TTL_DAYS,
+                "minimum": 1,
+                "maximum": 365,
+                "x-internal": True,
+            },
         },
     }
 
@@ -263,9 +381,12 @@ class FlightAwareLibrary(Library):
         # ICAO airport code → {iata, name}
         self._airport_db: dict[str, dict[str, str]] = {}
         self._airport_db_loaded: bool = False
+        # iata → fetched_at wall time (tracks both hits and 404s)
+        self._logo_meta: dict[str, float] = {}
         self._load_disk_cache()
         self._load_budget()
         self._load_routes_cache()
+        self._load_logo_meta()
 
     # ── Config properties ─────────────────────────────────────────────────────
 
@@ -278,6 +399,11 @@ class FlightAwareLibrary(Library):
     def _budget_limit(self) -> int:
         """Monthly call budget, read from config."""
         return int(self._config.get("monthly_budget", _DEFAULT_MONTHLY_BUDGET))
+
+    @property
+    def _logo_cache_ttl(self) -> float:
+        """Logo disk-cache TTL in seconds, read from config."""
+        return float(self._config.get("logo_cache_ttl_days", _DEFAULT_LOGO_CACHE_TTL_DAYS)) * 24 * 3600
 
     # ── Disk cache ────────────────────────────────────────────────────────────
 
@@ -348,6 +474,28 @@ class FlightAwareLibrary(Library):
             tmp.rename(_ROUTES_CACHE_PATH)
         except Exception as exc:
             logger.warning("FlightAware: routes cache save failed: %s", exc)
+
+    # ── Logo disk cache ───────────────────────────────────────────────────────
+
+    def _load_logo_meta(self) -> None:
+        try:
+            if _LOGO_META_PATH.exists():
+                raw = json.loads(_LOGO_META_PATH.read_text())
+                self._logo_meta = {k: float(v) for k, v in raw.items()}
+                logger.info(
+                    "FlightAware: loaded logo metadata for %d airlines", len(self._logo_meta)
+                )
+        except Exception as exc:
+            logger.warning("FlightAware: logo meta load failed: %s", exc)
+
+    def _save_logo_meta(self) -> None:
+        try:
+            _LOGO_META_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _LOGO_META_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(self._logo_meta))
+            tmp.rename(_LOGO_META_PATH)
+        except Exception as exc:
+            logger.warning("FlightAware: logo meta save failed: %s", exc)
 
     # ── Airport DB ────────────────────────────────────────────────────────────
 
@@ -660,14 +808,39 @@ class FlightAwareLibrary(Library):
             return None
 
     async def fetch_logo(self, iata: str) -> Image.Image | None:
+        logo_path = _LOGO_CACHE_DIR / f"{iata}.png"
+        ttl = self._logo_cache_ttl
+        now = time.time()
+
+        fetched_at = self._logo_meta.get(iata)
+        if fetched_at is not None and (now - fetched_at) < ttl:
+            if logo_path.exists():
+                try:
+                    return Image.open(logo_path).convert("RGBA")
+                except Exception as exc:
+                    logger.warning("Logo disk read failed for %s: %s", iata, exc)
+            else:
+                return None  # cached 404
+
         try:
             async with httpx.AsyncClient(timeout=5.0, follow_redirects=True) as client:
                 resp = await client.get(
                     f"https://www.gstatic.com/flights/airline_logos/70px/{iata}.png"
                 )
                 if resp.status_code == 200:
+                    img = Image.open(BytesIO(resp.content)).convert("RGBA")
+                    try:
+                        _LOGO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                        img.save(logo_path, "PNG")
+                    except Exception as exc:
+                        logger.warning("Logo disk save failed for %s: %s", iata, exc)
+                    self._logo_meta[iata] = now
+                    self._save_logo_meta()
                     logger.info("Logo fetched for %s", iata)
-                    return Image.open(BytesIO(resp.content)).convert("RGBA")
+                    return img
+                # Cache negative result to avoid repeated failed fetches
+                self._logo_meta[iata] = now
+                self._save_logo_meta()
                 logger.debug("No logo for %s: HTTP %d", iata, resp.status_code)
         except Exception as exc:
             logger.debug("Logo fetch failed for %s: %s", iata, exc)

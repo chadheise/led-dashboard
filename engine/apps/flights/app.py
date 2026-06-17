@@ -14,7 +14,7 @@ from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
-from libraries.flightaware.library import FlightAwareLibrary
+from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
 from apps.flights.icons import render_category_icon
 
 
@@ -269,11 +269,17 @@ class FlightsApp(DisplayApp):
         await self._fetch_logos()
 
     async def _fetch_logos(self) -> None:
-        needed = {
+        from_enrichment = {
             e["operator_iata"]
             for e in self._enriched.values()
             if e.get("operator_iata")
-        } - self._logos_fetched
+        }
+        from_callsigns = {
+            iata
+            for f in self._flights
+            if (iata := iata_from_callsign(f.get("callsign", ""))) is not None
+        }
+        needed = (from_enrichment | from_callsigns) - self._logos_fetched
 
         if not needed:
             return
@@ -386,7 +392,11 @@ class FlightsApp(DisplayApp):
 
         # Logo: square spanning the top rows, capped so text keeps room.
         logo_dim = min(min(3, n_rows) * slot_h, w // 4)
-        operator_iata = enriched.get("operator_iata", "") or ""
+        operator_iata = (
+            enriched.get("operator_iata", "")
+            or iata_from_callsign(flight.get("callsign", ""))
+            or ""
+        )
         raw_logo = self._logos.get(operator_iata) if operator_iata else None
         if logo_dim >= 8:
             if raw_logo is not None:
