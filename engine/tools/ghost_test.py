@@ -17,12 +17,12 @@ panel = logical panel 10). The harness mirrors this so that logical panel number
 match what you see on the wall:
 
   Logical  Physical-chain   Physical x range
-  panel 1  pos 9            576–639
-  panel 2  pos 8            512–575
+  panel 1  pos 9            576-639
+  panel 2  pos 8            512-575
   ...
-  panel 8  pos 2            128–191
-  panel 9  pos 1             64–127
-  panel 10 pos 0              0– 63
+  panel 8  pos 2            128-191
+  panel 9  pos 1             64-127
+  panel 10 pos 0              0-63
 
 The test pattern:
   • Panels 1–7  : solid BLACK (the "clean" reference side)
@@ -134,8 +134,8 @@ def main() -> None:
     canvas = matrix.SwapOnVSync(canvas)
 
     print("Ghost test pattern:")
-    print("  Panels 1–7  : solid BLACK")
-    print("  Panels 8–10 : solid WHITE")
+    print("  Panels 1-7  : solid BLACK")
+    print("  Panels 8-10 : solid WHITE")
     print("  Top/bottom rows : white (full width)")
     print("  Panel boundaries: gray dividers")
     print()
