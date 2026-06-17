@@ -210,15 +210,15 @@ _GOAL_GAP = 1
 
 
 def _goal_sort_key(t: str) -> tuple[int, int]:
-    s = t.rstrip("'").replace("(OG)", "").replace("(PK)", "").strip()
+    s = t.replace("(OG)", "").replace("(PK)", "").rstrip("'").strip()
     if "+" in s:
         a, b = s.split("+", 1)
         try:
-            return (int(a), int(b))
+            return (int(a), int(b.split(":")[0]))
         except ValueError:
             pass
     try:
-        return (int(s), 0)
+        return (int(s.split(":")[0]), 0)
     except ValueError:
         return (999, 0)
 
