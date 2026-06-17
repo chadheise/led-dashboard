@@ -5,30 +5,24 @@ Ghost test harness - renders a static high-contrast pattern to make ghosting vis
 Run with: sudo python tools/ghost_test.py
 
 Draws directly in physical (library) coordinates, bypassing the HardwareCanvas
-logical-to-physical transform. This keeps the harness simple and independent of
-any app code.
+logical-to-physical transform.
 
 Physical canvas dimensions for this setup:
   chain_length x cols  =  10 x 64  =  640 px wide
   rows                 =  32           32 px tall
 
-Panels are addressed in physical-chain order (chain position 0 = rightmost visible
-panel = logical panel 10). The harness mirrors this so that logical panel numbers
-match what you see on the wall:
-
-  Logical  Physical-chain   Physical x range
-  panel 1  pos 9            576-639
-  panel 2  pos 8            512-575
+Panel physical x ranges (chain pos 0 = rightmost visible = logical panel 10):
+  panel 1  : 576-639
+  panel 2  : 512-575
   ...
-  panel 8  pos 2            128-191
-  panel 9  pos 1             64-127
-  panel 10 pos 0              0-63
+  panel 8  : 128-191
+  panel 9  :  64-127
+  panel 10 :   0-63
 
 The test pattern:
-  - Panels 1-7  : solid BLACK (the "clean" reference side)
-  - Panels 8-10 : solid WHITE (the "problem" side - ghosting worst here)
-  - Gray dividers at every panel boundary
-  - Single white pixel rows at y=0 and y=31 across all panels (full-width reference lines)
+  - Full-display alternating 4px white/black horizontal stripes
+  - Each white stripe is immediately above/below a black stripe - reveals row ghosting
+  - Any black stripe that glows faintly is a ghost
 """
 
 import os
@@ -58,7 +52,7 @@ def build_options(hw_cfg: dict) -> RGBMatrixOptions:
     options.hardware_mapping = hw_cfg.get("hardware_mapping", "regular")
     options.brightness = 100
     options.drop_privileges = False
-    options.show_refresh_rate = True  # always on for tuning runs
+    options.show_refresh_rate = True
 
     if "pwm_lsb_nanoseconds" in hw_cfg:
         options.pwm_lsb_nanoseconds = hw_cfg["pwm_lsb_nanoseconds"]
@@ -76,22 +70,15 @@ def build_options(hw_cfg: dict) -> RGBMatrixOptions:
     return options
 
 
-def fill_rect(canvas, x: int, y: int, w: int, h: int, r: int, g: int, b: int) -> None:
-    for dy in range(h):
-        for dx in range(w):
-            canvas.SetPixel(x + dx, y + dy, r, g, b)
-
-
 def main() -> None:
     cfg = load_config(CONFIG_PATH)
     hw_cfg = cfg.get("hardware", {})
 
     options = build_options(hw_cfg)
 
-    chain = options.chain_length   # 10
-    phys_w = chain * options.cols  # 640  (physical canvas width)
-    phys_h = options.rows          # 32   (physical canvas height)
-    panel_w = options.cols         # 64   (each panel's physical width)
+    chain = options.chain_length
+    phys_w = chain * options.cols  # 640
+    phys_h = options.rows          # 32
 
     print("Options:")
     print(f"  rows={options.rows} cols={options.cols} chain={chain} parallel={options.parallel}")
@@ -106,36 +93,19 @@ def main() -> None:
     matrix = RGBMatrix(options=options)
     canvas = matrix.CreateFrameCanvas()
 
-    # Physical-chain position for logical panel N (1-indexed):
-    #   phys_pos = chain - N   (chain pos 0 = rightmost visible = logical panel 10)
-    # Physical x start = phys_pos * panel_w
-
-    for logical_panel in range(1, chain + 1):
-        phys_pos = chain - logical_panel          # chain position (0 = rightmost)
-        px_start = phys_pos * panel_w
-
-        if logical_panel >= 8:
-            # Solid white - the "problem" panels
-            fill_rect(canvas, px_start, 0, panel_w, phys_h, 255, 255, 255)
-
-        # Gray divider at the left edge of each panel
-        for y in range(phys_h):
-            canvas.SetPixel(px_start, y, 64, 64, 64)
-
-    # Full-width white lines at top and bottom rows
-    for x in range(phys_w):
-        canvas.SetPixel(x, 0, 255, 255, 255)
-        canvas.SetPixel(x, phys_h - 1, 255, 255, 255)
+    # Alternating 4px-wide horizontal stripes (white/black) across the full display.
+    stripe_h = 4
+    for y in range(phys_h):
+        if (y // stripe_h) % 2 == 0:
+            for x in range(phys_w):
+                canvas.SetPixel(x, y, 255, 255, 255)
+        # odd stripes stay black (canvas initialised to black)
 
     canvas = matrix.SwapOnVSync(canvas)
 
-    print("Ghost test pattern:")
-    print("  Panels 1-7  : solid BLACK")
-    print("  Panels 8-10 : solid WHITE")
-    print("  Top/bottom rows : white (full width)")
-    print("  Panel boundaries: gray dividers")
-    print()
-    print("Check the wall: any faint light on panels 1-7 is ghosting.")
+    print("Ghost test pattern: 4px alternating horizontal stripes (full display)")
+    print("Any black stripe that glows faintly is a ghost.")
+    print("Ghosting will be most visible toward panels 8-10 (right side of wall).")
     print("Press Ctrl-C to exit.")
 
     try:
