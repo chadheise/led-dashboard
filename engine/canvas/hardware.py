@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import struct
 from collections.abc import Awaitable, Callable
@@ -181,8 +182,14 @@ class HardwareCanvas(Canvas):
         self._canvas.brightness = brightness
 
     async def render(self) -> None:
-        self._canvas = self._matrix.SwapOnVSync(self._canvas)
-        # Double-buffered: keep the freshly swapped-in canvas at the current brightness.
+        # SwapOnVSync blocks until the next hardware vsync (~22ms at 45 Hz).
+        # Running it in a thread executor lets the asyncio event loop continue
+        # handling API requests and WebSocket traffic during that wait, reducing
+        # CPU contention with the rgbmatrix internal thread.
+        loop = asyncio.get_running_loop()
+        self._canvas = await loop.run_in_executor(
+            None, self._matrix.SwapOnVSync, self._canvas
+        )
         self._canvas.brightness = self.brightness
         frame = struct.pack(">HH", self.width, self.height) + bytes(self._pixels)
         await self._broadcast(frame)
