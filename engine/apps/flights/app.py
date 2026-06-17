@@ -372,9 +372,11 @@ class FlightsApp(DisplayApp):
         else:
             mid_x = pad
 
-        # Middle text: airline name, route, aircraft type (as many as fit)
+        # Middle text: airline name, route, aircraft type (as many as fit).
+        # Fall back to the callsign (always present from OpenSky) when no
+        # enrichment is available, so a flight is never shown as bare stats.
         mid_w = max(0, (w - pad - stats_w - (stats_gap if stats_w else 0)) - mid_x)
-        airline = enriched.get("airline", "") or ""
+        airline = enriched.get("airline", "") or flight.get("callsign", "") or ""
         origin = enriched.get("origin", "") or ""
         dest = enriched.get("dest", "") or ""
         aircraft_type = enriched.get("aircraft_type", "") or ""
