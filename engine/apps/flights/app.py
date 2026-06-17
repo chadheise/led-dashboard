@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 from canvas.base import Canvas
 from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_text
+from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
 
@@ -453,9 +453,4 @@ class FlightsApp(DisplayApp):
 
     def _draw_no_flights(self) -> None:
         msg = "Loading..." if not self._fetched_once else "No flights nearby"
-        msg_img = render_text(msg, (80, 80, 80), 14)
-        img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-        x = (self.canvas.width - msg_img.width) // 2
-        y = (self.canvas.height - msg_img.height) // 2
-        img.paste(msg_img, (x, y))
-        blit(self.canvas, img)
+        draw_status_message(self.canvas, msg)
