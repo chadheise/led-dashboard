@@ -42,6 +42,14 @@ class DisplayApp(ABC):
     async def should_display(self) -> bool:
         return True
 
+    async def should_pin(self) -> bool:
+        """Return True to request the scene manager keep this scene on screen.
+
+        When True, the scene manager will not rotate away from this scene and
+        will immediately jump to it if another scene is currently active.
+        """
+        return False
+
     async def on_activate(self) -> None:
         pass
 
