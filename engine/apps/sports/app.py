@@ -321,6 +321,10 @@ class SportsApp(DisplayApp):
             return []
         source = self.config.get("live_game_source", "favorites")
         favorite_teams = list(self.config.get("favorite_teams") or [])
+        # No favorites configured → treat as "any"; filtering by an empty list
+        # would silently suppress the spotlight for every user who hasn't set teams.
+        if source == "favorites" and not favorite_teams:
+            source = "any"
         result: list[dict[str, Any]] = []
         for game in self._games:
             if game.get("state") != "in":
