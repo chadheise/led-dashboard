@@ -571,16 +571,22 @@ class ESPNSportsLibrary(Library):
                     at_id = away_team.get("id", "")
                     for detail in comp.get("details") or []:
                         d_type = ((detail.get("type") or {}).get("text") or "").lower()
-                        if "goal" not in d_type:
+                        if "goal" not in d_type and "penalty" not in d_type:
                             continue
                         clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
                         scoring_id = ((detail.get("team") or {}).get("id") or "")
                         is_og = "own" in d_type
+                        is_pk = "penalty" in d_type and not is_og
                         if is_og:
                             if scoring_id == ht_id:
-                                away_goals.append(f"{clock_val}(og)")
+                                away_goals.append(f"{clock_val}(OG)")
                             elif scoring_id == at_id:
-                                home_goals.append(f"{clock_val}(og)")
+                                home_goals.append(f"{clock_val}(OG)")
+                        elif is_pk:
+                            if scoring_id == ht_id:
+                                home_goals.append(f"{clock_val}(PK)")
+                            elif scoring_id == at_id:
+                                away_goals.append(f"{clock_val}(PK)")
                         else:
                             if scoring_id == ht_id:
                                 home_goals.append(clock_val)
