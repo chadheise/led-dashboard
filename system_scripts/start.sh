@@ -15,6 +15,42 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 
+# ── Boot display helpers ───────────────────────────────────────────────────────
+# show_boot_msg launches boot_display.py in the background so the message stays
+# on the LED matrix while the current startup step runs.  Each call kills the
+# previous instance first.  stop_boot_display must be called before the engine
+# starts so they don't both hold the rgbmatrix device.
+
+BOOT_DISPLAY_PID=""
+
+show_boot_msg() {
+    # Kill the previous boot display, if any.
+    if [ -n "$BOOT_DISPLAY_PID" ]; then
+        kill "$BOOT_DISPLAY_PID" 2>/dev/null || true
+        wait "$BOOT_DISPLAY_PID" 2>/dev/null || true
+        BOOT_DISPLAY_PID=""
+    fi
+
+    local python="$VENV_DIR/bin/python3"
+    if [ ! -x "$python" ]; then
+        return  # venv not ready yet (first boot before pip install)
+    fi
+
+    CANVAS=$( $HARDWARE_MODE && echo hardware || echo "" ) \
+    PYTHONPATH="$REPO_DIR/engine" \
+        "$python" "$REPO_DIR/engine/boot_display.py" "$1" 2>/dev/null &
+    BOOT_DISPLAY_PID=$!
+}
+
+stop_boot_display() {
+    if [ -n "$BOOT_DISPLAY_PID" ]; then
+        kill "$BOOT_DISPLAY_PID" 2>/dev/null || true
+        wait "$BOOT_DISPLAY_PID" 2>/dev/null || true
+        BOOT_DISPLAY_PID=""
+    fi
+}
+# ──────────────────────────────────────────────────────────────────────────────
+
 log "=== LED Dashboard Startup ==="
 log "Repo: $REPO_DIR"
 log "Canvas mode: $( $HARDWARE_MODE && echo hardware || echo simulator )"
@@ -32,10 +68,12 @@ if [ ! -d "$VENV_DIR" ]; then
 fi
 source "$VENV_DIR/bin/activate"
 
+show_boot_msg "Updating dependencies..."
 log "Installing engine dependencies..."
 pip install -r engine/requirements.txt
 
 # Build UI
+show_boot_msg "Building UI..."
 log "Installing UI dependencies..."
 cd "$REPO_DIR/ui"
 npm install --unsafe-perm
@@ -45,6 +83,7 @@ npm run build
 
 # Hardware mode requires rgbmatrix — install automatically if missing
 if $HARDWARE_MODE && ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null; then
+    show_boot_msg "Installing drivers..."
     log "rgbmatrix not found — installing from source..."
     TMP_DIR="$(mktemp -d)"
     trap 'rm -rf "$TMP_DIR"' EXIT
@@ -64,6 +103,10 @@ fi
 # by frequency scaling. Without this, refresh rate drops intermittently to ~22 Hz.
 log "Setting CPU governor to performance..."
 echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
+
+# Hand off the display to the engine
+show_boot_msg "Starting..."
+stop_boot_display
 
 # Start engine
 log "Starting engine on :8000..."
@@ -85,6 +128,7 @@ log "Services started. Engine PID=$ENGINE_PID, UI PID=$UI_PID"
 
 cleanup() {
     log "Shutting down services..."
+    stop_boot_display
     kill "$ENGINE_PID" "$UI_PID" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
