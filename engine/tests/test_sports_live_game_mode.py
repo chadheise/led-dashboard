@@ -78,6 +78,23 @@ def test_featured_live_games_favorites_empty_when_no_favorite_live():
     assert app._featured_live_games() == []
 
 
+def test_featured_live_games_favorites_no_teams_falls_back_to_any():
+    """When live_game_source is 'favorites' but no teams are configured,
+    every live game should qualify — filtering by an empty list would
+    silently suppress the spotlight for newly created modules."""
+    soccer = _game_copy("soccer_long_note")  # fifa.world, in
+    nfl = _game_copy("nfl_in_progress")  # nfl, in
+
+    app = _make_app({
+        "live_game_mode": True,
+        "live_game_source": "favorites",
+        # no favorite_teams set
+    })
+    app._games = [soccer, nfl]
+
+    assert app._featured_live_games() == [soccer, nfl]
+
+
 def test_featured_live_games_disabled_returns_empty():
     soccer = _game_copy("soccer_long_note")
 
