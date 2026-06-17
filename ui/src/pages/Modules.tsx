@@ -5,6 +5,8 @@ import AppIcon, { PencilIcon, TrashIcon } from "../components/AppIcon";
 import DisplayPreview from "../components/DisplayPreview";
 import MultiSizePreview from "../components/MultiSizePreview";
 import TransportControls from "../components/TransportControls";
+import Toast, { useToast } from "../components/Toast";
+import { apiFetch, apiJson, jsonBody } from "../api";
 import {
   C,
   F,
@@ -187,22 +189,26 @@ export default function Modules() {
   const [origName, setOrigName] = useState("");
   const [origAppId, setOrigAppId] = useState("");
   const [origConfig, setOrigConfig] = useState<Record<string, unknown>>({});
+  const [saving, setSaving] = useState(false);
+  const { toast, showToast, dismiss } = useToast();
 
   const previewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/modules").then((r) => r.json()),
-      fetch("/api/apps").then((r) => r.json()),
-    ]).then(([m, a]) => {
-      setModules(m);
-      setApps(a);
-    });
-    fetch("/api/status")
-      .then((r) => r.json())
+      apiJson<Module[]>("/api/modules"),
+      apiJson<AppInfo[]>("/api/apps"),
+    ])
+      .then(([m, a]) => {
+        setModules(m);
+        setApps(a);
+      })
+      .catch(() => showToast("Could not reach the engine", "error"));
+    apiJson<{ paused?: boolean }>("/api/status")
       .then((s) => {
         if (typeof s.paused === "boolean") setPaused(s.paused);
-      });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -323,30 +329,34 @@ export default function Modules() {
   // ── CRUD ───────────────────────────────────────────────────────────────────
   const save = async () => {
     const body = { name: fName, app_id: fAppId, config: fConfig };
-    if (editing === "new") {
-      const m: Module = await fetch("/api/modules", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).then((r) => r.json());
-      setModules((prev) => [...prev, m]);
-    } else {
-      await fetch(`/api/modules/${editing}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      setModules((prev) =>
-        prev.map((m) => (m.id === editing ? { ...m, ...body } : m)),
-      );
+    setSaving(true);
+    try {
+      if (editing === "new") {
+        const m = await apiJson<Module>("/api/modules", jsonBody("POST", body));
+        setModules((prev) => [...prev, m]);
+      } else {
+        await apiFetch(`/api/modules/${editing}`, jsonBody("PUT", body));
+        setModules((prev) =>
+          prev.map((m) => (m.id === editing ? { ...m, ...body } : m)),
+        );
+      }
+      showToast("Saved", "success");
+      navigate("/modules");
+    } catch {
+      showToast("Save failed — please retry", "error");
+    } finally {
+      setSaving(false);
     }
-    navigate("/modules");
   };
 
   const remove = async (id: string) => {
-    await fetch(`/api/modules/${id}`, { method: "DELETE" });
-    setModules((prev) => prev.filter((m) => m.id !== id));
-    if (editing === id) navigate("/modules");
+    try {
+      await apiFetch(`/api/modules/${id}`, { method: "DELETE" });
+      setModules((prev) => prev.filter((m) => m.id !== id));
+      if (editing === id) navigate("/modules");
+    } catch {
+      showToast("Delete failed — please retry", "error");
+    }
   };
 
   // ── Derived ────────────────────────────────────────────────────────────────
@@ -598,20 +608,25 @@ export default function Modules() {
               <div>
                 <button
                   onClick={save}
-                  disabled={!canSave}
+                  disabled={!canSave || saving}
                   style={{
                     ...btn("success"),
-                    opacity: canSave ? 1 : 0.4,
-                    cursor: canSave ? "pointer" : "default",
+                    opacity: canSave && !saving ? 1 : 0.4,
+                    cursor: canSave && !saving ? "pointer" : "default",
                   }}
                 >
-                  {editing === "new" ? "CREATE MODULE" : "SAVE"}
+                  {saving
+                    ? "SAVING…"
+                    : editing === "new"
+                      ? "CREATE MODULE"
+                      : "SAVE"}
                 </button>
               </div>
             </div>
           )}
         </div>
       </div>
+      <Toast toast={toast} onDismiss={dismiss} />
     </div>
   );
 }

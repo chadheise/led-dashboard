@@ -6,11 +6,18 @@ module that is currently playing.
 """
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
 
-from api.routes import _maybe_reload, play_single_module
+from api.routes import (
+    ModuleBody,
+    _maybe_reload,
+    _reload_tasks,
+    play_single_module,
+    update_module,
+)
 from scene_manager import PlaylistEntry as SMEntry
 from state import Module, Playlist, PlaylistItem, StateStore
 
@@ -116,3 +123,22 @@ async def test_play_single_module_sets_active_id(tmp_path):
     assert result["active_single_module_id"] == module_id
     assert store.state.active_single_module_id == module_id
     assert len(sm.last) == 1
+
+
+@pytest.mark.asyncio
+async def test_update_module_reloads_in_background(tmp_path):
+    store = _store(tmp_path)
+    module_id = next(iter(store.state.modules))
+    sm = FakeSceneManager()
+    request = _request(store, sm, single_id=module_id)
+    body = ModuleBody(name="Hello", app_id="text", config={"message": "changed"})
+
+    # The save returns immediately, before the (potentially slow) scene rebuild.
+    result = await update_module(request, module_id, body)
+    assert result["config"] == {"message": "changed"}
+
+    # A reload is scheduled in the background; draining it applies the new config.
+    pending = list(_reload_tasks)
+    assert pending, "expected a background reload to be scheduled"
+    await asyncio.gather(*pending)
+    assert sm.last[0].config == {"message": "changed"}
