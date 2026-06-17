@@ -96,14 +96,19 @@ def _startup_entries(store: StateStore) -> list[PlaylistEntry]:
     return _sm_entries(store)
 
 
-async def _render_loop(scene_manager: SceneManager, fps: int) -> None:
+async def _render_loop(scene_manager: SceneManager, fps: int, vsync: bool = False) -> None:
+    # On hardware, SwapOnVSync (run in a thread executor) blocks until the next
+    # hardware vsync, naturally capping the rate at the panel refresh rate (~50 Hz).
+    # Adding an extra sleep on top would compound the wait and drop actual FPS to ~19.
+    # On simulator there is no vsync, so we keep the sleep to cap at the target FPS.
     interval = 1.0 / fps
     while True:
         try:
             await scene_manager.render_frame()
         except Exception as exc:
             logger.warning("Render loop error: %s", exc)
-        await asyncio.sleep(interval)
+        if not vsync:
+            await asyncio.sleep(interval)
 
 
 def main() -> None:
@@ -148,7 +153,10 @@ def main() -> None:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await scene_manager.set_playlist(_startup_entries(store))
         await scene_manager.start()
-        render_task = asyncio.create_task(_render_loop(scene_manager, display_cfg["fps"]))
+        hardware_mode = os.environ.get("CANVAS", "").lower() == "hardware"
+        render_task = asyncio.create_task(
+            _render_loop(scene_manager, display_cfg["fps"], vsync=hardware_mode)
+        )
         hot_reload_task: asyncio.Task | None = None
         if os.environ.get("HOT_RELOAD", "").lower() == "true":
             from hot_reload import start_hot_reload_watcher
