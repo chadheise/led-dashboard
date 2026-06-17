@@ -60,6 +60,11 @@ if $HARDWARE_MODE && ! "$VENV_DIR/bin/python3" -c "import rgbmatrix" 2>/dev/null
     log "rgbmatrix installed successfully."
 fi
 
+# Lock CPU governor to performance so the rgbmatrix timing thread isn't starved
+# by frequency scaling. Without this, refresh rate drops intermittently to ~22 Hz.
+log "Setting CPU governor to performance..."
+echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
+
 # Start engine
 log "Starting engine on :8000..."
 cd "$REPO_DIR/engine"
