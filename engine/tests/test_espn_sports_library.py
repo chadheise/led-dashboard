@@ -107,3 +107,31 @@ def test_fetch_league_skips_malformed_event_but_returns_others() -> None:
     games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "mlb"))
 
     assert [g["id"] for g in games] == ["good"]
+
+
+def test_flag_league_maps_saudi_arabia_to_flag() -> None:
+    """ESPN abbreviates Saudi Arabia as the FIFA code ``KSA`` (not ``SAU``);
+    the flag lookup must recognize it so a flag is shown next to the team."""
+    from libraries.espn_sports.library import ESPNSportsLibrary
+
+    data = {
+        "events": [
+            {
+                "id": "1",
+                "status": {"type": {"shortDetail": "Scheduled", "state": "pre"}},
+                "competitions": [
+                    {
+                        "competitors": [
+                            _competitor("home", "KSA"),
+                            _competitor("away", "ARG"),
+                        ],
+                    }
+                ],
+            }
+        ]
+    }
+
+    games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "fifa.world"))
+
+    assert games[0]["home_logo_url"] == "https://flagcdn.com/w80/sa.png"
+    assert games[0]["away_logo_url"] == "https://flagcdn.com/w80/ar.png"
