@@ -31,4 +31,3 @@ hardware:
   pixel_mapper: "" # extra library mapper, e.g. "U-mapper" for zigzag chain wiring
   gpio_slowdown: 5 # raised from 4 to improve signal integrity on long 10-panel chain
   hardware_mapping: adafruit-hat
-  pwm_bits: 8 # reduced from default 11 to stabilize PWM output; slight color depth tradeoff
