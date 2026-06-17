@@ -31,3 +31,4 @@ hardware:
   pixel_mapper: "" # extra library mapper, e.g. "U-mapper" for zigzag chain wiring
   gpio_slowdown: 5 # raised from 4 to improve signal integrity on long 10-panel chain
   hardware_mapping: adafruit-hat
+  pwm_lsb_nanoseconds: 200 # raised from default 130 to reduce artifacts on bright/white content
