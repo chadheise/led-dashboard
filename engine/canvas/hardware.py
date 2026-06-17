@@ -68,10 +68,31 @@ class HardwareCanvas(Canvas):
         options.hardware_mapping = hw_cfg.get("hardware_mapping", "regular")
         options.brightness = brightness
         options.drop_privileges = False
+        options.show_refresh_rate = hw_cfg.get("show_refresh_rate", False)
+
+        if "pwm_lsb_nanoseconds" in hw_cfg:
+            options.pwm_lsb_nanoseconds = hw_cfg["pwm_lsb_nanoseconds"]
+        if "pwm_bits" in hw_cfg:
+            options.pwm_bits = hw_cfg["pwm_bits"]
+        if "pwm_dither_bits" in hw_cfg:
+            options.pwm_dither_bits = hw_cfg["pwm_dither_bits"]
+        if "panel_type" in hw_cfg:
+            options.panel_type = hw_cfg["panel_type"]
 
         pixel_mapper = hw_cfg.get("pixel_mapper", "")
         if pixel_mapper:
             options.pixel_mapper_config = pixel_mapper
+
+        logger.info(
+            "HardwareCanvas options: rows=%d cols=%d chain=%d parallel=%d gpio_slowdown=%d "
+            "hardware_mapping=%s pwm_lsb_ns=%s pwm_bits=%s pwm_dither_bits=%s panel_type=%s",
+            options.rows, options.cols, options.chain_length, options.parallel,
+            options.gpio_slowdown, options.hardware_mapping,
+            hw_cfg.get("pwm_lsb_nanoseconds", "<default>"),
+            hw_cfg.get("pwm_bits", "<default>"),
+            hw_cfg.get("pwm_dither_bits", "<default>"),
+            hw_cfg.get("panel_type", "<default>"),
+        )
 
         self._matrix = RGBMatrix(options=options)
         self._canvas = self._matrix.CreateFrameCanvas()
