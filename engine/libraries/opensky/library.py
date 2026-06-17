@@ -253,6 +253,7 @@ class OpenSkyLibrary(Library):
                 else None
             )
 
+            category_raw = state[17] if len(state) > 17 else None
             flights.append({
                 "callsign": callsign[:8].upper(),
                 "icao24": (state[0] or "").lower(),
@@ -266,6 +267,7 @@ class OpenSkyLibrary(Library):
                 "vr_mph": vr_mph,
                 "heading": heading,
                 "dist_km": dist_km,
+                "category": int(category_raw) if category_raw is not None else None,
             })
 
         flights.sort(key=lambda f: f["dist_km"] if f["dist_km"] is not None else 9999)

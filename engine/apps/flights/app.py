@@ -15,6 +15,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
+from apps.flights.icons import render_category_icon
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -28,9 +29,10 @@ def _clip_text(text: str, size: int, max_w: int) -> str:
 _UNIT_CYCLE_S: float = 4.0
 
 
+
 def _build_stat_lines(flight: dict[str, Any], imperial: bool) -> list[str]:
     track = flight.get("track")
-    trk_str = f"Trk: {track}deg" if track is not None else "Trk: ---"
+    trk_str = f"Trk: {track} deg" if track is not None else "Trk: ---"
 
     if imperial:
         alt = flight.get("alt_ft")
@@ -345,27 +347,61 @@ class FlightsApp(DisplayApp):
             """Top-left y to vertically center img_h within slot `row`."""
             return pad + row * slot_h + (slot_h - img_h) // 2
 
-        # Stats column: right-aligned. Dropped entirely when it would consume
+        # Stats column: colon-aligned. Dropped entirely when it would consume
         # more than half the card (narrow panels) — airline and route win.
         stat_strs = _build_stat_lines(flight, self._show_imperial)[:n_rows]
-        stat_imgs = [render_text(s, text_color, font_size) for s in stat_strs]
-        stats_w = max((si.width for si in stat_imgs), default=0)
+
+        # Split "Label: value" → ("Label:", " value") for stable colon alignment
+        stat_parts: list[tuple[str, str]] = []
+        for s in stat_strs:
+            if ": " in s:
+                idx = s.index(": ")
+                stat_parts.append((s[: idx + 1], s[idx + 1:]))
+            else:
+                stat_parts.append((s, ""))
+
+        # Worst-case values sized to real flight maxima — keeps the colon column
+        # stable as values update, without adding unnecessary extra space
+        _worst_vals = [
+            " 45000 ft", " 700 mph", " +100 mph",  # imperial
+            " 13700 m", " 1100 kph", " +160 kph",  # metric
+            " 359 deg", " ---",
+        ]
+        label_imgs = [render_text(lbl, text_color, font_size) for lbl, _ in stat_parts]
+        value_imgs = [render_text(val, text_color, font_size) if val else None
+                      for _, val in stat_parts]
+        label_col_w = max((li.width for li in label_imgs), default=0)
+        value_col_w = max(
+            max((render_text(v, text_color, font_size).width for v in _worst_vals), default=0),
+            max((vi.width for vi in value_imgs if vi is not None), default=0),
+        )
+        stats_w = label_col_w + value_col_w
         if stats_w > inner_w // 2:
-            stat_imgs = []
+            stat_parts = []
+            label_imgs = []
+            value_imgs = []
+            label_col_w = 0
+            value_col_w = 0
             stats_w = 0
 
         # Logo: square spanning the top rows, capped so text keeps room.
         logo_dim = min(min(3, n_rows) * slot_h, w // 4)
         operator_iata = enriched.get("operator_iata", "") or ""
         raw_logo = self._logos.get(operator_iata) if operator_iata else None
-        if raw_logo is not None and logo_dim >= 8:
-            resized = raw_logo.resize((logo_dim, logo_dim), Image.LANCZOS)
-            bg = Image.new("RGB", resized.size, (0, 0, 0))
-            if resized.mode == "RGBA":
-                bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+        if logo_dim >= 8:
+            if raw_logo is not None:
+                resized = raw_logo.resize((logo_dim, logo_dim), Image.LANCZOS)
+                bg = Image.new("RGB", resized.size, (0, 0, 0))
+                if resized.mode == "RGBA":
+                    bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+                else:
+                    bg.paste(resized.convert("RGB"))
+                img.paste(bg, (pad, pad))
             else:
-                bg.paste(resized.convert("RGB"))
-            img.paste(bg, (pad, pad))
+                fallback = render_category_icon(flight.get("category"), logo_dim)
+                bg = Image.new("RGB", (logo_dim, logo_dim), (0, 0, 0))
+                bg.paste(fallback.convert("RGB"), mask=fallback.split()[3])
+                img.paste(bg, (pad, pad))
             mid_x = pad + logo_dim + logo_gap
         else:
             mid_x = pad
@@ -398,9 +434,14 @@ class FlightsApp(DisplayApp):
                     name_img = render_text(clipped, text_color, font_size)
                     img.paste(name_img, (pad, row_y(3 + i, name_img.height)))
 
-        # Stats: right-aligned, one per row from the top
-        for i, si in enumerate(stat_imgs):
-            img.paste(si, (w - pad - si.width, row_y(i, si.height)))
+        # Stats: colon-aligned — labels right-aligned to colon column,
+        # values right-aligned to the canvas edge
+        if stat_parts:
+            colon_x = w - pad - value_col_w
+            for i, (li, vi) in enumerate(zip(label_imgs, value_imgs)):
+                img.paste(li, (colon_x - li.width, row_y(i, li.height)))
+                if vi is not None:
+                    img.paste(vi, (w - pad - vi.width, row_y(i, vi.height)))
 
         blit(self.canvas, img)
 
