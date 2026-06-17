@@ -234,13 +234,11 @@ class FlightsApp(DisplayApp):
             self._card_idx = min(self._card_idx, len(self._flights) - 1)
 
         callsigns = [f["callsign"] for f in self._flights]
+        icao24_map = {f["callsign"]: f.get("icao24", "") for f in self._flights}
 
         if self._is_active:
             tier = self._flightaware.budget_tier
-            if tier == "disabled":
-                # Budget exhausted: serve cache only
-                enrich_callsigns: list[str] = []
-            elif tier in ("conservative", "minimal"):
+            if tier in ("conservative", "minimal"):
                 # Budget tight: only enrich the currently displayed flight
                 current_cs = (
                     self._flights[self._card_idx % len(self._flights)]["callsign"]
@@ -256,7 +254,7 @@ class FlightsApp(DisplayApp):
                 idxs = [(self._card_idx + i) % n for i in range(min(3, n))]
                 enrich_callsigns = [self._flights[i]["callsign"] for i in idxs]
 
-            new_enriched = await self._flightaware.enrich_flights(enrich_callsigns)
+            new_enriched = await self._flightaware.enrich_flights(enrich_callsigns, icao24_map)
             # Merge: prefer fresh data, retain previously loaded enrichment for the rest
             self._enriched = {
                 cs: new_enriched.get(cs) or self._enriched.get(cs, {})

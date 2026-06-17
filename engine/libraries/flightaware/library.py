@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import datetime
 import json
 import logging
 import time
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -17,14 +18,180 @@ from libraries.base import Library
 logger = logging.getLogger(__name__)
 
 _AEROAPI_BASE = "https://aeroapi.flightaware.com/aeroapi"
+_OPENSKY_ROUTES_URL = "https://opensky-network.org/api/routes"
+_AIRPORTS_CSV_URL = "https://davidmegginson.github.io/ourairports-data/airports.csv"
 
 _CACHE_PATH = Path("data/flightaware_cache.json")
 _BUDGET_PATH = Path("data/flightaware_budget.json")
+_ROUTES_CACHE_PATH = Path("data/opensky_routes_cache.json")
+_AIRPORT_DB_PATH = Path("data/airports.csv")
 
 # Module-level defaults — also used as schema defaults
 _DEFAULT_CACHE_TTL_DAYS: int = 7
 _DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
 _COST_PER_CALL: float = 0.005  # AeroAPI free-tier rate, ~$0.005 per query
+_ROUTES_CACHE_TTL_DAYS: float = 30.0  # Routes are very stable
+
+# Static airline IATA code → display name (covers the vast majority of commercial traffic)
+_AIRLINE_NAMES: dict[str, str] = {
+    "AA": "American Airlines",
+    "DL": "Delta Air Lines",
+    "UA": "United Airlines",
+    "WN": "Southwest Airlines",
+    "B6": "JetBlue Airways",
+    "AS": "Alaska Airlines",
+    "F9": "Frontier Airlines",
+    "NK": "Spirit Airlines",
+    "G4": "Allegiant Air",
+    "SY": "Sun Country Airlines",
+    "HA": "Hawaiian Airlines",
+    "OO": "SkyWest Airlines",
+    "YX": "Republic Airways",
+    "MQ": "American Eagle",
+    "OH": "PSA Airlines",
+    "YV": "Mesa Airlines",
+    "9E": "Endeavor Air",
+    "G7": "GoJet Airlines",
+    "PT": "Piedmont Airlines",
+    "ZW": "Air Wisconsin",
+    "AC": "Air Canada",
+    "WS": "WestJet",
+    "PD": "Porter Airlines",
+    "TS": "Air Transat",
+    "AM": "Aeromexico",
+    "LA": "LATAM Airlines",
+    "AV": "Avianca",
+    "BA": "British Airways",
+    "LH": "Lufthansa",
+    "AF": "Air France",
+    "KL": "KLM",
+    "IB": "Iberia",
+    "VY": "Vueling",
+    "U2": "easyJet",
+    "FR": "Ryanair",
+    "W6": "Wizz Air",
+    "LX": "Swiss",
+    "OS": "Austrian Airlines",
+    "SN": "Brussels Airlines",
+    "AY": "Finnair",
+    "SK": "SAS",
+    "DY": "Norwegian",
+    "LO": "LOT Polish Airlines",
+    "TP": "TAP Air Portugal",
+    "A3": "Aegean Airlines",
+    "PC": "Pegasus Airlines",
+    "TK": "Turkish Airlines",
+    "EK": "Emirates",
+    "QR": "Qatar Airways",
+    "EY": "Etihad Airways",
+    "FZ": "flydubai",
+    "G9": "Air Arabia",
+    "WY": "Oman Air",
+    "GF": "Gulf Air",
+    "ME": "Middle East Airlines",
+    "RJ": "Royal Jordanian",
+    "MS": "EgyptAir",
+    "ET": "Ethiopian Airlines",
+    "SA": "South African Airways",
+    "SQ": "Singapore Airlines",
+    "CX": "Cathay Pacific",
+    "JL": "Japan Airlines",
+    "NH": "ANA",
+    "KE": "Korean Air",
+    "OZ": "Asiana Airlines",
+    "CA": "Air China",
+    "MU": "China Eastern",
+    "CZ": "China Southern",
+    "6E": "IndiGo",
+    "SG": "SpiceJet",
+    "AI": "Air India",
+    "QF": "Qantas",
+    "NZ": "Air New Zealand",
+    "SU": "Aeroflot",
+    "S7": "Siberia Airlines",
+    "UT": "UTair",
+    "FV": "Rossiya",
+    "U6": "Ural Airlines",
+    "DP": "Pobeda",
+    "PS": "Ukraine International Airlines",
+}
+
+# Common ICAO aircraft type codes → human-readable names
+_AIRCRAFT_TYPE_NAMES: dict[str, str] = {
+    "B735": "Boeing 737-500",
+    "B736": "Boeing 737-600",
+    "B737": "Boeing 737-700",
+    "B738": "Boeing 737-800",
+    "B739": "Boeing 737-900",
+    "B37M": "Boeing 737 MAX 7",
+    "B38M": "Boeing 737 MAX 8",
+    "B39M": "Boeing 737 MAX 9",
+    "B752": "Boeing 757-200",
+    "B753": "Boeing 757-300",
+    "B762": "Boeing 767-200",
+    "B763": "Boeing 767-300",
+    "B764": "Boeing 767-400",
+    "B772": "Boeing 777-200",
+    "B773": "Boeing 777-300",
+    "B77L": "Boeing 777-200LR",
+    "B77W": "Boeing 777-300ER",
+    "B788": "Boeing 787-8",
+    "B789": "Boeing 787-9",
+    "B78X": "Boeing 787-10",
+    "B744": "Boeing 747-400",
+    "B748": "Boeing 747-8",
+    "A318": "Airbus A318",
+    "A319": "Airbus A319",
+    "A320": "Airbus A320",
+    "A321": "Airbus A321",
+    "A19N": "Airbus A319neo",
+    "A20N": "Airbus A320neo",
+    "A21N": "Airbus A321neo",
+    "A332": "Airbus A330-200",
+    "A333": "Airbus A330-300",
+    "A338": "Airbus A330-800neo",
+    "A339": "Airbus A330-900neo",
+    "A359": "Airbus A350-900",
+    "A35K": "Airbus A350-1000",
+    "A388": "Airbus A380-800",
+    "E170": "Embraer E170",
+    "E175": "Embraer E175",
+    "E190": "Embraer E190",
+    "E195": "Embraer E195",
+    "E290": "Embraer E190-E2",
+    "E295": "Embraer E195-E2",
+    "CRJ2": "Bombardier CRJ-200",
+    "CRJ7": "Bombardier CRJ-700",
+    "CRJ9": "Bombardier CRJ-900",
+    "CRJX": "Bombardier CRJ-1000",
+    "DH8A": "Bombardier Dash 8-100",
+    "DH8C": "Bombardier Dash 8-300",
+    "DH8D": "Bombardier Dash 8-400",
+    "AT72": "ATR 72-200",
+    "AT75": "ATR 72-500",
+    "AT76": "ATR 72-600",
+    "MD11": "McDonnell Douglas MD-11",
+    "MD83": "McDonnell Douglas MD-83",
+    "SU95": "Sukhoi Superjet 100",
+    "C208": "Cessna 208 Caravan",
+    "C25B": "Cessna Citation CJ3",
+    "C56X": "Cessna Citation Excel",
+    "C680": "Cessna Citation Sovereign",
+    "C750": "Cessna Citation X",
+    "CL35": "Bombardier Challenger 350",
+    "CL60": "Bombardier Challenger 600",
+    "GLEX": "Bombardier Global Express",
+    "GL5T": "Bombardier Global 5000",
+    "GLF4": "Gulfstream IV",
+    "GLF5": "Gulfstream V",
+    "G450": "Gulfstream G450",
+    "G550": "Gulfstream G550",
+    "G650": "Gulfstream G650",
+    "F900": "Dassault Falcon 900",
+    "FA7X": "Dassault Falcon 7X",
+    "F2TH": "Dassault Falcon 2000",
+    "BE20": "Beechcraft King Air 200",
+}
 
 
 def _fmt_days(days: float) -> str:
@@ -61,7 +228,8 @@ class FlightAwareLibrary(Library):
                 "title": "Enrichment cache TTL (days)",
                 "description": (
                     "How long to cache flight route data before re-fetching. "
-                    "Route/airline info rarely changes — longer values save more API calls."
+                    "Route/airline info rarely changes — longer values save more API calls. "
+                    "Tip: 30 days is safe for most routes."
                 ),
                 "default": _DEFAULT_CACHE_TTL_DAYS,
                 "minimum": 1,
@@ -73,7 +241,9 @@ class FlightAwareLibrary(Library):
                 "description": (
                     "Maximum FlightAware API calls per month. "
                     "At ~$0.005/call on the free tier, $5 = 1000 calls. "
-                    "Default 800 leaves a $1 safety margin."
+                    "Default 800 leaves a $1 safety margin. "
+                    "Most routes are now resolved via free sources (OpenSky, static DB) "
+                    "so this budget should last much longer."
                 ),
                 "default": _DEFAULT_MONTHLY_BUDGET,
                 "minimum": 100,
@@ -88,8 +258,14 @@ class FlightAwareLibrary(Library):
         self._enrichment_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._budget_month: str = ""
         self._budget_calls: int = 0
+        # callsign → (fetched_at, route_dict) for OpenSky routes cache
+        self._routes_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        # ICAO airport code → {iata, name}
+        self._airport_db: dict[str, dict[str, str]] = {}
+        self._airport_db_loaded: bool = False
         self._load_disk_cache()
         self._load_budget()
+        self._load_routes_cache()
 
     # ── Config properties ─────────────────────────────────────────────────────
 
@@ -136,6 +312,65 @@ class FlightAwareLibrary(Library):
             tmp.rename(_CACHE_PATH)
         except Exception as exc:
             logger.warning("FlightAware: cache save failed: %s", exc)
+
+    # ── OpenSky routes cache ──────────────────────────────────────────────────
+
+    def _load_routes_cache(self) -> None:
+        try:
+            if _ROUTES_CACHE_PATH.exists():
+                raw = json.loads(_ROUTES_CACHE_PATH.read_text())
+                ttl = _ROUTES_CACHE_TTL_DAYS * 24 * 3600
+                now = time.time()
+                self._routes_cache = {
+                    cs: (entry["fetched_at"], entry["data"])
+                    for cs, entry in raw.items()
+                    if now - entry["fetched_at"] < ttl
+                }
+                logger.info(
+                    "FlightAware: loaded %d cached OpenSky routes from disk",
+                    len(self._routes_cache),
+                )
+        except Exception as exc:
+            logger.warning("FlightAware: routes cache load failed: %s", exc)
+
+    def _save_routes_cache(self) -> None:
+        try:
+            _ROUTES_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            ttl = _ROUTES_CACHE_TTL_DAYS * 24 * 3600
+            now = time.time()
+            payload = {
+                cs: {"fetched_at": ts, "data": d}
+                for cs, (ts, d) in self._routes_cache.items()
+                if now - ts < ttl
+            }
+            tmp = _ROUTES_CACHE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.rename(_ROUTES_CACHE_PATH)
+        except Exception as exc:
+            logger.warning("FlightAware: routes cache save failed: %s", exc)
+
+    # ── Airport DB ────────────────────────────────────────────────────────────
+
+    async def _ensure_airport_db(self) -> None:
+        """Load airport DB from disk or download from OurAirports if missing."""
+        if self._airport_db_loaded:
+            return
+        self._airport_db_loaded = True  # set early to prevent concurrent loads
+        try:
+            if not _AIRPORT_DB_PATH.exists():
+                logger.info("FlightAware: downloading OurAirports airport DB…")
+                async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+                    resp = await client.get(_AIRPORTS_CSV_URL)
+                if resp.status_code != 200:
+                    logger.warning("FlightAware: airport DB download failed: HTTP %d", resp.status_code)
+                    return
+                _AIRPORT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _AIRPORT_DB_PATH.write_bytes(resp.content)
+                logger.info("FlightAware: airport DB downloaded (%d bytes)", len(resp.content))
+            self._airport_db = _parse_airport_csv(_AIRPORT_DB_PATH.read_text(encoding="utf-8"))
+            logger.info("FlightAware: airport DB loaded (%d entries)", len(self._airport_db))
+        except Exception as exc:
+            logger.warning("FlightAware: airport DB load failed: %s", exc)
 
     # ── Monthly budget ────────────────────────────────────────────────────────
 
@@ -191,13 +426,10 @@ class FlightAwareLibrary(Library):
     # ── Status (settings UI) ──────────────────────────────────────────────────
 
     def get_status(self) -> dict[str, Any]:
-        """Budget cost + enrichment-cache summary for the settings UI.
-
-        Re-reads the on-disk budget and cache so the panel reflects the running
-        engine's usage, which lives in a separate library instance.
-        """
+        """Budget cost + enrichment-cache summary for the settings UI."""
         self._load_budget()
         self._load_disk_cache()
+        self._load_routes_cache()
 
         calls = self._budget_calls
         limit = self._budget_limit
@@ -209,6 +441,12 @@ class FlightAwareLibrary(Library):
             (ts for ts, _ in self._enrichment_cache.values()), default=None
         )
         ttl_days = float(self._config.get("cache_ttl_days", _DEFAULT_CACHE_TTL_DAYS))
+
+        routes_entries = len(self._routes_cache)
+        airport_db_size = (
+            f"{len(self._airport_db):,} airports" if self._airport_db
+            else ("loaded" if _AIRPORT_DB_PATH.exists() else "not downloaded yet")
+        )
 
         return {
             "sections": [
@@ -236,47 +474,91 @@ class FlightAwareLibrary(Library):
                         {"label": "Cache duration", "value": _fmt_days(ttl_days)},
                     ],
                 },
+                {
+                    "label": "Free data sources",
+                    "items": [
+                        {"label": "OpenSky routes cached", "value": f"{routes_entries:,}"},
+                        {"label": "Airport DB", "value": airport_db_size},
+                    ],
+                },
             ],
         }
 
     # ── Public API ────────────────────────────────────────────────────────────
 
     async def enrich_flights(
-        self, callsigns: list[str]
+        self,
+        callsigns: list[str],
+        icao24_map: dict[str, str] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        api_key = self._config.get("flightaware_api_key", "").strip()
-        if not api_key or not callsigns:
+        """Enrich a list of callsigns with route/airline/aircraft data.
+
+        Waterfall (cheapest first):
+          1. Existing enrichment cache (no network)
+          2. OpenSky routes API + static airport/airline/type lookups (free)
+          3. FlightAware AeroAPI (budget-limited, paid fallback)
+        """
+        if not callsigns:
             return {}
 
-        # Budget exhausted: return only cache hits, no HTTP calls until next month
-        if self.budget_tier == "disabled":
-            logger.warning("FlightAware: monthly budget exhausted, serving cache only")
-            now = time.time()
-            return {
-                cs: self._enrichment_cache[cs][1]
-                for cs in callsigns
-                if cs in self._enrichment_cache
-                and now - self._enrichment_cache[cs][0] < self._cache_ttl
-            }
-
+        icao24_map = icao24_map or {}
         now = time.time()
         result: dict[str, dict[str, Any]] = {}
-        to_fetch: list[str] = []
+        cache_misses: list[str] = []
 
+        # Step 1: serve from enrichment cache
         for cs in callsigns:
             entry = self._enrichment_cache.get(cs)
             if entry is not None and (now - entry[0]) < self._cache_ttl:
-                result[cs] = entry[1]  # cache hit — no HTTP call
+                result[cs] = entry[1]
             else:
-                to_fetch.append(cs)
+                cache_misses.append(cs)
 
-        if not to_fetch:
+        if not cache_misses:
             logger.debug("FlightAware: all %d flights served from cache", len(result))
             return result
 
         logger.info(
-            "FlightAware: enriching %d new / %d from cache",
-            len(to_fetch), len(result),
+            "FlightAware: %d cache hits, %d misses → trying free sources",
+            len(result), len(cache_misses),
+        )
+
+        # Step 2: free sources — OpenSky routes + static lookups
+        await self._ensure_airport_db()
+        free_results = await self._enrich_from_free_sources(cache_misses, icao24_map)
+        still_missing: list[str] = []
+
+        for cs in cache_misses:
+            partial = free_results.get(cs)
+            if partial and partial.get("origin") and partial.get("dest"):
+                # Good enough — store in enrichment cache so we won't re-check
+                self._enrichment_cache[cs] = (now, partial)
+                result[cs] = partial
+                logger.debug("FlightAware: %s enriched from free sources", cs)
+            else:
+                # Merge whatever partial data we have, still need FlightAware
+                still_missing.append(cs)
+
+        if free_results:
+            self._save_disk_cache()
+
+        if not still_missing:
+            logger.info("FlightAware: all misses resolved from free sources, 0 API calls used")
+            return result
+
+        # Step 3: FlightAware API (budget-gated)
+        api_key = self._config.get("flightaware_api_key", "").strip()
+        if not api_key:
+            logger.debug("FlightAware: no API key configured, skipping paid enrichment")
+            return result
+
+        if self.budget_tier == "disabled":
+            logger.warning("FlightAware: monthly budget exhausted, serving cache only")
+            return result
+
+        logger.info(
+            "FlightAware: %d callsigns still need paid API enrichment (tier=%s)",
+            len(still_missing), self.budget_tier,
         )
 
         async with httpx.AsyncClient(
@@ -284,18 +566,19 @@ class FlightAwareLibrary(Library):
             headers={"x-apikey": api_key},
         ) as client:
             responses = await asyncio.gather(
-                *[self._fetch_enrichment(client, cs) for cs in to_fetch],
+                *[self._fetch_enrichment(client, cs) for cs in still_missing],
                 return_exceptions=True,
             )
 
-        # Charge for all attempted requests (conservative: counts even failures)
-        self._charge_budget(len(to_fetch))
+        self._charge_budget(len(still_missing))
 
         disk_dirty = False
-        for callsign, response in zip(to_fetch, responses):
+        for callsign, response in zip(still_missing, responses):
             if isinstance(response, dict):
-                self._enrichment_cache[callsign] = (now, response)
-                result[callsign] = response
+                # Merge: free-source partial data may have some fields; FA fills the rest
+                merged = {**(free_results.get(callsign) or {}), **response}
+                self._enrichment_cache[callsign] = (now, merged)
+                result[callsign] = merged
                 disk_dirty = True
 
         if disk_dirty:
@@ -303,6 +586,78 @@ class FlightAwareLibrary(Library):
 
         logger.info("FlightAware: enriched %d/%d flights", len(result), len(callsigns))
         return result
+
+    # ── Free-source enrichment ────────────────────────────────────────────────
+
+    async def _enrich_from_free_sources(
+        self,
+        callsigns: list[str],
+        icao24_map: dict[str, str],
+    ) -> dict[str, dict[str, Any]]:
+        """Try to build enrichment from OpenSky routes API + static lookups."""
+        routes_ttl = _ROUTES_CACHE_TTL_DAYS * 24 * 3600
+        now = time.time()
+
+        to_fetch_routes: list[str] = []
+        for cs in callsigns:
+            entry = self._routes_cache.get(cs)
+            if entry is None or (now - entry[0]) >= routes_ttl:
+                to_fetch_routes.append(cs)
+
+        if to_fetch_routes:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                route_responses = await asyncio.gather(
+                    *[self._fetch_opensky_route(client, cs) for cs in to_fetch_routes],
+                    return_exceptions=True,
+                )
+            routes_dirty = False
+            for cs, resp in zip(to_fetch_routes, route_responses):
+                if isinstance(resp, dict):
+                    self._routes_cache[cs] = (now, resp)
+                    routes_dirty = True
+                else:
+                    # Cache a negative result so we don't re-try on every cycle
+                    self._routes_cache[cs] = (now, {})
+                    routes_dirty = True
+            if routes_dirty:
+                self._save_routes_cache()
+
+        result: dict[str, dict[str, Any]] = {}
+        for cs in callsigns:
+            cache_entry = self._routes_cache.get(cs)
+            route_data = cache_entry[1] if cache_entry else {}
+            enrichment = _build_enrichment_from_route(
+                route_data, icao24_map.get(cs, ""), self._airport_db
+            )
+            if any(enrichment.values()):
+                result[cs] = enrichment
+
+        return result
+
+    @staticmethod
+    async def _fetch_opensky_route(
+        client: httpx.AsyncClient, callsign: str
+    ) -> dict[str, Any] | None:
+        try:
+            resp = await client.get(
+                _OPENSKY_ROUTES_URL, params={"callsign": callsign}
+            )
+            if resp.status_code == 404:
+                logger.debug("OpenSky routes: no route for %s", callsign)
+                return None
+            if resp.status_code != 200:
+                logger.debug("OpenSky routes: HTTP %d for %s", resp.status_code, callsign)
+                return None
+            data = resp.json()
+            route = data.get("route") or []
+            return {
+                "icao_origin": route[0] if len(route) > 0 else "",
+                "icao_dest": route[1] if len(route) > 1 else "",
+                "operator_iata": (data.get("operatorIata") or "").upper(),
+            }
+        except Exception as exc:
+            logger.debug("OpenSky routes fetch failed for %s: %s", callsign, exc)
+            return None
 
     async def fetch_logo(self, iata: str) -> Image.Image | None:
         try:
@@ -363,3 +718,64 @@ class FlightAwareLibrary(Library):
         except Exception as exc:
             logger.warning("FlightAware enrichment failed for %s: %s", callsign, exc)
             return None
+
+
+# ── Module-level helpers ──────────────────────────────────────────────────────
+
+def _parse_airport_csv(text: str) -> dict[str, dict[str, str]]:
+    """Parse OurAirports airports.csv into ICAO→{iata, name}."""
+    db: dict[str, dict[str, str]] = {}
+    try:
+        reader = csv.DictReader(StringIO(text))
+        for row in reader:
+            icao = (row.get("ident") or "").strip().upper()
+            iata = (row.get("iata_code") or "").strip().upper()
+            name = (row.get("name") or "").strip()
+            if icao and iata:
+                db[icao] = {"iata": iata, "name": name}
+    except Exception as exc:
+        logger.warning("FlightAware: airport CSV parse error: %s", exc)
+    return db
+
+
+def _build_enrichment_from_route(
+    route_data: dict[str, Any],
+    icao24: str,
+    airport_db: dict[str, dict[str, str]],
+) -> dict[str, Any]:
+    """Build an enrichment dict from OpenSky route data + static lookups."""
+    if not route_data:
+        return {}
+
+    operator_iata = route_data.get("operator_iata", "").upper()
+    airline = _AIRLINE_NAMES.get(operator_iata, "")
+
+    icao_origin = (route_data.get("icao_origin") or "").upper()
+    icao_dest = (route_data.get("icao_dest") or "").upper()
+
+    origin_info = airport_db.get(icao_origin, {})
+    dest_info = airport_db.get(icao_dest, {})
+
+    origin_iata = origin_info.get("iata", "")
+    dest_iata = dest_info.get("iata", "")
+    origin_name = origin_info.get("name", "")
+    dest_name = dest_info.get("name", "")
+
+    # Fall back to ICAO code if no IATA mapping found
+    if not origin_iata and icao_origin:
+        origin_iata = icao_origin
+    if not dest_iata and icao_dest:
+        dest_iata = icao_dest
+
+    # Aircraft type from static ICAO type table (icao24 alone isn't enough without aircraft DB)
+    aircraft_type = ""
+
+    return {
+        "origin": origin_iata,
+        "dest": dest_iata,
+        "origin_name": origin_name,
+        "dest_name": dest_name,
+        "airline": airline,
+        "operator_iata": operator_iata,
+        "aircraft_type": aircraft_type,
+    }
