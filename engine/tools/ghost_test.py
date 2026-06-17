@@ -20,7 +20,8 @@ Panel physical x ranges (chain pos 0 = rightmost visible = logical panel 10):
   panel 10 :   0-63
 
 The test pattern:
-  - Full-display alternating 4px white/black horizontal stripes
+  - Full-display alternating 4px white/black horizontal stripes (on the wall)
+  - Panels are portrait (rotation 90), so wall-horizontal = physical x within each panel
   - Each white stripe is immediately above/below a black stripe - reveals row ghosting
   - Any black stripe that glows faintly is a ghost
 """
@@ -93,11 +94,14 @@ def main() -> None:
     matrix = RGBMatrix(options=options)
     canvas = matrix.CreateFrameCanvas()
 
-    # Alternating 4px-wide horizontal stripes (white/black) across the full display.
+    # Alternating 4px-wide horizontal stripes on the wall.
+    # Panels are mounted portrait (rotation 90), so physical-x within each panel
+    # maps to the vertical axis on the wall. Stripe on (x % cols) to get wall-horizontal bands.
     stripe_h = 4
-    for y in range(phys_h):
-        if (y // stripe_h) % 2 == 0:
-            for x in range(phys_w):
+    for x in range(phys_w):
+        within_panel = x % options.cols  # 0-63: maps to logical vertical position on wall
+        if (within_panel // stripe_h) % 2 == 0:
+            for y in range(phys_h):
                 canvas.SetPixel(x, y, 255, 255, 255)
         # odd stripes stay black (canvas initialised to black)
 
