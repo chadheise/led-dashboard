@@ -99,15 +99,15 @@ def test_render_staggered_frame_never_repeats_a_game_on_screen():
     app._render_staggered_frame()
     assert rendered_ids == ["1", "2"]
 
-    # Advance so slot 1 (started "2s earlier") ticks: raw idx 1 -> (1+2) % 3 = 0,
-    # colliding with slot 0's raw idx 0.
+    # Advance so slot 1 (started "2s earlier") ticks: raw idx 1 -> (1+1) % 3 = 2.
+    # With step +1 the slots stay one apart so there is no collision.
     now = 1003.0
     rendered_ids.clear()
     app._render_staggered_frame()
 
-    assert app._stagger_slot_idx == [0, 0]  # raw indices do collide
+    assert app._stagger_slot_idx == [0, 2]  # no raw collision — slots stay distinct
     assert len(rendered_ids) == 2
-    assert len(set(rendered_ids)) == 2  # but the displayed games are distinct
+    assert len(set(rendered_ids)) == 2  # displayed games are distinct
 
 
 def test_active_slot_count_capped_by_game_count():

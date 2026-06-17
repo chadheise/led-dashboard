@@ -624,7 +624,7 @@ class SportsApp(DisplayApp):
         for i in range(n):
             if now - self._stagger_slot_started_at[i] >= seconds_per_score:
                 self._stagger_slot_started_at[i] = now
-                self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + n) % max(1, n_games)
+                self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + 1) % max(1, n_games)
 
         card_w = self.canvas.width // n
         h = self.canvas.height
