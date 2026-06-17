@@ -12,7 +12,7 @@ from canvas.base import Canvas
 from app_base import DisplayApp
 from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
-from libraries.text_renderer.library import render_text, can_fit_text
+from libraries.text_renderer.library import render_text, can_fit_text, draw_status_message
 from libraries.open_meteo.library import OpenMeteoLibrary, condition_for_code, condition_label, weather_icon_img
 
 logger = logging.getLogger(__name__)
@@ -451,12 +451,4 @@ class WeatherApp(DisplayApp):
         blit(self.canvas, img)
 
     def _draw_message(self, msg: str) -> None:
-        w, h = self.canvas.width, self.canvas.height
-        max_w = max(6, w - 4)
-        size = _fit_size(msg, min(14, h), max_w)
-        msg_img = render_text(_clip_text(msg, size, max_w), (80, 80, 80), size)
-        img = Image.new("RGB", (w, h))
-        x = (w - msg_img.width) // 2
-        y = (h - msg_img.height) // 2
-        img.paste(msg_img, (max(0, x), max(0, y)))
-        blit(self.canvas, img)
+        draw_status_message(self.canvas, msg)

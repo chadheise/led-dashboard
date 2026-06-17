@@ -412,6 +412,29 @@ def bitmap_text_img(
     return rgb
 
 
+_STATUS_COLOR: tuple[int, int, int] = (80, 80, 80)
+_STATUS_MAX_SIZE: int = 14
+
+
+def draw_status_message(canvas: Canvas, msg: str) -> None:
+    """Render a dim, centered status message (e.g. "Loading...") onto canvas.
+
+    Always renders at _STATUS_MAX_SIZE px, clipping trailing characters if the
+    text would overflow the canvas width.
+    """
+    w, h = canvas.width, canvas.height
+    max_w = max(6, w - 4)
+    clipped = msg
+    while clipped and not can_fit_text(max_w, _STATUS_MAX_SIZE, clipped):
+        clipped = clipped[:-1]
+    msg_img = render_text(clipped, _STATUS_COLOR, _STATUS_MAX_SIZE)
+    img = Image.new("RGB", (w, h))
+    x = (w - msg_img.width) // 2
+    y = (h - msg_img.height) // 2
+    img.paste(msg_img, (max(0, x), max(0, y)))
+    blit(canvas, img)
+
+
 def arrow_img(
     up: bool,
     size: int,
@@ -455,6 +478,7 @@ class TextRendererLibrary(Library):
     render_text = staticmethod(render_text)
     render_lores = staticmethod(render_lores)
     bitmap_text_img = staticmethod(bitmap_text_img)
+    draw_status_message = staticmethod(draw_status_message)
     arrow_img = staticmethod(arrow_img)
 
     @property

@@ -11,7 +11,7 @@ from grid import SizeConstraints, split_vertical
 from marquee import Marquee
 from libraries.canvas_utils.library import blit
 from libraries.yahoo_finance.library import YahooFinanceLibrary, PRESET_GROUPS
-from libraries.text_renderer.library import TextRendererLibrary
+from libraries.text_renderer.library import TextRendererLibrary, draw_status_message
 
 
 # ── Colors ────────────────────────────────────────────────────────────────────
@@ -877,9 +877,4 @@ class StocksApp(DisplayApp):
         blit(self.canvas, img)
 
     def _draw_loading(self) -> None:
-        msg_img = self._rt("Loading...", _COLOR_DIM, 1)
-        img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-        x = (self.canvas.width - msg_img.width) // 2
-        y = (self.canvas.height - msg_img.height) // 2
-        img.paste(msg_img, (x, y))
-        blit(self.canvas, img)
+        draw_status_message(self.canvas, "Loading...")
