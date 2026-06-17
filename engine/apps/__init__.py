@@ -1,4 +1,4 @@
-from apps.color.app import DebugApp
+from apps.debug.app import DebugApp
 from apps.countdown.app import CountdownApp
 from apps.flights.app import FlightsApp
 from apps.sports.app import SportsApp
