@@ -4,6 +4,8 @@ import ModuleSelect from "../components/ModuleSelect";
 import DisplayPreview from "../components/DisplayPreview";
 import MultiSizePreview from "../components/MultiSizePreview";
 import TransportControls from "../components/TransportControls";
+import Toast, { useToast } from "../components/Toast";
+import { apiFetch, apiJson, jsonBody } from "../api";
 import {
   C,
   F,
@@ -48,6 +50,11 @@ interface EditItem {
   module_id: string;
   duration: number;
   skip_if_hidden: boolean;
+}
+interface StatusResponse {
+  paused?: boolean;
+  display_on?: boolean;
+  active_single_module_id?: string | null;
 }
 
 // ── Local layout styles ───────────────────────────────────────────────────────
@@ -112,17 +119,18 @@ export default function Playlists() {
   const [origItems, setOrigItems] = useState<EditItem[]>([]);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const { toast, showToast, dismiss } = useToast();
 
   useEffect(() => {
     refresh();
-    fetch("/api/modules")
-      .then((r) => r.json())
-      .then((mods) => setModules(mods));
-    fetch("/api/apps")
-      .then((r) => r.json())
-      .then(setApps);
-    fetch("/api/status")
-      .then((r) => r.json())
+    apiJson<Module[]>("/api/modules")
+      .then((mods) => setModules(mods))
+      .catch(() => showToast("Could not reach the engine", "error"));
+    apiJson<AppInfo[]>("/api/apps")
+      .then(setApps)
+      .catch(() => {});
+    apiJson<StatusResponse>("/api/status")
       .then((s) => {
         if (typeof s.paused === "boolean") setPaused(s.paused);
         if (typeof s.display_on === "boolean") setDisplayOn(s.display_on);
@@ -131,7 +139,21 @@ export default function Playlists() {
           setSelectedModuleId(s.active_single_module_id);
           setPlaylists((prev) => prev.map((p) => ({ ...p, is_active: false })));
         }
-      });
+      })
+      .catch(() => {});
+  }, []);
+
+  // Keep transport state fresh in case it changes outside this tab.
+  useEffect(() => {
+    const id = setInterval(() => {
+      apiJson<StatusResponse>("/api/status")
+        .then((s) => {
+          if (typeof s.paused === "boolean") setPaused(s.paused);
+          if (typeof s.display_on === "boolean") setDisplayOn(s.display_on);
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(id);
   }, []);
 
   // Dismiss no-modules warning automatically when modules appear
@@ -167,9 +189,9 @@ export default function Playlists() {
   }, [editing, resolvedPreviewId]);
 
   const refresh = () =>
-    fetch("/api/playlists")
-      .then((r) => r.json())
-      .then(setPlaylists);
+    apiJson<Playlist[]>("/api/playlists")
+      .then(setPlaylists)
+      .catch(() => showToast("Could not reach the engine", "error"));
 
   // ── Navigation ─────────────────────────────────────────────────────────────
   const openNew = () => {
@@ -204,28 +226,32 @@ export default function Playlists() {
   // ── CRUD ───────────────────────────────────────────────────────────────────
   const save = async () => {
     const body = { name: fName, items: fItems };
-    if (editing === "new") {
-      await fetch("/api/playlists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-    } else {
-      await fetch(`/api/playlists/${editing}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+    setSaving(true);
+    try {
+      if (editing === "new") {
+        await apiFetch("/api/playlists", jsonBody("POST", body));
+      } else {
+        await apiFetch(`/api/playlists/${editing}`, jsonBody("PUT", body));
+      }
+      showToast("Saved", "success");
+      setEditing(null);
+      refresh();
+    } catch {
+      showToast("Save failed — please retry", "error");
+    } finally {
+      setSaving(false);
     }
-    setEditing(null);
-    refresh();
   };
 
   const remove = async (id: string) => {
-    await fetch(`/api/playlists/${id}`, { method: "DELETE" });
-    setPlaylists((prev) => prev.filter((p) => p.id !== id));
-    setConfirmDeleteId(null);
-    if (editing === id) setEditing(null);
+    try {
+      await apiFetch(`/api/playlists/${id}`, { method: "DELETE" });
+      setPlaylists((prev) => prev.filter((p) => p.id !== id));
+      setConfirmDeleteId(null);
+      if (editing === id) setEditing(null);
+    } catch {
+      showToast("Delete failed — please retry", "error");
+    }
   };
 
   const activate = async (id: string) => {
@@ -854,14 +880,18 @@ export default function Playlists() {
               >
                 <button
                   onClick={save}
-                  disabled={!canSave}
+                  disabled={!canSave || saving}
                   style={{
                     ...btn("success"),
-                    opacity: canSave ? 1 : 0.4,
-                    cursor: canSave ? "pointer" : "default",
+                    opacity: canSave && !saving ? 1 : 0.4,
+                    cursor: canSave && !saving ? "pointer" : "default",
                   }}
                 >
-                  {editing === "new" ? "CREATE PLAYLIST" : "SAVE"}
+                  {saving
+                    ? "SAVING…"
+                    : editing === "new"
+                      ? "CREATE PLAYLIST"
+                      : "SAVE"}
                 </button>
                 {editing !== "new" && confirmDeleteId !== editing && (
                   <button
@@ -913,6 +943,7 @@ export default function Playlists() {
           )}
         </div>
       </div>
+      <Toast toast={toast} onDismiss={dismiss} />
     </div>
   );
 }

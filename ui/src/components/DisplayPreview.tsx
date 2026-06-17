@@ -7,13 +7,17 @@ interface Props {
   actions?: React.ReactNode
 }
 
-type Status = 'connecting' | 'connected' | 'disconnected'
+type Status = 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
 
 const DOT_COLOR: Record<Status, string> = {
   connecting:   C.neutral,
   connected:    C.positive,
+  reconnecting: C.neutral,
   disconnected: C.negative,
 }
+
+const BASE_BACKOFF = 1000   // first reconnect delay (ms)
+const MAX_BACKOFF  = 10000  // cap on exponential backoff (ms)
 
 // Separator color between LED pixels — simulates the dark PCB substrate
 // between real LEDs. Pure near-black so any lit pixel pops against it.
@@ -26,13 +30,12 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
 
   useEffect(() => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${protocol}//${location.host}${wsUrl}`)
-    ws.binaryType = 'arraybuffer'
+    let ws: WebSocket | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let backoff = BASE_BACKOFF
+    let closedByUnmount = false
 
-    ws.onopen  = () => setStatus('connected')
-    ws.onclose = () => setStatus('disconnected')
-
-    ws.onmessage = (evt: MessageEvent<ArrayBuffer>) => {
+    const handleMessage = (evt: MessageEvent<ArrayBuffer>) => {
       const view = new DataView(evt.data)
       const w = view.getUint16(0, false)   // logical LED columns
       const h = view.getUint16(2, false)   // logical LED rows
@@ -96,7 +99,30 @@ export default function DisplayPreview({ wsUrl, scale = 3, actions }: Props) {
       ctx.putImageData(new ImageData(rgba, outW, outH), 0, 0)
     }
 
-    return () => ws.close()
+    const connect = () => {
+      ws = new WebSocket(`${protocol}//${location.host}${wsUrl}`)
+      ws.binaryType = 'arraybuffer'
+      ws.onmessage = handleMessage
+      ws.onopen = () => {
+        backoff = BASE_BACKOFF   // reset backoff after a successful connect
+        setStatus('connected')
+      }
+      ws.onerror = () => ws?.close()   // force onclose to run the reconnect path
+      ws.onclose = () => {
+        if (closedByUnmount) return
+        setStatus('reconnecting')
+        reconnectTimer = setTimeout(connect, backoff)
+        backoff = Math.min(backoff * 2, MAX_BACKOFF)
+      }
+    }
+
+    connect()
+
+    return () => {
+      closedByUnmount = true
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      ws?.close()
+    }
   }, [wsUrl, scale])
 
   return (

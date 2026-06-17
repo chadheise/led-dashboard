@@ -55,6 +55,9 @@ class SceneManager:
         self._running = False
         self._paused = False
         self._display_on = True
+        # Serialises playlist rebuilds so overlapping reloads (e.g. rapid saves
+        # scheduled in the background) can't tear down/rebuild scenes at once.
+        self._reload_lock = asyncio.Lock()
 
     @property
     def current_entry(self) -> PlaylistEntry | None:
@@ -65,27 +68,28 @@ class SceneManager:
     # ── Playlist management ────────────────────────────────────────────────
 
     async def set_playlist(self, entries: list[PlaylistEntry]) -> None:
-        was_running = self._running
-        if was_running:
-            await self._stop_tasks()
+        async with self._reload_lock:
+            was_running = self._running
+            if was_running:
+                await self._stop_tasks()
 
-        self._entries = entries
-        self._scenes = []
-        for entry in entries:
-            if entry.layout is None:
-                cls = self._registry.get(entry.app_id)
-                if cls is None:
-                    raise ValueError(f"Unknown app id: {entry.app_id!r}")
-                app = cls(entry.config, self._canvas, entry.global_config, entry.library_configs)
-                self._scenes.append([(app, self._canvas)])
-            else:
-                self._scenes.append(self._build_layout_scene(entry))
+            self._entries = entries
+            self._scenes = []
+            for entry in entries:
+                if entry.layout is None:
+                    cls = self._registry.get(entry.app_id)
+                    if cls is None:
+                        raise ValueError(f"Unknown app id: {entry.app_id!r}")
+                    app = cls(entry.config, self._canvas, entry.global_config, entry.library_configs)
+                    self._scenes.append([(app, self._canvas)])
+                else:
+                    self._scenes.append(self._build_layout_scene(entry))
 
-        self._current_idx = 0
-        self._last_switch = time.monotonic()
+            self._current_idx = 0
+            self._last_switch = time.monotonic()
 
-        if was_running and self._scenes:
-            await self._start_tasks()
+            if was_running and self._scenes:
+                await self._start_tasks()
 
     def _build_layout_scene(self, entry: PlaylistEntry) -> list[tuple[DisplayApp, Canvas]]:
         from canvas.region import CanvasRegion

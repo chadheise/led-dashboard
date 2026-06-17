@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -9,7 +11,33 @@ from pydantic import BaseModel, Field
 from scene_manager import PlaylistEntry as SMEntry
 from state import Module, Playlist, PlaylistItem
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api")
+
+# Keeps strong references to in-flight background reload tasks so they aren't
+# garbage-collected before they finish.
+_reload_tasks: set[asyncio.Task[None]] = set()
+
+
+def _schedule_reload(request: Request) -> None:
+    """Rebuild the scene manager in the background after a settings change.
+
+    The save endpoints return immediately; the (potentially slow) scene rebuild
+    happens out-of-band and is serialised by SceneManager's reload lock so rapid
+    saves can't overlap. Exceptions are logged rather than surfaced to the now
+    already-completed HTTP response.
+    """
+
+    async def _run() -> None:
+        try:
+            await _maybe_reload(request)
+        except Exception:
+            logger.exception("Background scene reload failed")
+
+    task = asyncio.create_task(_run())
+    _reload_tasks.add(task)
+    task.add_done_callback(_reload_tasks.discard)
 
 
 # ── Request bodies ─────────────────────────────────────────────────────────────
@@ -245,7 +273,7 @@ async def update_module(
     _require_app(body.app_id)
     updated = Module(id=module_id, name=body.name, app_id=body.app_id, config=body.config)
     store.save_module(updated)
-    await _maybe_reload(request)
+    _schedule_reload(request)
     return updated.model_dump()
 
 
@@ -255,7 +283,7 @@ async def delete_module(request: Request, module_id: str) -> None:
     if module_id not in store.state.modules:
         raise HTTPException(404, "Module not found")
     store.delete_module(module_id)
-    await _maybe_reload(request)
+    _schedule_reload(request)
 
 
 # ── Playlists CRUD ─────────────────────────────────────────────────────────────
@@ -320,7 +348,7 @@ async def update_playlist(
         ],
     )
     store.save_playlist(updated)
-    await _maybe_reload(request)
+    _schedule_reload(request)
     return _playlist_view(store, updated)
 
 
@@ -330,7 +358,7 @@ async def delete_playlist(request: Request, playlist_id: str) -> None:
     if playlist_id not in store.state.playlists:
         raise HTTPException(404, "Playlist not found")
     store.delete_playlist(playlist_id)
-    await _maybe_reload(request)
+    _schedule_reload(request)
 
 
 @router.post("/play/module/{module_id}")
