@@ -255,6 +255,7 @@ class OpenSkyLibrary(Library):
 
             flights.append({
                 "callsign": callsign[:8].upper(),
+                "icao24": (state[0] or "").lower(),
                 "alt_ft": alt_ft,
                 "alt_m": alt_m_rounded,
                 "spd_kt": spd_kt,
