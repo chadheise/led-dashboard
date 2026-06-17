@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ghost test harness — renders a static high-contrast pattern to make ghosting visible.
+Ghost test harness - renders a static high-contrast pattern to make ghosting visible.
 
 Run with: sudo python tools/ghost_test.py
 
@@ -9,7 +9,7 @@ logical-to-physical transform. This keeps the harness simple and independent of
 any app code.
 
 Physical canvas dimensions for this setup:
-  chain_length × cols  =  10 × 64  =  640 px wide
+  chain_length x cols  =  10 x 64  =  640 px wide
   rows                 =  32           32 px tall
 
 Panels are addressed in physical-chain order (chain position 0 = rightmost visible
@@ -25,10 +25,10 @@ match what you see on the wall:
   panel 10 pos 0              0-63
 
 The test pattern:
-  • Panels 1–7  : solid BLACK (the "clean" reference side)
-  • Panels 8–10 : solid WHITE (the "problem" side — ghosting worst here)
-  • Gray dividers at every panel boundary
-  • Single white pixel rows at y=0 and y=31 across all panels (full-width reference lines)
+  - Panels 1-7  : solid BLACK (the "clean" reference side)
+  - Panels 8-10 : solid WHITE (the "problem" side - ghosting worst here)
+  - Gray dividers at every panel boundary
+  - Single white pixel rows at y=0 and y=31 across all panels (full-width reference lines)
 """
 
 import os
@@ -100,7 +100,7 @@ def main() -> None:
     print(f"  pwm_bits={hw_cfg.get('pwm_bits', '<default>')}")
     print(f"  pwm_dither_bits={hw_cfg.get('pwm_dither_bits', '<default>')}")
     print(f"  panel_type={hw_cfg.get('panel_type', '<default>')}")
-    print(f"\nPhysical canvas: {phys_w}×{phys_h}")
+    print(f"\nPhysical canvas: {phys_w}x{phys_h}")
     print()
 
     matrix = RGBMatrix(options=options)
@@ -115,18 +115,14 @@ def main() -> None:
         px_start = phys_pos * panel_w
 
         if logical_panel >= 8:
-            # Solid white — the "problem" panels
+            # Solid white - the "problem" panels
             fill_rect(canvas, px_start, 0, panel_w, phys_h, 255, 255, 255)
-        else:
-            # Solid black — the "clean" reference panels (just leave them; canvas starts black)
-            pass
 
-        # Gray divider at the left edge of each panel (visible between panels)
-        canvas.SetPixel(px_start, 0, 128, 128, 128)
+        # Gray divider at the left edge of each panel
         for y in range(phys_h):
             canvas.SetPixel(px_start, y, 64, 64, 64)
 
-    # Full-width white lines at top and bottom rows (reference lines across all panels)
+    # Full-width white lines at top and bottom rows
     for x in range(phys_w):
         canvas.SetPixel(x, 0, 255, 255, 255)
         canvas.SetPixel(x, phys_h - 1, 255, 255, 255)
@@ -139,7 +135,7 @@ def main() -> None:
     print("  Top/bottom rows : white (full width)")
     print("  Panel boundaries: gray dividers")
     print()
-    print("Check the wall: any faint light on panels 1–7 is ghosting.")
+    print("Check the wall: any faint light on panels 1-7 is ghosting.")
     print("Press Ctrl-C to exit.")
 
     try:
@@ -148,7 +144,7 @@ def main() -> None:
     except KeyboardInterrupt:
         canvas.Clear()
         matrix.SwapOnVSync(canvas)
-        print("\nDone.")
+        print("Done.")
 
 
 if __name__ == "__main__":
