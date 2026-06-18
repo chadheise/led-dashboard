@@ -1,3 +1,5 @@
 pytest>=8.0
+# Async route/reload tests use @pytest.mark.asyncio (see tests/test_routes_reload.py).
+pytest-asyncio>=0.23
 # Only needed to re-bake icon assets (engine/tools/bake_icons.py), not to run tests.
 cairosvg>=2.7

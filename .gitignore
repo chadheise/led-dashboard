@@ -16,8 +16,13 @@ ui/.vite/
 .vscode/
 *.swp
 
-# Claude Code
-.claude/
+# Claude Code -- ignore local/personal state, but commit the shared
+# agent context: SessionStart hook + the settings that register it.
+# (Ignore directory *contents* so specific paths can be re-included; a
+# directory-level ignore would block the negations below.)
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 
 # Persisted runtime state (user data, not code)
 engine/data/
