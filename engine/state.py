@@ -13,6 +13,9 @@ from pydantic import AliasChoices, BaseModel, Field
 
 _DEFAULT_PATH = Path("data/state.json")
 
+# One-time app_id rewrites applied on load, for apps that have been renamed.
+_APP_ID_RENAMES: dict[str, str] = {"flights": "flights_overhead"}
+
 
 # ── Data models ────────────────────────────────────────────────────────────────
 
@@ -71,9 +74,29 @@ class StateStore:
     # ── Persistence ────────────────────────────────────────────────────────
 
     def _load(self) -> AppState:
-        if self._path.exists():
-            return AppState.model_validate_json(self._path.read_text())
-        return AppState()
+        state = (
+            AppState.model_validate_json(self._path.read_text())
+            if self._path.exists()
+            else AppState()
+        )
+        return self._migrate(state)
+
+    def _migrate(self, state: AppState) -> AppState:
+        """Rewrite app_ids for apps that have since been renamed (one-time, idempotent)."""
+        changed = False
+        for module in state.modules.values():
+            new_id = _APP_ID_RENAMES.get(module.app_id)
+            if new_id:
+                module.app_id = new_id
+                changed = True
+        for old_id, new_id in _APP_ID_RENAMES.items():
+            if old_id in state.app_configs:
+                state.app_configs[new_id] = state.app_configs.pop(old_id)
+                changed = True
+        if changed:
+            self._state = state
+            self._save()
+        return state
 
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)

@@ -168,14 +168,12 @@ class OpenSkyLibrary(Library):
             ],
         }
 
-    async def fetch_flights(
-        self,
-        lat: float,
-        lon: float,
-        radius_km: float,
-        max_flights: int = 10,
-    ) -> list[dict[str, Any]] | None:
-        """Return fresh flights, [] if none in range, or None if throttled/errored (use stale data)."""
+    async def _fetch_states(self, params: dict[str, Any]) -> list[list[Any]] | None:
+        """Fetch raw OpenSky ``states/all`` rows, or None if throttled/errored.
+
+        Shared by bounding-box and icao24-keyed queries: handles the auth
+        token, 429 backoff, and error logging identically for both.
+        """
         now = time.monotonic()
         if now < self._throttled_until:
             logger.info(
@@ -184,15 +182,8 @@ class OpenSkyLibrary(Library):
             )
             return None
 
-        d = _km_to_deg(radius_km)
         token = await self._get_token()
         headers = {"Authorization": f"Bearer {token}"} if token else {}
-        params = {
-            "lamin": lat - d,
-            "lomin": lon - d,
-            "lamax": lat + d,
-            "lomax": lon + d,
-        }
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -227,9 +218,29 @@ class OpenSkyLibrary(Library):
 
         # Successful response — reset backoff to configured base
         self._backoff_interval = self._backoff_base
+        return data.get("states") or []
+
+    async def fetch_flights(
+        self,
+        lat: float,
+        lon: float,
+        radius_km: float,
+        max_flights: int = 10,
+    ) -> list[dict[str, Any]] | None:
+        """Return fresh flights, [] if none in range, or None if throttled/errored (use stale data)."""
+        d = _km_to_deg(radius_km)
+        params = {
+            "lamin": lat - d,
+            "lomin": lon - d,
+            "lamax": lat + d,
+            "lomax": lon + d,
+        }
+        states = await self._fetch_states(params)
+        if states is None:
+            return None
 
         flights: list[dict[str, Any]] = []
-        for state in data.get("states") or []:
+        for state in states:
             callsign = (state[1] or "").strip() or state[0] or "??????"
             alt_m: float | None = state[7]
             velocity: float | None = state[9]
@@ -274,6 +285,40 @@ class OpenSkyLibrary(Library):
         result = flights[:max_flights]
         logger.info("OpenSky: %d flights in range (showing %d)", len(flights), len(result))
         self._save_status(flight_count=len(flights))
+        return result
+
+    async def fetch_by_icao24(self, icao24_list: list[str]) -> dict[str, dict[str, Any]] | None:
+        """Return live state for specific aircraft, keyed by icao24, or None if throttled/errored."""
+        if not icao24_list:
+            return {}
+
+        states = await self._fetch_states({"icao24": icao24_list})
+        if states is None:
+            return None
+
+        result: dict[str, dict[str, Any]] = {}
+        for state in states:
+            icao24 = (state[0] or "").lower()
+            if not icao24:
+                continue
+            alt_m: float | None = state[7]
+            velocity: float | None = state[9]
+            heading: float | None = state[10]
+            vr_ms: float | None = state[11]
+            category_raw = state[17] if len(state) > 17 else None
+
+            result[icao24] = {
+                "alt_ft": round(alt_m * 3.281) if alt_m is not None else None,
+                "alt_m": round(alt_m) if alt_m is not None else None,
+                "spd_kt": round(velocity * 1.944) if velocity is not None else None,
+                "spd_kph": round(velocity * 3.6) if velocity is not None else None,
+                "spd_mph": round(velocity * 2.237) if velocity is not None else None,
+                "track": round(heading) if heading is not None else None,
+                "vr_kph": round(vr_ms * 3.6) if vr_ms is not None else None,
+                "vr_mph": round(vr_ms * 2.237) if vr_ms is not None else None,
+                "heading": heading,
+                "category": int(category_raw) if category_raw is not None else None,
+            }
         return result
 
     async def _get_token(self) -> str | None:

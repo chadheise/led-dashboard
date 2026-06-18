@@ -2,7 +2,7 @@
 
 RGB LED wall display controller — Raspberry Pi 4 driving a configurable number of HUB75 panels (e.g. 10× P5 panels for a 320×64 px display).
 
-The system renders display apps (stocks, sports, flights, text) to a canvas. In simulator mode it streams frames over WebSocket to a browser-based preview; in hardware mode it drives real HUB75 LED panels via the `rpi-rgb-led-matrix` library.
+The system renders display apps (stocks, sports, flights overhead, flight tracker, text) to a canvas. In simulator mode it streams frames over WebSocket to a browser-based preview; in hardware mode it drives real HUB75 LED panels via the `rpi-rgb-led-matrix` library.
 
 ## Quickstart
 
@@ -138,7 +138,8 @@ led-dashboard/
 │   ├── apps/                # Display apps (one subdirectory per app)
 │   │   ├── stocks/          # Yahoo Finance stock ticker
 │   │   ├── sports/          # ESPN live scores
-│   │   ├── flights/         # Nearby aircraft via OpenSky + FlightAware enrichment
+│   │   ├── flights_overhead/ # Nearby aircraft via OpenSky + FlightAware enrichment
+│   │   ├── flight_tracker/  # Track specific flight(s) by number/date — schedule, delay, live position
 │   │   └── text/            # Static or scrolling text message
 │   │
 │   ├── libraries/           # Shared data / rendering libraries
@@ -172,7 +173,7 @@ led-dashboard/
     │       ├── AppForm.tsx          # Generic JSON-schema-driven app config form
     │       ├── AppIcon.tsx          # Inline SVG icon renderer for apps/libraries
     │       ├── DurationInput.tsx    # Human-friendly duration field (e.g. "30s")
-    │       ├── LocationMapInput.tsx # Map-based lat/lon picker for flights app
+    │       ├── LocationMapInput.tsx # Map-based lat/lon picker for flights_overhead app
     │       ├── ModuleSelect.tsx     # Dropdown to pick a saved module
     │       ├── MultiPicker.tsx      # Multi-select for teams, tickers, etc.
     │       ├── PluginForm.tsx       # Form wrapper for a specific app's config schema
@@ -249,11 +250,17 @@ Shows live game scores from ESPN for any supported league (NFL, NBA, MLB, NHL, N
 
 Uses: `espn_sports`, `text_renderer`, `canvas_utils`
 
-### `apps/flights/` — Flights
+### `apps/flights_overhead/` — Flights Overhead
 
 Displays aircraft currently overhead within a configurable radius of a chosen location. Shows callsign, altitude, speed, heading, and (if a FlightAware API key is configured) airline, origin/destination, and aircraft type. Cycles through nearby aircraft every few seconds.
 
 Uses: `opensky`, `flightaware`, `text_renderer`, `canvas_utils`
+
+### `apps/flight_tracker/` — Flight Tracker
+
+Tracks one or more specific flights (airline + flight number, optionally pinned to a date) under a free-text label, e.g. "Bob's flight". Shows scheduled departure/arrival times and on-time/delay status before departure, live position/altitude/speed once airborne (FlightAware AeroAPI, refined with fresher OpenSky position when available), and final arrival delay after landing. To stay within FlightAware's API budget, schedule/status lookups are only polled when a flight is within an hour of departure, currently airborne, or landed within the last hour — flights far in the future or past are served from cache without consuming budget.
+
+Uses: `flightaware`, `opensky`, `text_renderer`, `canvas_utils`
 
 ### `apps/text/` — Text Display
 
@@ -278,11 +285,11 @@ Fetches live and recent game scores from the public ESPN API. Supports all major
 
 ### `libraries/flightaware/` — FlightAware AeroAPI
 
-Optional flight enrichment via the FlightAware AeroAPI (requires a free or paid API key). Given a flight callsign or ICAO hex, returns airline name, origin and destination airports, and aircraft type. Used by the Flights app to augment raw OpenSky position data.
+Optional flight enrichment via the FlightAware AeroAPI (requires a free or paid API key). Given a flight callsign or ICAO hex, `enrich_flights()` returns airline name, origin and destination airports, and aircraft type — used by Flights Overhead to augment raw OpenSky position data. `track_flight(ident, date)` looks up a single flight's schedule, on-time/delay status, and live position snapshot — used by Flight Tracker, with its own short-TTL cache since schedule data changes faster than routes. Both share the same monthly call budget.
 
 ### `libraries/opensky/` — OpenSky Network
 
-Queries the OpenSky Network REST API for real-time aircraft state vectors within a bounding box. Supports optional OAuth authentication (Client ID + Secret) for higher rate limits. Converts a centre point + radius (km) to a lat/lon bounding box internally.
+Queries the OpenSky Network REST API for real-time aircraft state vectors. `fetch_flights()` queries within a bounding box (centre point + radius (km), converted to lat/lon bounds internally) for Flights Overhead; `fetch_by_icao24()` queries specific aircraft by ICAO24 hex for Flight Tracker's live-position refresh. Supports optional OAuth authentication (Client ID + Secret) for higher rate limits.
 
 ### `libraries/text_renderer/` — Text Renderer
 

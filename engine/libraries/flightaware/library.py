@@ -27,6 +27,7 @@ _ROUTES_CACHE_PATH = Path("data/opensky_routes_cache.json")
 _AIRPORT_DB_PATH = Path("data/airports.csv")
 _LOGO_CACHE_DIR = Path("data/logos")
 _LOGO_META_PATH = Path("data/logo_meta.json")
+_TRACKING_CACHE_PATH = Path("data/flightaware_tracking_cache.json")
 _DEFAULT_LOGO_CACHE_TTL_DAYS: float = 30.0
 
 # Module-level defaults — also used as schema defaults
@@ -34,6 +35,7 @@ _DEFAULT_CACHE_TTL_DAYS: int = 7
 _DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
 _COST_PER_CALL: float = 0.005  # AeroAPI free-tier rate, ~$0.005 per query
 _ROUTES_CACHE_TTL_DAYS: float = 30.0  # Routes are very stable
+_DEFAULT_TRACKING_CACHE_TTL_MINUTES: float = 10.0  # Schedule/status changes faster than routes
 
 # ICAO 3-letter airline designator → IATA 2-letter code (for callsign prefix resolution)
 _ICAO_PREFIX_TO_IATA: dict[str, str] = {
@@ -310,7 +312,10 @@ class FlightAwareLibrary(Library):
     id: ClassVar[str] = "flightaware"
     name: ClassVar[str] = "FlightAware AeroAPI"
     has_status: ClassVar[bool] = True
-    description: ClassVar[str] = "Flight enrichment (route, airline, aircraft type) via FlightAware AeroAPI"
+    description: ClassVar[str] = (
+        "Flight enrichment (route, airline, aircraft type) and single-flight "
+        "schedule/status tracking via FlightAware AeroAPI"
+    )
     icon: ClassVar[str] = (
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
         'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -367,6 +372,18 @@ class FlightAwareLibrary(Library):
                 "maximum": 365,
                 "x-internal": True,
             },
+            "tracking_cache_ttl_minutes": {
+                "type": "number",
+                "title": "Flight tracking cache TTL (minutes)",
+                "description": (
+                    "How long to cache single-flight schedule/status lookups (used by "
+                    "Flight Tracker) before re-fetching. Shorter than the enrichment "
+                    "cache since schedule/delay status changes much faster than routes."
+                ),
+                "default": _DEFAULT_TRACKING_CACHE_TTL_MINUTES,
+                "minimum": 1,
+                "maximum": 120,
+            },
         },
     }
 
@@ -383,10 +400,13 @@ class FlightAwareLibrary(Library):
         self._airport_db_loaded: bool = False
         # iata → fetched_at wall time (tracks both hits and 404s)
         self._logo_meta: dict[str, float] = {}
+        # "{ident}|{date or ''}" → (fetched_at, tracking_result)
+        self._tracking_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._load_disk_cache()
         self._load_budget()
         self._load_routes_cache()
         self._load_logo_meta()
+        self._load_tracking_cache()
 
     # ── Config properties ─────────────────────────────────────────────────────
 
@@ -404,6 +424,13 @@ class FlightAwareLibrary(Library):
     def _logo_cache_ttl(self) -> float:
         """Logo disk-cache TTL in seconds, read from config."""
         return float(self._config.get("logo_cache_ttl_days", _DEFAULT_LOGO_CACHE_TTL_DAYS)) * 24 * 3600
+
+    @property
+    def _tracking_cache_ttl(self) -> float:
+        """Flight-tracking disk-cache TTL in seconds, read from config."""
+        return float(
+            self._config.get("tracking_cache_ttl_minutes", _DEFAULT_TRACKING_CACHE_TTL_MINUTES)
+        ) * 60
 
     # ── Disk cache ────────────────────────────────────────────────────────────
 
@@ -496,6 +523,40 @@ class FlightAwareLibrary(Library):
             tmp.rename(_LOGO_META_PATH)
         except Exception as exc:
             logger.warning("FlightAware: logo meta save failed: %s", exc)
+
+    # ── Flight-tracking cache ────────────────────────────────────────────────
+
+    def _load_tracking_cache(self) -> None:
+        try:
+            if _TRACKING_CACHE_PATH.exists():
+                raw = json.loads(_TRACKING_CACHE_PATH.read_text())
+                now = time.time()
+                self._tracking_cache = {
+                    key: (entry["fetched_at"], entry["data"])
+                    for key, entry in raw.items()
+                    if now - entry["fetched_at"] < self._tracking_cache_ttl
+                }
+                logger.info(
+                    "FlightAware: loaded %d cached tracking results from disk",
+                    len(self._tracking_cache),
+                )
+        except Exception as exc:
+            logger.warning("FlightAware: tracking cache load failed: %s", exc)
+
+    def _save_tracking_cache(self) -> None:
+        try:
+            _TRACKING_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            now = time.time()
+            payload = {
+                key: {"fetched_at": ts, "data": d}
+                for key, (ts, d) in self._tracking_cache.items()
+                if now - ts < self._tracking_cache_ttl
+            }
+            tmp = _TRACKING_CACHE_PATH.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload))
+            tmp.rename(_TRACKING_CACHE_PATH)
+        except Exception as exc:
+            logger.warning("FlightAware: tracking cache save failed: %s", exc)
 
     # ── Airport DB ────────────────────────────────────────────────────────────
 
@@ -864,36 +925,160 @@ class FlightAwareLibrary(Library):
                 logger.debug("FlightAware %s: no flights in response", callsign)
                 return None
             flight = flights_list[0]
-
-            origin_obj = flight.get("origin") or {}
-            dest_obj = flight.get("destination") or {}
-            origin = origin_obj.get("code_iata") or origin_obj.get("code", "")
-            dest = dest_obj.get("code_iata") or dest_obj.get("code", "")
-            origin_name = origin_obj.get("name", "")
-            dest_name = dest_obj.get("name", "")
-            airline = flight.get("operator") or ""
-            operator_iata = flight.get("operator_iata") or ""
-            aircraft_type = flight.get("aircraft_type", "")
+            fields = _extract_route_fields(flight)
 
             logger.info(
                 "FlightAware %s: %s→%s %s(%s) %s",
-                callsign, origin, dest, airline, operator_iata, aircraft_type,
+                callsign, fields["origin"], fields["dest"],
+                fields["airline"], fields["operator_iata"], fields["aircraft_type"],
             )
-            return {
-                "origin": origin.upper() if origin else "",
-                "dest": dest.upper() if dest else "",
-                "origin_name": origin_name,
-                "dest_name": dest_name,
-                "airline": airline,
-                "operator_iata": operator_iata.upper(),
-                "aircraft_type": aircraft_type,
-            }
+            return fields
         except Exception as exc:
             logger.warning("FlightAware enrichment failed for %s: %s", callsign, exc)
             return None
 
+    # ── Flight tracking (Flight Tracker app) ───────────────────────────────────
+
+    async def track_flight(self, ident: str, date: str | None = None) -> dict[str, Any] | None:
+        """Return schedule/status/live-position info for one flight, or None.
+
+        ``ident`` is an airline + flight number (e.g. ``"DL699"``); ``date`` is an
+        optional ``YYYY-MM-DD`` string selecting which instance of a recurring
+        flight number to track (soonest non-cancelled instance if omitted).
+
+        Budget-gated like ``enrich_flights`` (shares the same monthly budget —
+        no separate pool). Callers are expected to only invoke this when the
+        flight is within its useful tracking window (about to depart, airborne,
+        or recently landed); this method itself just fetches-or-serves-cache.
+        """
+        key = f"{ident}|{date or ''}"
+        now = time.time()
+        cached = self._tracking_cache.get(key)
+
+        api_key = self._config.get("flightaware_api_key", "").strip()
+        if not api_key or self.budget_tier == "disabled":
+            return cached[1] if cached else None
+
+        if cached is not None and (now - cached[0]) < self._tracking_cache_ttl:
+            return cached[1]
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=10.0, headers={"x-apikey": api_key}
+            ) as client:
+                resp = await client.get(f"{_AEROAPI_BASE}/flights/{ident}")
+            if resp.status_code != 200:
+                logger.warning(
+                    "FlightAware tracking %s: HTTP %d — %s",
+                    ident, resp.status_code, resp.text[:300],
+                )
+                return cached[1] if cached else None
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("FlightAware tracking failed for %s: %s", ident, exc)
+            return cached[1] if cached else None
+
+        self._charge_budget(1)
+
+        instance = _select_flight_instance(data.get("flights", []), date)
+        if instance is None:
+            result: dict[str, Any] = {"found": False, "ident": ident}
+        else:
+            result = {"found": True, "ident": ident, **_extract_tracking_fields(instance)}
+
+        self._tracking_cache[key] = (now, result)
+        self._save_tracking_cache()
+        logger.info("FlightAware tracking %s: found=%s", ident, result["found"])
+        return result
+
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
+
+def _extract_route_fields(flight: dict[str, Any]) -> dict[str, Any]:
+    """Extract origin/dest/airline/aircraft-type fields from an AeroAPI flight object.
+
+    Shared by ``_fetch_enrichment`` (route enrichment) and flight tracking
+    (``_extract_tracking_fields``) — both consume the same ``/flights/{ident}``
+    response shape.
+    """
+    origin_obj = flight.get("origin") or {}
+    dest_obj = flight.get("destination") or {}
+    origin = origin_obj.get("code_iata") or origin_obj.get("code", "")
+    dest = dest_obj.get("code_iata") or dest_obj.get("code", "")
+    origin_name = origin_obj.get("name", "")
+    dest_name = dest_obj.get("name", "")
+    airline = flight.get("operator") or ""
+    operator_iata = flight.get("operator_iata") or ""
+    aircraft_type = flight.get("aircraft_type", "")
+
+    return {
+        "origin": origin.upper() if origin else "",
+        "dest": dest.upper() if dest else "",
+        "origin_name": origin_name,
+        "dest_name": dest_name,
+        "airline": airline,
+        "operator_iata": operator_iata.upper(),
+        "aircraft_type": aircraft_type,
+    }
+
+
+def _select_flight_instance(
+    flights: list[dict[str, Any]], date: str | None
+) -> dict[str, Any] | None:
+    """Pick which instance of a (possibly recurring) flight number to track.
+
+    With no date, picks the soonest non-cancelled instance. With a date
+    (``YYYY-MM-DD``), matches the instance whose scheduled departure date
+    equals it; returns None if no instance matches.
+    """
+    if not flights:
+        return None
+
+    if date is None:
+        candidates = [f for f in flights if not f.get("cancelled")]
+        candidates.sort(key=lambda f: f.get("scheduled_off") or "")
+        return candidates[0] if candidates else None
+
+    for flight in flights:
+        scheduled_off = flight.get("scheduled_off") or ""
+        if scheduled_off[:10] == date:
+            return flight
+    return None
+
+
+def _extract_tracking_fields(flight: dict[str, Any]) -> dict[str, Any]:
+    """Extract schedule/status/delay/live-position fields for flight tracking."""
+    fields = _extract_route_fields(flight)
+
+    last_position = flight.get("last_position") or {}
+    live: dict[str, Any] | None = None
+    if last_position:
+        altitude = last_position.get("altitude")
+        live = {
+            "lat": last_position.get("latitude"),
+            "lon": last_position.get("longitude"),
+            "alt_ft": altitude * 100 if altitude is not None else None,
+            "gs_kt": last_position.get("groundspeed"),
+            "heading": last_position.get("heading"),
+            "updated_at": last_position.get("timestamp"),
+        }
+
+    fields.update({
+        "status": flight.get("status", ""),
+        "scheduled_off": flight.get("scheduled_off"),
+        "estimated_off": flight.get("estimated_off"),
+        "actual_off": flight.get("actual_off"),
+        "scheduled_on": flight.get("scheduled_on"),
+        "estimated_on": flight.get("estimated_on"),
+        "actual_on": flight.get("actual_on"),
+        "departure_delay": flight.get("departure_delay"),
+        "arrival_delay": flight.get("arrival_delay"),
+        "progress_percent": flight.get("progress_percent"),
+        "live": live,
+        "icao24": (last_position.get("icao24") or "").lower(),
+    })
+    return fields
+
 
 def _parse_airport_csv(text: str) -> dict[str, dict[str, str]]:
     """Parse OurAirports airports.csv into ICAO→{iata, name}."""

@@ -15,7 +15,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
-from apps.flights.icons import render_category_icon
+from apps.flights_overhead.icons import render_category_icon
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -77,9 +77,9 @@ _DEBUG_ENRICHED: dict[str, Any] = {
 }
 
 
-class FlightsApp(DisplayApp):
-    id: ClassVar[str] = "flights"
-    name: ClassVar[str] = "Flights"
+class FlightsOverheadApp(DisplayApp):
+    id: ClassVar[str] = "flights_overhead"
+    name: ClassVar[str] = "Flights Overhead"
     description: ClassVar[str] = (
         "Aircraft overhead via OpenSky Network — cycling cards with airline, "
         "route, and aircraft type via FlightAware AeroAPI enrichment"
@@ -93,7 +93,7 @@ class FlightsApp(DisplayApp):
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
-        "title": "Flights",
+        "title": "Flights Overhead",
         "properties": {
             "location": {
                 "type": "object",
