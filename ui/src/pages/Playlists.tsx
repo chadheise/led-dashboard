@@ -552,7 +552,7 @@ export default function Playlists() {
                       apps={apps}
                       onChange={(id) => {
                         setSelectedModuleId(id);
-                        if (activeSingleModuleId) activateSingleModuleById(id);
+                        activateSingleModuleById(id);
                       }}
                     />
                   </div>

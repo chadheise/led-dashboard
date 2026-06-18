@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, ClassVar
@@ -16,6 +17,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary
+from libraries.location.library import LocationLibrary
 
 _UNIT_CYCLE_S: float = 4.0
 _GATED_PHASES = ("unknown", "approaching", "active", "recently_landed")
@@ -27,6 +29,17 @@ def _clip_text(text: str, size: int, max_w: int) -> str:
             return text
         text = text[:-1]
     return ""
+
+
+def _normalize_ident(value: str) -> str:
+    """Normalize a flight number into an AeroAPI-friendly ident.
+
+    Strips *all* whitespace (so "DL 1070" and "DL1070" are equivalent) and
+    uppercases. Both IATA ("DL1070") and ICAO ("DAL1070") airline prefixes are
+    accepted by AeroAPI's /flights/{ident} endpoint, so removing the spaces is
+    the actual fix — no airline-code mapping is required.
+    """
+    return re.sub(r"\s+", "", value or "").upper()
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -180,28 +193,30 @@ class FlightTrackerApp(DisplayApp):
         'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
         '<path d="M2 16l20-8-7 7 2 7-4-3-4 3 1-7-8-2z"/></svg>'
     )
-    libraries: ClassVar[list[str]] = ["flightaware", "opensky"]
+    libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location"]
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Flight Tracker",
         "properties": {
-            "flight_numbers": {
+            "flights": {
                 "type": "array",
-                "title": "Flight number(s)",
-                "items": {"type": "string"},
+                "title": "Flights",
+                "x-input-type": "flight-list",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "number": {"type": "string", "default": ""},
+                        "label": {"type": "string", "default": ""},
+                    },
+                },
                 "maxItems": 5,
-                "default": [],
+                "default": [{"number": "", "label": ""}],
             },
             "date": {
                 "type": "string",
                 "title": "Flight date",
-                "x-input-type": "datetime",
-                "default": "",
-            },
-            "label": {
-                "type": "string",
-                "title": "Label",
+                "x-input-type": "date",
                 "default": "",
             },
             "display_mode": {
@@ -246,7 +261,7 @@ class FlightTrackerApp(DisplayApp):
                 "default": False,
             },
         },
-        "required": ["flight_numbers"],
+        "required": ["flights"],
     }
 
     def __init__(
@@ -259,6 +274,7 @@ class FlightTrackerApp(DisplayApp):
         super().__init__(config, canvas, global_config, library_configs)
         self._flightaware = FlightAwareLibrary(self.library_configs.get("flightaware", {}))
         self._opensky = OpenSkyLibrary(self.library_configs.get("opensky", {}))
+        self._location = LocationLibrary(self.library_configs.get("location", {}))
         self._tracked: dict[str, dict[str, Any]] = {}
         self._live_overrides: dict[str, dict[str, Any]] = {}
         self._next_poll_due: dict[str, float] = {}
@@ -277,9 +293,41 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Config helpers ─────────────────────────────────────────────────────────
 
+    def _flights(self) -> list[dict[str, str]]:
+        """Ordered, normalized list of {number, label} for each configured flight.
+
+        Reads the current ``flights`` array-of-objects, falling back to the
+        legacy ``flight_numbers`` (list[str]) + ``label`` (str) config so module
+        instances saved before per-flight labels keep working. Flight numbers
+        are normalized (whitespace-stripped, uppercased); blanks are dropped and
+        the list is capped at 5.
+        """
+        raw = self.config.get("flights")
+        if not isinstance(raw, list) or not raw:
+            # Legacy fallback: flight_numbers[] + single shared label.
+            numbers = self.config.get("flight_numbers") or []
+            legacy_label = str(self.config.get("label", "") or "")
+            raw = [
+                {"number": n, "label": legacy_label if i == 0 else ""}
+                for i, n in enumerate(numbers)
+            ]
+
+        flights: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            number = _normalize_ident(str(item.get("number", "") or ""))
+            if not number:
+                continue
+            flights.append({"number": number, "label": str(item.get("label", "") or "")})
+        return flights[:5]
+
     def _flight_numbers(self) -> list[str]:
-        raw = self.config.get("flight_numbers") or []
-        return [fn.strip().upper() for fn in raw if fn and fn.strip()][:5]
+        return [f["number"] for f in self._flights()]
+
+    def _labels(self) -> dict[str, str]:
+        """Map of flight number → its label (last one wins on duplicates)."""
+        return {f["number"]: f["label"] for f in self._flights()}
 
     def _date(self) -> str | None:
         raw = str(self.config.get("date", "") or "").strip()
@@ -297,6 +345,7 @@ class FlightTrackerApp(DisplayApp):
 
         flight_numbers = self._flight_numbers()
         date = self._date()
+        tz = self._location.get_timezone()
         tier = self._flightaware.budget_tier
         now_mono = time.monotonic()
 
@@ -309,7 +358,7 @@ class FlightTrackerApp(DisplayApp):
 
         if to_poll:
             results = await asyncio.gather(
-                *[self._flightaware.track_flight(fn, date) for fn in to_poll],
+                *[self._flightaware.track_flight(fn, date, tz) for fn in to_poll],
                 return_exceptions=True,
             )
             for fn, result in zip(to_poll, results):
@@ -399,7 +448,7 @@ class FlightTrackerApp(DisplayApp):
         tracked = self._tracked.get(fn)
         kind = _card_kind(tracked)
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
-        label = str(self.config.get("label", "") or "")
+        label = self._labels().get(fn, "")
 
         if kind == "not_found":
             draw_status_message(self.canvas, f"{fn}: not available")
@@ -453,6 +502,8 @@ class FlightTrackerApp(DisplayApp):
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
         max_w = self.canvas.width - 4
 
+        labels = self._labels()
+
         def _rows() -> list[str]:
             rows = []
             for fn in flight_numbers:
@@ -469,7 +520,9 @@ class FlightTrackerApp(DisplayApp):
                 else:
                     status = "Landed"
                     delay = _fmt_delay(tracked.get("arrival_delay")) or "On time"
-                rows.append(f"{fn:<8}{status:<10}{delay}")
+                # Lead each row with the user's label when set, else the number.
+                ident = labels.get(fn) or fn
+                rows.append(f"{ident:<8}{status:<10}{delay}")
             return rows
 
         rows = _rows()

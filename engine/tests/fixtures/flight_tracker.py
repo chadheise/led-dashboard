@@ -73,7 +73,21 @@ _TRACKED_LANDED_DELAYED: dict[str, Any] = {
 _TRACKED_NOT_FOUND: dict[str, Any] = {"found": False, "ident": "ZZ000"}
 
 
-def _seed(tracked: dict[str, dict[str, Any]], flight_numbers: list[str], *, label: str = ""):
+def _flights_config(
+    flight_numbers: list[str], labels: dict[str, str] | None = None
+) -> list[dict[str, str]]:
+    labels = labels or {}
+    return [{"number": fn, "label": labels.get(fn, "")} for fn in flight_numbers]
+
+
+def _seed(
+    tracked: dict[str, dict[str, Any]],
+    flight_numbers: list[str],
+    *,
+    labels: dict[str, str] | None = None,
+):
+    flights = _flights_config(flight_numbers, labels)
+
     def seed(app: Any) -> None:
         app._tracked = {k: dict(v) for k, v in tracked.items()}
         app._live_overrides = {}
@@ -81,9 +95,7 @@ def _seed(tracked: dict[str, dict[str, Any]], flight_numbers: list[str], *, labe
         app._card_idx = 0
         app._card_last_ts = time.monotonic()
         app._unit_ts = time.monotonic()
-        app.config["flight_numbers"] = flight_numbers
-        if label:
-            app.config["label"] = label
+        app.config["flights"] = flights
 
     return seed
 
@@ -91,31 +103,31 @@ def _seed(tracked: dict[str, dict[str, Any]], flight_numbers: list[str], *, labe
 def _fixtures() -> dict[str, dict[str, Any]]:
     return {
         "card_scheduled": {
-            "config": {"display_mode": "cards", "flight_numbers": ["DL699"], "units": "imperial"},
+            "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
             "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"]),
         },
         "card_scheduled_labeled": {
-            "config": {"display_mode": "cards", "flight_numbers": ["DL699"], "units": "imperial"},
-            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"], label="Bob's flight"),
+            "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
+            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"], labels={"DL699": "Bob's flight"}),
         },
         "card_airborne": {
-            "config": {"display_mode": "cards", "flight_numbers": ["UA1542"], "units": "imperial"},
+            "config": {"display_mode": "cards", "flights": _flights_config(["UA1542"]), "units": "imperial"},
             "seed": _seed({"UA1542": _TRACKED_AIRBORNE}, ["UA1542"]),
         },
         "card_landed_ontime": {
-            "config": {"display_mode": "cards", "flight_numbers": ["AA100"], "units": "imperial"},
+            "config": {"display_mode": "cards", "flights": _flights_config(["AA100"]), "units": "imperial"},
             "seed": _seed({"AA100": _TRACKED_LANDED_ONTIME}, ["AA100"]),
         },
         "card_landed_delayed": {
-            "config": {"display_mode": "cards", "flight_numbers": ["BA286"], "units": "imperial"},
+            "config": {"display_mode": "cards", "flights": _flights_config(["BA286"]), "units": "imperial"},
             "seed": _seed({"BA286": _TRACKED_LANDED_DELAYED}, ["BA286"]),
         },
         "card_not_found": {
-            "config": {"display_mode": "cards", "flight_numbers": ["ZZ000"]},
+            "config": {"display_mode": "cards", "flights": _flights_config(["ZZ000"])},
             "seed": _seed({"ZZ000": _TRACKED_NOT_FOUND}, ["ZZ000"]),
         },
         "table_multi": {
-            "config": {"display_mode": "table", "flight_numbers": ["DL699", "UA1542", "AA100", "ZZ000"]},
+            "config": {"display_mode": "table", "flights": _flights_config(["DL699", "UA1542", "AA100", "ZZ000"])},
             "seed": _seed(
                 {
                     "DL699": _TRACKED_SCHEDULED,
@@ -126,8 +138,16 @@ def _fixtures() -> dict[str, dict[str, Any]]:
                 ["DL699", "UA1542", "AA100", "ZZ000"],
             ),
         },
+        "table_labeled": {
+            "config": {"display_mode": "table", "flights": _flights_config(["DL699", "UA1542"])},
+            "seed": _seed(
+                {"DL699": _TRACKED_SCHEDULED, "UA1542": _TRACKED_AIRBORNE},
+                ["DL699", "UA1542"],
+                labels={"DL699": "Bob", "UA1542": "Amy"},
+            ),
+        },
         "no_flights": {
-            "config": {"display_mode": "cards", "flight_numbers": []},
+            "config": {"display_mode": "cards", "flights": []},
             "seed": _seed({}, []),
         },
     }

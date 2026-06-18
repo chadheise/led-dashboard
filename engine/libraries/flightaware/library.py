@@ -9,6 +9,7 @@ import time
 from io import BytesIO, StringIO
 from pathlib import Path
 from typing import Any, ClassVar
+from zoneinfo import ZoneInfo
 
 import httpx
 from PIL import Image
@@ -939,19 +940,24 @@ class FlightAwareLibrary(Library):
 
     # ── Flight tracking (Flight Tracker app) ───────────────────────────────────
 
-    async def track_flight(self, ident: str, date: str | None = None) -> dict[str, Any] | None:
+    async def track_flight(
+        self, ident: str, date: str | None = None, tz: str | None = None
+    ) -> dict[str, Any] | None:
         """Return schedule/status/live-position info for one flight, or None.
 
         ``ident`` is an airline + flight number (e.g. ``"DL699"``); ``date`` is an
         optional ``YYYY-MM-DD`` string selecting which instance of a recurring
         flight number to track (soonest non-cancelled instance if omitted).
+        ``tz`` is the user's IANA timezone, used to interpret ``date`` against
+        each flight's UTC departure time so evening flights aren't missed by an
+        off-by-one date.
 
         Budget-gated like ``enrich_flights`` (shares the same monthly budget —
         no separate pool). Callers are expected to only invoke this when the
         flight is within its useful tracking window (about to depart, airborne,
         or recently landed); this method itself just fetches-or-serves-cache.
         """
-        key = f"{ident}|{date or ''}"
+        key = f"{ident}|{date or ''}|{tz or ''}"
         now = time.time()
         cached = self._tracking_cache.get(key)
 
@@ -980,7 +986,7 @@ class FlightAwareLibrary(Library):
 
         self._charge_budget(1)
 
-        instance = _select_flight_instance(data.get("flights", []), date)
+        instance = _select_flight_instance(data.get("flights", []), date, tz)
         if instance is None:
             result: dict[str, Any] = {"found": False, "ident": ident}
         else:
@@ -1022,14 +1028,37 @@ def _extract_route_fields(flight: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _local_date(iso_utc: str, tz: str | None) -> str | None:
+    """The ``YYYY-MM-DD`` date of a UTC ISO timestamp, in timezone ``tz``.
+
+    Falls back to the UTC date when ``tz`` is missing or invalid.
+    """
+    if not iso_utc:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(iso_utc.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    if tz:
+        try:
+            dt = dt.astimezone(ZoneInfo(tz))
+        except Exception:
+            pass
+    return dt.date().isoformat()
+
+
 def _select_flight_instance(
-    flights: list[dict[str, Any]], date: str | None
+    flights: list[dict[str, Any]], date: str | None, tz: str | None = None
 ) -> dict[str, Any] | None:
     """Pick which instance of a (possibly recurring) flight number to track.
 
     With no date, picks the soonest non-cancelled instance. With a date
-    (``YYYY-MM-DD``), matches the instance whose scheduled departure date
-    equals it; returns None if no instance matches.
+    (``YYYY-MM-DD``), matches the instance whose departure date — interpreted in
+    the user's timezone ``tz`` — equals it. If the timezone is unknown (so the
+    true local date can't be computed) it falls back to the nearest instance
+    within ±1 day, rather than falsely reporting the flight as not found.
     """
     if not flights:
         return None
@@ -1039,11 +1068,32 @@ def _select_flight_instance(
         candidates.sort(key=lambda f: f.get("scheduled_off") or "")
         return candidates[0] if candidates else None
 
+    # Exact match on the flight's local departure date.
     for flight in flights:
-        scheduled_off = flight.get("scheduled_off") or ""
-        if scheduled_off[:10] == date:
+        if _local_date(flight.get("scheduled_off") or "", tz) == date:
             return flight
-    return None
+
+    # Fallback: nearest non-cancelled instance within ±1 day of the request.
+    try:
+        target = datetime.datetime.strptime(date, "%Y-%m-%d").date()
+    except Exception:
+        return None
+    best: dict[str, Any] | None = None
+    best_delta: int | None = None
+    for flight in flights:
+        if flight.get("cancelled"):
+            continue
+        local = _local_date(flight.get("scheduled_off") or "", tz)
+        if not local:
+            continue
+        try:
+            cand = datetime.datetime.strptime(local, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        delta = abs((cand - target).days)
+        if delta <= 1 and (best_delta is None or delta < best_delta):
+            best, best_delta = flight, delta
+    return best
 
 
 def _extract_tracking_fields(flight: dict[str, Any]) -> dict[str, Any]:
