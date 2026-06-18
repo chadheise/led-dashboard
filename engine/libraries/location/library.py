@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
@@ -14,11 +15,7 @@ class LocationLibrary(Library):
     id: ClassVar[str] = "location"
     name: ClassVar[str] = "Location/Time"
     description: ClassVar[str] = "Home location shared across apps — provides lat/lon, city, country, timezone, and time/date format preferences"
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">'
-        '<path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z'
-        "M12 11.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z\"/></svg>"
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     global_config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Location/Time",

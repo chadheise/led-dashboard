@@ -45,6 +45,7 @@ interface Module {
 interface AppInfo {
   id: string;
   name: string;
+  icon: string;
 }
 interface EditItem {
   module_id: string;
@@ -493,7 +494,7 @@ export default function Playlists() {
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <span style={{ color: C.positive, fontSize: F.size.md }}>◉</span>
                         <div style={{ color: C.textMuted, flexShrink: 0 }}>
-                          <AppIcon appId={activeSingleModule.app_id} size={14} />
+                          <AppIcon icon={apps.find(a => a.id === activeSingleModule.app_id)?.icon ?? ''} size={14} />
                         </div>
                         <span style={{ color: C.textPrimary, fontFamily: F.family, fontSize: F.size.md }}>
                           {activeSingleModule.name}
@@ -522,7 +523,7 @@ export default function Playlists() {
                             {activePlaylist.items.map((it, i) => (
                               <div key={i} style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                 <div style={{ color: C.textMuted, flexShrink: 0 }}>
-                                  <AppIcon appId={it.app_id ?? ""} size={14} />
+                                  <AppIcon icon={apps.find(a => a.id === it.app_id)?.icon ?? ''} size={14} />
                                 </div>
                                 <span style={{ color: C.textSecondary, fontSize: F.size.base }}>{it.module_name}</span>
                                 <span style={{ color: C.textMuted, fontSize: F.size.sm }}>· {it.duration}s</span>
@@ -699,7 +700,7 @@ export default function Playlists() {
                             }}
                           >
                             <div style={{ color: C.textMuted, flexShrink: 0 }}>
-                              <AppIcon appId={it.app_id ?? ""} size={13} />
+                              <AppIcon icon={apps.find(a => a.id === it.app_id)?.icon ?? ''} size={13} />
                             </div>
                             <span
                               style={{

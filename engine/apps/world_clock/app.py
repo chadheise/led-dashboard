@@ -4,6 +4,7 @@ import logging
 import math
 import time
 from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -71,13 +72,7 @@ class WorldClockApp(DisplayApp):
         "Live local and world-city clocks — add cities from a curated global "
         "list and see their current dates and times alongside your own"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<circle cx="8" cy="15" r="6"/><path d="M8 12.5V15l1.5 1.5"/>'
-        '<path d="M14.5 4.5 16 3M3.5 4.5 2 3M9.5 1h-3"/>'
-        '<path d="M18 8a6 6 0 0 1 0 12"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["timezones", "location"]
     size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=32)
     global_config_schema: ClassVar[dict[str, Any]] = {}

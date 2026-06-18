@@ -11,6 +11,7 @@ interface ModuleOption {
 interface AppInfo {
   id: string;
   name: string;
+  icon: string;
 }
 
 interface Props {
@@ -59,7 +60,7 @@ export default function ModuleSelect({ value, options, apps, onChange }: Props) 
         }}
       >
         <span style={{ color: C.textMuted, flexShrink: 0, display: "flex" }}>
-          <AppIcon appId={selected?.app_id ?? ""} size={15} />
+          <AppIcon icon={apps?.find(a => a.id === selected?.app_id)?.icon ?? ''} size={15} />
         </span>
         <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {selected?.name ?? "—"}
@@ -103,7 +104,7 @@ export default function ModuleSelect({ value, options, apps, onChange }: Props) 
                     marginTop: 2,
                   }}
                 >
-                  <AppIcon appId={app.id} size={11} />
+                  <AppIcon icon={app.icon} size={11} />
                   {app.name.toUpperCase()}
                 </div>
               )}

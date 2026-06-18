@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -101,14 +102,7 @@ class WeatherApp(DisplayApp):
         "Current conditions, today's hourly outlook, and a 7-day forecast for "
         "your location, with scalable condition icons via Open-Meteo"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">'
-        '<path d="M6.5 20q-1.875 0-3.187-1.312Q2 17.375 2 15.5q0-1.65 '
-        '1.025-2.925T5.5 11.05Q5.9 9.4 7.275 8.325T10.5 7.25q1.125 0 '
-        '2.05.475t1.55 1.275q.3-.075.6-.112.3-.038.6-.038 1.65 0 2.825 '
-        '1.175T19.3 12.85q1.55.175 2.625 1.3T23 16.7q0 1.5-1.05 '
-        '2.55T19.4 20H6.5Z"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["open_meteo", "location"]
     size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=32)
     global_config_schema: ClassVar[dict[str, Any]] = {}

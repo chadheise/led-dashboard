@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image, ImageDraw
@@ -46,11 +47,7 @@ class StocksApp(DisplayApp):
         "Live prices and % change from Yahoo Finance — marquee, paginated, or chart view, "
         "with per-row data streams and company logos"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<polyline points="3,18 8,11 13,14 20,5"/><polyline points="16,5 20,5 20,9"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["yahoo_finance", "text_renderer"]
     size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=32)
     global_config_schema: ClassVar[dict[str, Any]] = {}

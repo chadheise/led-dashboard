@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -38,12 +39,7 @@ class CanvasUtilsLibrary(Library):
     id: ClassVar[str] = "canvas_utils"
     name: ClassVar[str] = "Canvas Utils"
     description: ClassVar[str] = "Low-level utilities for compositing PIL images onto the LED canvas"
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<rect x="3" y="3" width="18" height="18" rx="2"/>'
-        '<path d="M3 9h18M9 21V9"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     global_config_schema: ClassVar[dict[str, Any]] = {}
 
     blit = staticmethod(blit)

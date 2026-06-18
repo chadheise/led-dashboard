@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -299,12 +300,7 @@ class LayoutLibrary(Library):
         "Measured layout primitives — regions, anchored placement with overflow "
         "detection, and exact text fitting — for pixel-precise app screens"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<rect x="3" y="3" width="18" height="18" rx="2"/>'
-        '<path d="M3 15h18M9 3v12"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     global_config_schema: ClassVar[dict[str, Any]] = {}
 
     Region = Region

@@ -5,6 +5,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -188,11 +189,7 @@ class FlightTrackerApp(DisplayApp):
         "Track specific flight(s) by number and date — schedule, on-time/delay "
         "status, and live position via FlightAware AeroAPI + OpenSky Network"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M2 16l20-8-7 7 2 7-4-3-4 3 1-7-8-2z"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location"]
     global_config_schema: ClassVar[dict[str, Any]] = {}
     config_schema: ClassVar[dict[str, Any]] = {

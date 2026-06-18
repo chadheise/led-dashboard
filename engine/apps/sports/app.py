@@ -81,15 +81,7 @@ class SportsApp(DisplayApp):
         "Live scores from the ESPN API — NFL, NBA, MLB, NHL, soccer, and more, "
         "rotating through active and upcoming games"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M7 3v8a5 5 0 0010 0V3H7z"/>'
-        '<path d="M7 6H5a1.5 1.5 0 000 3h2"/>'
-        '<path d="M17 6h2a1.5 1.5 0 010 3h-2"/>'
-        '<line x1="12" y1="16" x2="12" y2="20"/>'
-        '<line x1="9" y1="20" x2="15" y2="20"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["espn_sports", "location"]
     # The tiered card layouts adapt down to a scores-only view below 48px wide
     # and a compact two-row view at 32px tall.

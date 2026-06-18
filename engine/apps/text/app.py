@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, ClassVar
 
 from PIL import Image
@@ -15,7 +16,7 @@ class TextApp(DisplayApp):
     id: ClassVar[str] = "text"
     name: ClassVar[str] = "Text Display"
     description: ClassVar[str] = "Show a static or scrolling message in any color and font size"
-    icon: ClassVar[str] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="10" x2="16" y2="10"/><line x1="3" y1="14" x2="21" y2="14"/><line x1="3" y1="18" x2="12" y2="18"/></svg>'
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Text Display",

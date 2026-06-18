@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo
 
@@ -146,12 +147,7 @@ class CountdownApp(DisplayApp):
         "world-holiday catalog (with selectable graphics for popular ones) or "
         "set your own name, date, and colors"
     )
-    icon: ClassVar[str] = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-        'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        '<path d="M6 2h12M6 22h12"/>'
-        '<path d="M7 2c0 4 4 6 5 8 1-2 5-4 5-8M7 22c0-4 4-6 5-8 1 2 5 4 5 8"/></svg>'
-    )
+    icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["holidays", "location"]
     size_constraints: ClassVar[SizeConstraints] = SizeConstraints(min_width=64, min_height=32)
     global_config_schema: ClassVar[dict[str, Any]] = {}

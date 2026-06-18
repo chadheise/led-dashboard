@@ -56,6 +56,7 @@ interface AppInfo {
   id: string;
   name: string;
   description: string;
+  icon: string;
   schema: Schema;
 }
 
@@ -141,7 +142,7 @@ function AppCardGrid({
               style={appCardStyle(sel, hov)}
             >
               <div style={{ color: sel ? C.sage : C.textMuted, flexShrink: 0 }}>
-                <AppIcon appId={app.id} size={28} />
+                <AppIcon icon={app.icon} size={28} />
               </div>
               <div
                 style={{
@@ -464,7 +465,7 @@ export default function Modules() {
               }}
             >
               <div style={{ color: C.sage }}>
-                <AppIcon appId={fAppId} size={22} />
+                <AppIcon icon={apps.find(a => a.id === fAppId)?.icon ?? ''} size={22} />
               </div>
               <h2
                 style={{
@@ -510,7 +511,7 @@ export default function Modules() {
                       marginBottom: 8,
                     }}
                   >
-                    <AppIcon appId={app.id} size={14} />
+                    <AppIcon icon={app.icon} size={14} />
                     {app.name.toUpperCase()}
                   </div>
                   {items.map((m) => (

@@ -218,7 +218,7 @@ export default function Settings() {
   const selectedApp = nav?.kind === "app" ? apps.find((a) => a.id === nav.id) : null;
   const selectedLib = nav?.kind === "library" ? libraries.find((l) => l.id === nav.id) : null;
 
-  const cardGrid = (items: { id: string; name: string; description: string }[], onClick: (id: string) => void) => (
+  const cardGrid = (items: { id: string; name: string; description: string; icon: string }[], onClick: (id: string) => void) => (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8 }}>
       {items.map((item) => (
         <button
@@ -230,7 +230,7 @@ export default function Settings() {
           style={appCardStyle(false, hovered === item.id)}
         >
           <div style={{ color: C.textMuted, flexShrink: 0 }}>
-            <AppIcon appId={item.id} size={28} />
+            <AppIcon icon={item.icon} size={28} />
           </div>
           <div style={{ fontSize: F.size.md, fontFamily: F.family, color: C.textSecondary }}>
             {item.name}
@@ -259,7 +259,7 @@ export default function Settings() {
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
               <div style={{ color: C.sage }}>
-                <AppIcon appId={nav.id} size={22} />
+                <AppIcon icon={selectedApp.icon} size={22} />
               </div>
               <h2 style={{ ...headingStyle, color: C.textPrimary, fontSize: F.size.md }}>
                 {selectedApp.name}
@@ -322,7 +322,7 @@ export default function Settings() {
                           transition: "background 0.15s",
                         }}
                       >
-                        <AppIcon appId={id} size={14} />
+                        <AppIcon icon={lib?.icon ?? ''} size={14} />
                         {lib?.name ?? id}
                         <span style={{ color: C.textMuted, fontSize: "0.9em" }}>→</span>
                       </button>
@@ -344,7 +344,7 @@ export default function Settings() {
 
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
               <div style={{ color: C.sage }}>
-                <AppIcon appId={nav.id} size={22} />
+                <AppIcon icon={selectedLib.icon} size={22} />
               </div>
               <h2 style={{ ...headingStyle, color: C.textPrimary, fontSize: F.size.md }}>
                 {selectedLib.name}
