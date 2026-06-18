@@ -4,7 +4,7 @@ Real logos cannot be fetched at test time (no network), so each fixture game's
 ``*_logo_url`` is mapped to an image from one of two sources:
 
 1. A committed PNG at ``tests/fixtures/logos/{league}/{ABBR}.png`` (preferred —
-   downloaded once with ``python -m tests.snaptest.fetch_fixture_logos`` and
+   downloaded once with ``python -m tests.framework.fetch_fixture_logos`` and
    checked in so contact sheets look realistic).
 2. A generated placeholder: a team-colored shield with the first letter of the
    abbreviation. Pure PIL, seeded only by its inputs, so output is stable.

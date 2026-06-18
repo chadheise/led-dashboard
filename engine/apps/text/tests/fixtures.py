@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.snaptest import harness
+from tests.framework import harness
 
 
 def _mid_scroll(app: Any) -> None:

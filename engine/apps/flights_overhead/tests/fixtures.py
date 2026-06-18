@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from tests.snaptest import harness
-from tests.snaptest.logos import make_fixture_logo
+from tests.framework import harness
+from tests.framework.logos import make_fixture_logo
 
 # ── Flights (one per distinct ADS-B category icon) ────────────────────────────
 

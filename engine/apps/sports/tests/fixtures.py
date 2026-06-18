@@ -12,12 +12,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tests.snaptest import harness
-from tests.snaptest.logos import fixture_logos
+from tests.framework import harness
+from tests.framework.logos import fixture_logos
 
-_DEBUG_GAMES_PATH = (
-    Path(__file__).parent.parent.parent / "apps" / "sports" / "debug_games.json"
-)
+_DEBUG_GAMES_PATH = Path(__file__).parent.parent / "debug_games.json"
 
 # Sizes every fixture is rendered at: the realistic panel widths × both heights.
 CORE_SIZES = harness.CORE_SIZES

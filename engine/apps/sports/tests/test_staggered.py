@@ -62,7 +62,7 @@ def test_render_staggered_frame_never_repeats_a_game_on_screen():
     the same game in both slots (3 games, 2 slots/screen)."""
     from PIL import Image
 
-    from tests.fixtures.sports import _game
+    from apps.sports.tests.fixtures import _game
 
     games = [
         _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
@@ -128,7 +128,7 @@ def test_render_staggered_frame_single_game_uses_one_full_width_slot():
     width — not the same game repeated across all 4 slots."""
     from PIL import Image
 
-    from tests.fixtures.sports import _game
+    from apps.sports.tests.fixtures import _game
 
     games = [
         _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
@@ -167,7 +167,7 @@ def test_draw_games_single_game_uses_full_width():
     instead of being squeezed into one quarter-width slot."""
     from PIL import Image
 
-    from tests.fixtures.sports import _game
+    from apps.sports.tests.fixtures import _game
 
     games = [
         _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),
@@ -192,7 +192,7 @@ def test_draw_games_single_game_uses_full_width():
 
 
 def test_build_marquee_strip_single_game_full_width():
-    from tests.fixtures.sports import _game
+    from apps.sports.tests.fixtures import _game
 
     games = [
         _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"), ("BOS", "Boston", "Celtics"),

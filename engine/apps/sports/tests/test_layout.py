@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from tests.snaptest import harness
+from tests.framework import harness
 
 harness.load_suites()
 

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from tests.snaptest import harness
-from tests.snaptest.compare import assert_snapshot
+from tests.framework import harness
+from tests.framework.compare import assert_snapshot
 
 harness.load_suites()
 

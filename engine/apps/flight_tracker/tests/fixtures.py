@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from tests.snaptest import harness
+from tests.framework import harness
 
 _TRACKED_SCHEDULED: dict[str, Any] = {
     "found": True,

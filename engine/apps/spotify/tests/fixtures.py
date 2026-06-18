@@ -6,7 +6,7 @@ from typing import Any
 
 from PIL import Image
 
-from tests.snaptest import harness
+from tests.framework import harness
 
 _TRACK = {
     "title": "Bohemian Rhapsody",

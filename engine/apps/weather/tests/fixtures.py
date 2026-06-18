@@ -10,8 +10,8 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
-from tests.snaptest import harness
-from tests.snaptest.clock import FIXED_NOW
+from tests.framework import harness
+from tests.framework.clock import FIXED_NOW
 
 _HOURLY_CODES = [0, 0, 1, 1, 2, 2, 3, 61, 61, 80, 2, 1, 0, 0, 1, 2, 3, 3, 95, 61, 71, 71, 2, 1]
 _DAILY_CODES = [0, 2, 61, 71, 95, 3, 1]

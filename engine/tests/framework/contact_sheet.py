@@ -5,7 +5,7 @@ Renders every fixture at every suite width for one height, arranged as a grid
 stays visible. Output goes to ``tests/output/{app}_h{height}.png``.
 
 Usage (from the engine/ directory):
-    PYTHONPATH=. python -m tests.snaptest.contact_sheet --app sports --scale 3
+    PYTHONPATH=. python -m tests.framework.contact_sheet --app sports --scale 3
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 from PIL import Image
 
 from libraries.text_renderer.library import render_text
-from tests.snaptest import harness
+from tests.framework import harness
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
 

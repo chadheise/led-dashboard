@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.snaptest import harness
-from tests.snaptest.logos import make_fixture_logo
+from tests.framework import harness
+from tests.framework.logos import make_fixture_logo
 
 _QUOTES = [
     {"symbol": "AAPL", "price": 150.23, "change_pct": 2.5, "dollar_change": 3.75},

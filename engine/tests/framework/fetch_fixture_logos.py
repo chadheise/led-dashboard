@@ -6,7 +6,7 @@ the same target size the app caches at (fits within 64x64), and writes it to
 the network: any logo missing here falls back to a generated placeholder.
 
 Usage (from the engine/ directory):
-    PYTHONPATH=. python -m tests.snaptest.fetch_fixture_logos --app sports
+    PYTHONPATH=. python -m tests.framework.fetch_fixture_logos --app sports
 """
 
 from __future__ import annotations
@@ -17,8 +17,8 @@ import io
 import httpx
 from PIL import Image
 
-from tests.snaptest import harness
-from tests.snaptest.logos import LOGO_FIXTURE_DIR, LOGO_SIZE
+from tests.framework import harness
+from tests.framework.logos import LOGO_FIXTURE_DIR, LOGO_SIZE
 
 
 def _scale_down(img: Image.Image, max_size: int) -> Image.Image:

@@ -45,15 +45,15 @@ _REGISTRY: dict[str, SnapshotSuite] = {}
 
 # Modules that register suites on import. Future apps append here.
 _SUITE_MODULES = [
-    "tests.fixtures.sports",
-    "tests.fixtures.stocks",
-    "tests.fixtures.text",
-    "tests.fixtures.flights_overhead",
-    "tests.fixtures.flight_tracker",
-    "tests.fixtures.spotify",
-    "tests.fixtures.weather",
-    "tests.fixtures.countdown",
-    "tests.fixtures.world_clock",
+    "apps.sports.tests.fixtures",
+    "apps.stocks.tests.fixtures",
+    "apps.text.tests.fixtures",
+    "apps.flights_overhead.tests.fixtures",
+    "apps.flight_tracker.tests.fixtures",
+    "apps.spotify.tests.fixtures",
+    "apps.weather.tests.fixtures",
+    "apps.countdown.tests.fixtures",
+    "apps.world_clock.tests.fixtures",
 ]
 
 
@@ -110,7 +110,7 @@ def app_case_render(
     """
     from contextlib import nullcontext
 
-    from tests.snaptest.clock import frozen_time
+    from tests.framework.clock import frozen_time
 
     def _render(case: Any, w: int, h: int) -> RenderResult:
         ctx = frozen_time(freeze_datetime) if freeze_datetime else nullcontext()

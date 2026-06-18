@@ -20,7 +20,7 @@ _DIFF_COLOR = (255, 0, 255)
 
 
 def snapshot_path(app_id: str, name: str) -> Path:
-    return ENGINE_DIR / "apps" / app_id / "tests" / "snapshots" / f"{name}.png"
+    return ENGINE_DIR / "apps" / app_id / "tests" / "snapshots" / app_id / f"{name}.png"
 
 
 def _write_diff_artifacts(name: str, expected: Image.Image, actual: Image.Image) -> Path:

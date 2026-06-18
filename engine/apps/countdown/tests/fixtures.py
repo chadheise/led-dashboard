@@ -9,8 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from tests.snaptest import harness
-from tests.snaptest.clock import FIXED_NOW
+from tests.framework import harness
+from tests.framework.clock import FIXED_NOW
 
 _JULY4 = datetime(2026, 7, 4, 0, 0, tzinfo=timezone.utc)
 _HALLOWEEN = datetime(2026, 10, 31, 0, 0, tzinfo=timezone.utc)

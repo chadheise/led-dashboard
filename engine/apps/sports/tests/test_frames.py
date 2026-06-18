@@ -10,9 +10,9 @@ from typing import Any
 
 import pytest
 
-from tests.snaptest import harness
-from tests.snaptest.compare import assert_snapshot
-from tests.snaptest.logos import fixture_logos_for_games
+from tests.framework import harness
+from tests.framework.compare import assert_snapshot
+from tests.framework.logos import fixture_logos_for_games
 
 harness.load_suites()
 
