@@ -285,7 +285,7 @@ Fetches live and recent game scores from the public ESPN API. Supports all major
 
 ### `libraries/flightaware/` — FlightAware AeroAPI
 
-Optional flight enrichment via the FlightAware AeroAPI (requires a free or paid API key). Given a flight callsign or ICAO hex, `enrich_flights()` returns airline name, origin and destination airports, and aircraft type — used by Flights Overhead to augment raw OpenSky position data. `track_flight(ident, date)` looks up a single flight's schedule, on-time/delay status, and live position snapshot — used by Flight Tracker, with its own short-TTL cache since schedule data changes faster than routes. Both share the same monthly call budget.
+Optional flight enrichment via the FlightAware AeroAPI (requires a free or paid API key). Given a flight callsign or ICAO hex, `enrich_flights()` returns airline name, origin and destination airports, and aircraft type — used by Flights Overhead to augment raw OpenSky position data. `track_flight(ident, date, tz)` looks up a single flight's schedule, on-time/delay status, and live position snapshot — used by Flight Tracker, with its own short-TTL cache since schedule data changes faster than routes. The optional `tz` (the user's IANA timezone, from the location library) interprets `date` against each flight's UTC departure time so an evening flight isn't missed by an off-by-one date. Both share the same monthly call budget.
 
 ### `libraries/opensky/` — OpenSky Network
 

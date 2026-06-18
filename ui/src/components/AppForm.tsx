@@ -4,6 +4,7 @@ import DurationInput from './DurationInput'
 import MultiPicker from './MultiPicker'
 import TeamPicker from './TeamPicker'
 import StreamList from './StreamList'
+import FlightList from './FlightList'
 
 // ── Schema types ───────────────────────────────────────────────────────────────
 
@@ -29,7 +30,9 @@ interface SchemaProperty {
    *   'color'        Native color picker + hex field
    *   'datetime'     Native date+time picker; value is an ISO-ish "YYYY-MM-DDTHH:MM"
    *                  string, directly `datetime.fromisoformat`-parseable
+   *   'date'         Native date-only picker; value is a "YYYY-MM-DD" string
    *   'location'     Paired latitude / longitude fields (value: {latitude,longitude})
+   *   'flight-list'  List of {number,label} rows for the Flight Tracker app
    *   'multi-select' Checkbox group built from items.enum
    *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
    *   'duration'     Number + unit selector ({value, unit}); units from x-duration-units
@@ -106,6 +109,20 @@ function DateTimeInput({ title, value, onChange }: { title: string; value: unkno
       {title}
       <input
         type="datetime-local"
+        value={typeof value === 'string' ? value : ''}
+        onChange={e => onChange(e.target.value)}
+        style={fieldStyle}
+      />
+    </label>
+  )
+}
+
+function DateInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: string) => void }) {
+  return (
+    <label style={labelStyle}>
+      {title}
+      <input
+        type="date"
         value={typeof value === 'string' ? value : ''}
         onChange={e => onChange(e.target.value)}
         style={fieldStyle}
@@ -216,6 +233,38 @@ export default function AppForm({ schema, value, onChange }: Props) {
               title={title}
               value={v}
               onChange={dt => onChange({ ...value, [key]: dt })}
+            />
+          )
+        }
+
+        if (xType === 'date') {
+          return (
+            <DateInput
+              key={key}
+              title={title}
+              value={v}
+              onChange={d => onChange({ ...value, [key]: d })}
+            />
+          )
+        }
+
+        if (xType === 'flight-list') {
+          // Migrate legacy {flight_numbers[], label} configs for display so an
+          // instance saved before per-flight labels still shows its flights.
+          let flightsVal = v
+          if ((!Array.isArray(v) || v.length === 0) && Array.isArray(value.flight_numbers)) {
+            const legacyLabel = typeof value.label === 'string' ? value.label : ''
+            flightsVal = (value.flight_numbers as string[]).map((n, i) => ({
+              number: n,
+              label: i === 0 ? legacyLabel : '',
+            }))
+          }
+          return (
+            <FlightList
+              key={key}
+              title={title}
+              value={flightsVal}
+              onChange={flights => onChange({ ...value, [key]: flights })}
             />
           )
         }
