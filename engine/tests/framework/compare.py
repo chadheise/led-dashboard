@@ -12,15 +12,15 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
-TESTS_DIR = Path(__file__).parent.parent
-SNAPSHOT_DIR = TESTS_DIR / "snapshots"
+TESTS_DIR = Path(__file__).parent.parent        # engine/tests/
+ENGINE_DIR = Path(__file__).parent.parent.parent  # engine/
 DIFF_DIR = TESTS_DIR / "output" / "diff"
 
 _DIFF_COLOR = (255, 0, 255)
 
 
 def snapshot_path(app_id: str, name: str) -> Path:
-    return SNAPSHOT_DIR / app_id / f"{name}.png"
+    return ENGINE_DIR / "apps" / app_id / "tests" / "snapshots" / f"{name}.png"
 
 
 def _write_diff_artifacts(name: str, expected: Image.Image, actual: Image.Image) -> Path:

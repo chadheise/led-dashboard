@@ -24,8 +24,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))  # engine/ — run from an
 from apps.sports.app import _ANIM_FPS, _ANIM_FRAMES
 from apps.sports.cards import render_card
 from apps.sports.model import CelebrationView, build_game_view
-from tests.fixtures.sports import all_fixtures
-from tests.snaptest.logos import fixture_logos
+from apps.sports.tests.fixtures import all_fixtures
+from tests.framework.logos import fixture_logos
 
 _CASES = [
     "soccer_goal_celebration",
