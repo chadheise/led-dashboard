@@ -23,9 +23,51 @@ const ICONS: Record<string, React.ReactElement> = {
       <line x1={12} y1={16} x2={12} y2={20} /><line x1={9} y1={20} x2={15} y2={20} />
     </svg>
   ),
-  flights: (
+  flights_overhead: (
     <svg {...S} viewBox="0 0 24 24" fill="currentColor">
       <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 00-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" />
+    </svg>
+  ),
+  flight_tracker: (
+    // Side-view plane following a dashed flight path — distinct from the
+    // overhead (upward) plane used for flights_overhead.
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 21c1.5-6 5-11 11-13" strokeDasharray="0.5 3.5" />
+      <path d="M22 2l-8 3-2.5-1.6a.6.6 0 00-.8.2l-.3.5a.6.6 0 00.2.8L13 7l-1.5 2.5-2-.3a.6.6 0 00-.6.3l-.2.4a.6.6 0 00.1.7L11 13l1.4 2.2a.6.6 0 00.7.2l.4-.2a.6.6 0 00.3-.6l-.3-2L16 11l1.8 2.2a.6.6 0 00.8.2l.5-.3a.6.6 0 00.2-.8L17.7 10z" />
+    </svg>
+  ),
+  debug: (
+    // Bug
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="m8 2 1.88 1.88" /><path d="M14.12 3.88 16 2" />
+      <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" />
+      <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6" />
+      <path d="M12 20v-9" /><path d="M6.53 9C4.6 8.8 3 7.1 3 5" /><path d="M6 13H2" />
+      <path d="M3 21c0-2.1 1.7-3.9 3.8-4" /><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4" />
+      <path d="M22 13h-4" /><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" />
+    </svg>
+  ),
+  countdown: (
+    // Timer
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <line x1={10} y1={2} x2={14} y2={2} /><line x1={12} y1={14} x2={15} y2={11} />
+      <circle cx={12} cy={14} r={8} />
+    </svg>
+  ),
+  weather: (
+    // Sun behind cloud
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="M20 12h2" />
+      <path d="m19.07 4.93-1.41 1.41" /><path d="M15.947 12.65a4 4 0 0 0-5.925-4.128" />
+      <path d="M13 22H7a5 5 0 1 1 4.9-6H13a3 3 0 0 1 0 6Z" />
+    </svg>
+  ),
+  world_clock: (
+    // Globe
+    <svg {...S} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx={12} cy={12} r={10} />
+      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+      <path d="M2 12h20" />
     </svg>
   ),
   spotify: (
