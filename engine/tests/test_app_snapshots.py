@@ -15,7 +15,16 @@ from tests.snaptest.compare import assert_snapshot
 
 harness.load_suites()
 
-_APP_IDS = ["stocks", "text", "flights", "spotify", "weather", "countdown", "world_clock"]
+_APP_IDS = [
+    "stocks",
+    "text",
+    "flights_overhead",
+    "flight_tracker",
+    "spotify",
+    "weather",
+    "countdown",
+    "world_clock",
+]
 
 CASES = [
     (app_id, fixture_id, w, h)

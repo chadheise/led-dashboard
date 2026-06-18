@@ -1,4 +1,4 @@
-"""Flights snapshot suite: card and table modes, with/without enrichment."""
+"""Flights Overhead snapshot suite: card and table modes, with/without enrichment."""
 
 from __future__ import annotations
 
@@ -289,14 +289,14 @@ def _fixtures() -> dict[str, dict[str, Any]]:
 
 
 def _register() -> None:
-    from apps.flights.app import FlightsApp
+    from apps.flights_overhead.app import FlightsOverheadApp
 
     harness.register(
         harness.SnapshotSuite(
-            app_id="flights",
+            app_id="flights_overhead",
             fixtures=_fixtures(),
             sizes=harness.CORE_SIZES,
-            render=harness.app_case_render(FlightsApp),
+            render=harness.app_case_render(FlightsOverheadApp),
         )
     )
 
