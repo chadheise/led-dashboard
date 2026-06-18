@@ -20,7 +20,7 @@ from libraries.flightaware.library import FlightAwareLibrary
 from libraries.location.library import LocationLibrary
 
 _UNIT_CYCLE_S: float = 4.0
-_GATED_PHASES = ("unknown", "approaching", "active", "recently_landed")
+_GATED_PHASES = ("unknown", "not_found", "approaching", "active", "recently_landed")
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -208,16 +208,11 @@ class FlightTrackerApp(DisplayApp):
                     "properties": {
                         "number": {"type": "string", "default": ""},
                         "label": {"type": "string", "default": ""},
+                        "date": {"type": "string", "default": "", "x-input-type": "date"},
                     },
                 },
                 "maxItems": 5,
-                "default": [{"number": "", "label": ""}],
-            },
-            "date": {
-                "type": "string",
-                "title": "Flight date",
-                "x-input-type": "date",
-                "default": "",
+                "default": [{"number": "", "label": "", "date": ""}],
             },
             "display_mode": {
                 "type": "string",
@@ -278,6 +273,7 @@ class FlightTrackerApp(DisplayApp):
         self._tracked: dict[str, dict[str, Any]] = {}
         self._live_overrides: dict[str, dict[str, Any]] = {}
         self._next_poll_due: dict[str, float] = {}
+        self._last_flight_dates: dict[str, str | None] = {}
         self._fetched_once: bool = False
         self._card_idx: int = 0
         self._card_last_ts: float = 0.0
@@ -294,13 +290,14 @@ class FlightTrackerApp(DisplayApp):
     # ── Config helpers ─────────────────────────────────────────────────────────
 
     def _flights(self) -> list[dict[str, str]]:
-        """Ordered, normalized list of {number, label} for each configured flight.
+        """Ordered, normalized list of {number, label, date} for each configured flight.
 
         Reads the current ``flights`` array-of-objects, falling back to the
         legacy ``flight_numbers`` (list[str]) + ``label`` (str) config so module
         instances saved before per-flight labels keep working. Flight numbers
         are normalized (whitespace-stripped, uppercased); blanks are dropped and
-        the list is capped at 5.
+        the list is capped at 5. Migrates the legacy global ``date`` field as a
+        fallback for per-flight dates not yet set.
         """
         raw = self.config.get("flights")
         if not isinstance(raw, list) or not raw:
@@ -308,9 +305,14 @@ class FlightTrackerApp(DisplayApp):
             numbers = self.config.get("flight_numbers") or []
             legacy_label = str(self.config.get("label", "") or "")
             raw = [
-                {"number": n, "label": legacy_label if i == 0 else ""}
+                {"number": n, "label": legacy_label if i == 0 else "", "date": ""}
                 for i, n in enumerate(numbers)
             ]
+
+        # Migrate old global date as fallback for flights without a per-flight date.
+        global_date = str(self.config.get("date", "") or "").strip()
+        if global_date and "T" in global_date:
+            global_date = global_date.split("T")[0]
 
         flights: list[dict[str, str]] = []
         for item in raw:
@@ -319,7 +321,16 @@ class FlightTrackerApp(DisplayApp):
             number = _normalize_ident(str(item.get("number", "") or ""))
             if not number:
                 continue
-            flights.append({"number": number, "label": str(item.get("label", "") or "")})
+            date = str(item.get("date", "") or "").strip()
+            if not date and global_date:
+                date = global_date
+            if date and "T" in date:
+                date = date.split("T")[0]
+            flights.append({
+                "number": number,
+                "label": str(item.get("label", "") or ""),
+                "date": date,
+            })
         return flights[:5]
 
     def _flight_numbers(self) -> list[str]:
@@ -328,10 +339,6 @@ class FlightTrackerApp(DisplayApp):
     def _labels(self) -> dict[str, str]:
         """Map of flight number → its label (last one wins on duplicates)."""
         return {f["number"]: f["label"] for f in self._flights()}
-
-    def _date(self) -> str | None:
-        raw = str(self.config.get("date", "") or "").strip()
-        return raw.split("T")[0] if raw else None
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
@@ -343,8 +350,23 @@ class FlightTrackerApp(DisplayApp):
         if not self._is_active:
             return
 
-        flight_numbers = self._flight_numbers()
-        date = self._date()
+        if not self._flightaware.has_api_key:
+            self._fetched_once = True
+            return
+
+        flights = self._flights()
+        flight_numbers = [f["number"] for f in flights]
+        flight_date_map = {f["number"]: f["date"] or None for f in flights}
+
+        # Clear stale tracked state when a flight's date config changes so the
+        # old phase (e.g. "far_past" from a previous day's instance) doesn't
+        # block re-polling for the new date.
+        for fn, new_date in flight_date_map.items():
+            if fn in self._last_flight_dates and self._last_flight_dates[fn] != new_date:
+                self._tracked.pop(fn, None)
+                self._next_poll_due.pop(fn, None)
+        self._last_flight_dates = dict(flight_date_map)
+
         tz = self._location.get_timezone()
         tier = self._flightaware.budget_tier
         now_mono = time.monotonic()
@@ -358,7 +380,7 @@ class FlightTrackerApp(DisplayApp):
 
         if to_poll:
             results = await asyncio.gather(
-                *[self._flightaware.track_flight(fn, date, tz) for fn in to_poll],
+                *[self._flightaware.track_flight(fn, flight_date_map.get(fn), tz) for fn in to_poll],
                 return_exceptions=True,
             )
             for fn, result in zip(to_poll, results):
@@ -451,7 +473,10 @@ class FlightTrackerApp(DisplayApp):
         label = self._labels().get(fn, "")
 
         if kind == "not_found":
-            draw_status_message(self.canvas, f"{fn}: not available")
+            if tracked is None and not self._flightaware.has_api_key:
+                draw_status_message(self.canvas, "Add FlightAware API key in settings")
+            else:
+                draw_status_message(self.canvas, f"{fn}: not available")
             return
 
         assert tracked is not None

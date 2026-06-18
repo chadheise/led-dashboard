@@ -601,6 +601,10 @@ class FlightAwareLibrary(Library):
             logger.warning("FlightAware: budget load failed: %s", exc)
 
     @property
+    def has_api_key(self) -> bool:
+        return bool(self._config.get("flightaware_api_key", "").strip())
+
+    @property
     def budget_tier(self) -> str:
         limit = self._budget_limit
         ratio = self._budget_calls / limit
@@ -1065,8 +1069,22 @@ def _select_flight_instance(
 
     if date is None:
         candidates = [f for f in flights if not f.get("cancelled")]
-        candidates.sort(key=lambda f: f.get("scheduled_off") or "")
-        return candidates[0] if candidates else None
+        if not candidates:
+            return None
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        # Priority 1: currently airborne (departed, not yet arrived)
+        active = [f for f in candidates if f.get("actual_off") and not f.get("actual_on")]
+        if active:
+            active.sort(key=lambda f: f.get("actual_off") or "", reverse=True)
+            return active[0]
+        # Priority 2: next upcoming departure (not yet departed)
+        upcoming = [f for f in candidates if not f.get("actual_off") and (f.get("scheduled_off") or "") >= now_iso[:10]]
+        if upcoming:
+            upcoming.sort(key=lambda f: f.get("scheduled_off") or "")
+            return upcoming[0]
+        # Priority 3: most recently completed
+        candidates.sort(key=lambda f: f.get("scheduled_off") or "", reverse=True)
+        return candidates[0]
 
     # Exact match on the flight's local departure date.
     for flight in flights:

@@ -3,6 +3,7 @@ import { C, F, fieldStyle, labelStyle } from '../theme'
 interface Flight {
   number: string
   label?: string
+  date?: string
 }
 
 interface Props {
@@ -48,7 +49,7 @@ const removeBtnStyle: React.CSSProperties = {
   alignSelf: 'flex-end',
 }
 
-const DEFAULT_FLIGHT: Flight = { number: '', label: '' }
+const DEFAULT_FLIGHT: Flight = { number: '', label: '', date: '' }
 
 export default function FlightList({ title, value, onChange }: Props) {
   const flights: Flight[] = Array.isArray(value) && (value as Flight[]).length > 0
@@ -103,6 +104,17 @@ export default function FlightList({ title, value, onChange }: Props) {
               value={flight.label ?? ''}
               onChange={e => update(idx, { label: e.target.value })}
               placeholder="Mom's flight"
+              style={fieldStyle}
+            />
+          </label>
+
+          <label style={labelStyle}>
+            Date{' '}
+            <span style={{ color: C.textDim, fontSize: F.size.xs }}>(optional)</span>
+            <input
+              type="date"
+              value={flight.date ?? ''}
+              onChange={e => update(idx, { date: e.target.value })}
               style={fieldStyle}
             />
           </label>
