@@ -16,8 +16,8 @@ python3 -m venv .venv
 
 ```bash
 cd engine
-../.venv/bin/python -m pytest                     # full suite
-../.venv/bin/python -m pytest --snapshot-update   # re-bless goldens after an intentional visual change
+.venv/bin/python -m pytest                     # full suite (~3000 tests)
+.venv/bin/python -m pytest --snapshot-update   # re-bless goldens after an intentional visual change
 ```
 
 On a snapshot mismatch the failure message points at
@@ -29,7 +29,7 @@ delta is reviewable in the git diff.
 
 ```bash
 cd engine
-PYTHONPATH=. ../.venv/bin/python -m tests.snaptest.contact_sheet --app sports --scale 3
+PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --scale 3
 ```
 
 Writes `tests/output/sports_h32.png` / `sports_h64.png`: every fixture
@@ -38,7 +38,7 @@ visible. Always renders live code (not the goldens).
 
 ## Layout structure tests
 
-`test_sports_layout.py` asserts on the `PlacedBox` audit trail every card
+`apps/sports/tests/test_layout.py` asserts on the `PlacedBox` audit trail every card
 render produces (via `libraries/layout`): no overlapping elements, nothing
 clipped or out of bounds, required elements present per tier, and the score
 at least as prominent as the team name. These hold for any new fixture
@@ -47,28 +47,32 @@ ones.
 
 ## Test data
 
-- `tests/fixtures/sports.py` — all dev-UI debug games plus stress fixtures
-  (near-black colors, 3-digit OT scores, bases loaded, goal overflow,
-  missing logos, ...). Add new cases here.
-- `tests/fixtures/{stocks,text,flights,spotify,weather,countdown,world_clock}.py`
-  — one suite per app covering every display mode/config variant (e.g. stocks
-  marquee 1/2-row, paginate N-up, chart splits) plus empty/loading states,
-  run through `test_app_snapshots.py`. Apps whose frames depend on the
-  current time (weather, countdown, world clock) are rendered with
-  `datetime.now()` frozen to `snaptest/clock.py::FIXED_NOW`.
-- Logos are deterministic generated placeholders (team-color shields/flags).
-  Optionally commit real PNGs to `tests/fixtures/logos/{league}/{ABBR}.png`
-  (run `python -m tests.snaptest.fetch_fixture_logos` on a machine with
-  network access); they take precedence and tests must then be re-blessed.
+Tests are co-located with their apps and libraries:
+
+- `apps/{app}/tests/fixtures.py` — fixture payloads for the app's snapshot suite
+- `apps/{app}/tests/snapshots/{app}/` — committed golden PNGs
+- `apps/{app}/tests/test_snapshots.py` — parametrized snapshot runner
+- `apps/{app}/tests/test_*.py` — other app-specific tests
+- `libraries/{lib}/tests/test_*.py` — library unit tests
+- `tests/framework/` — shared harness, comparison, clock, logo utilities
+
+Apps whose frames depend on the current time (weather, countdown, world clock) are
+rendered with `datetime.now()` frozen to `tests/framework/clock.py::FIXED_NOW`.
+
+Logos are deterministic generated placeholders (team-color shields/flags).
+Optionally commit real PNGs to `apps/sports/tests/logos/{league}/{ABBR}.png`
+(run `python -m tests.framework.fetch_fixture_logos` on a machine with
+network access); they take precedence and tests must then be re-blessed.
 
 ## Adding snapshot coverage for another app
 
-1. Create `tests/fixtures/{app}.py` with fixture payloads
-   `{"config": {...}, "seed": callable | None}` — the seed injects the data
-   `fetch_data` would have fetched — and register:
+1. Create `apps/{app}/tests/__init__.py` (empty) and `apps/{app}/tests/fixtures.py`
+   with fixture payloads `{"config": {...}, "seed": callable | None}` — the seed
+   injects the data `fetch_data` would have fetched — and register:
    `harness.register(SnapshotSuite(app_id, fixtures, harness.CORE_SIZES,
    harness.app_case_render(AppCls, freeze_datetime=... )))`.
-2. Add the module to `_SUITE_MODULES` in `tests/snaptest/harness.py` and the
-   app id to `_APP_IDS` in `test_app_snapshots.py`.
-3. Run with `--snapshot-update` to create the goldens, review the contact
-   sheet (`python -m tests.snaptest.contact_sheet --app {app}`), and commit.
+2. Add the module to `_SUITE_MODULES` in `tests/framework/harness.py`.
+3. Create `apps/{app}/tests/test_snapshots.py` following the pattern of any
+   existing per-app test file.
+4. Run with `--snapshot-update` to create the goldens, review the contact
+   sheet (`python -m tests.framework.contact_sheet --app {app}`), and commit.

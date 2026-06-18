@@ -27,12 +27,31 @@ engine/              Python backend (FastAPI + async render loop)
   scene_manager.py     Playlist rotation + per-app fetch loops + render cadence
   state.py             Persists modules/playlists/configs to data/state.json
   config.yaml          Display size, fps, server port, hardware/panel layout
+  conftest.py          Pytest fixtures (snapshot_update flag) — visible to all tests
   apps/                One package per display app; registered in apps/__init__.py
+    {app}/
+      app.py           DisplayApp subclass
+      icon.svg         App icon (served by API; rendered by UI)
+      tests/           Co-located tests, fixtures, and golden PNGs
+        fixtures.py    Snapshot suite registration + fixture payloads
+        snapshots/     Golden PNGs at apps/{app}/tests/snapshots/{app}/
+        test_snapshots.py
+        test_*.py      Other app-specific tests
   libraries/           Shared integrations + rendering (text_renderer, layout,
                        espn_sports, open_meteo, yahoo_finance, opensky, …)
+    {lib}/
+      library.py
+      icon.svg
+      tests/           Only for libs that have tests
   canvas/              base.py (Canvas ABC), simulator.py, hardware.py
   api/                 FastAPI server.py, routes.py, websocket.py
-  tests/               pytest suite + golden-snapshot framework (see below)
+  tests/               Engine-level integration tests + snapshot framework
+    framework/         Snapshot harness, comparison, clock, logo utilities
+    output/            Gitignored transient diffs and contact sheets
+    test_routes_reload.py
+    test_startup_resume.py
+    test_location_timezone_fallback.py
+    test_library_status.py
 ui/                  React + Vite + TypeScript control panel (src/main.tsx)
 system_scripts/      Pi startup orchestration (start.sh) + systemd units
 .claude/             SessionStart hook that installs deps (committed)
@@ -62,7 +81,7 @@ cd ui && npm install
 
 ```bash
 # Engine on :8000 (simulator). HOT_RELOAD watches apps/ + libraries/.
-cd engine && HOT_RELOAD=true ../.venv/bin/python main.py
+cd engine && HOT_RELOAD=true .venv/bin/python main.py
 # UI on :3000, proxies /api and /ws to :8000
 cd ui && npm run dev
 ```
@@ -73,31 +92,31 @@ Env vars: `CANVAS` (`hardware` to use panels; default simulator), `HOT_RELOAD`,
 ## Testing
 
 pytest, fully offline (no network). Config: `engine/pytest.ini`
-(`testpaths=tests`, `pythonpath=.`). **Run from the `engine/` directory:**
+(`testpaths = tests apps libraries`, `pythonpath=.`). **Run from the `engine/` directory:**
 
 ```bash
 cd engine
-../.venv/bin/python -m pytest            # full suite (~3000 tests)
-../.venv/bin/python -m pytest tests/test_app_snapshots.py   # one module
+.venv/bin/python -m pytest            # full suite (~3000 tests)
+.venv/bin/python -m pytest apps/sports/tests/   # one app's tests
 ```
 
 Hardware is mocked by `canvas/simulator.py::SimulatorCanvas` (in-memory pixel
 buffer). Apps are rendered headless and fed mock data via fixture `seed`
 callables, so `fetch_data()` never runs in tests. Time-dependent apps render
-with `datetime.now()` frozen to `tests/snaptest/clock.py::FIXED_NOW`.
+with `datetime.now()` frozen to `tests/framework/clock.py::FIXED_NOW`.
 
 ### LED-display snapshot tests (read this before changing any render code)
 
 Visual output is locked by **golden PNGs** in
-`engine/tests/snapshots/{app_id}/{fixture_id}_{w}x{h}.png`, compared
-pixel-for-pixel. Any change to how an app draws will fail these tests until you
-re-bless the goldens. Workflow when you intentionally change the display:
+`engine/apps/{app_id}/tests/snapshots/{app_id}/{fixture_id}_{w}x{h}.png`,
+compared pixel-for-pixel. Any change to how an app draws will fail these tests
+until you re-bless the goldens. Workflow when you intentionally change the display:
 
 ```bash
 cd engine
-../.venv/bin/python -m pytest --snapshot-update     # re-bless goldens
+.venv/bin/python -m pytest --snapshot-update     # re-bless goldens
 # Review what changed before committing:
-PYTHONPATH=. ../.venv/bin/python -m tests.snaptest.contact_sheet --app sports --scale 3
+PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --scale 3
 #   -> writes tests/output/{app}_h32.png / _h64.png (every fixture × width, upscaled)
 ```
 
@@ -112,7 +131,7 @@ before the update, those byte-only changes are noise — `git checkout` them and
 only commit goldens that reflect a real visual change (confirm via the contact
 sheet / diff images).
 
-`tests/test_sports_layout.py` adds structural assertions (no overlap/clipping,
+`apps/sports/tests/test_layout.py` adds structural assertions (no overlap/clipping,
 required elements present) via the `libraries/layout` `PlacedBox` audit trail —
 these catch layout regressions that pixels alone might not.
 
@@ -123,10 +142,12 @@ for adding snapshot coverage to a new app and for the logo-fixture system.
 
 1. Create `engine/apps/<name>/app.py` with a `DisplayApp` subclass (set `id`,
    `name`, `config_schema`; implement async `fetch_data()` + `render_frame()`).
-2. Register it in `engine/apps/__init__.py` (`APP_REGISTRY`).
-3. Add a snapshot fixture suite per `engine/tests/README.md` ("Adding snapshot
-   coverage for another app"), generate goldens with `--snapshot-update`, review
-   the contact sheet, and commit.
+2. Add `engine/apps/<name>/icon.svg` with the app's SVG icon.
+3. Register it in `engine/apps/__init__.py` (`APP_REGISTRY`).
+4. Add a snapshot fixture suite per `engine/tests/README.md` ("Adding snapshot
+   coverage for another app"): create `apps/<name>/tests/__init__.py`,
+   `apps/<name>/tests/fixtures.py`, and `apps/<name>/tests/test_snapshots.py`;
+   generate goldens with `--snapshot-update`, review the contact sheet, and commit.
 
 Reuse existing helpers in `engine/libraries/` (e.g. `text_renderer` for fonts,
 `layout` for placement, `canvas_utils`) rather than re-implementing.
@@ -140,6 +161,9 @@ Reuse existing helpers in `engine/libraries/` (e.g. `text_renderer` for fonts,
 - `engine/data/state.json` is gitignored runtime state, created on first run —
   not code; don't commit it.
 - `engine/tests/output/` (diffs, contact sheets) is gitignored; goldens in
-  `engine/tests/snapshots/` ARE committed.
+  `engine/apps/{app}/tests/snapshots/` ARE committed.
 - Match the existing style of the file you're editing; bitmap fonts and assets
   under `engine/libraries/text_renderer/fonts/` ship with the repo.
+- **When making structural or behavioral changes** (new directories, renamed
+  commands, changed test patterns), update this file and `engine/tests/README.md`
+  to keep them accurate. They are the authoritative agent guide.
