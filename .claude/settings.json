@@ -1,4 +1,14 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -m pytest tests/)",
+      "Bash(cd *)",
+      "Bash(git *)",
+      "Bash(xargs -I{} sh -c 'git show {} -- engine/libraries/espn_sports/library.py 2>/dev/null | grep -l \"home_goals\\\\|own\" && echo {}')",
+      "Bash(.venv/bin/python -m pytest libraries/espn_sports/tests/test_espn_sports_library.py -v)",
+      "Bash(.venv/bin/python -m pytest apps/sports/tests/ -v)"
+    ]
+  },
   "hooks": {
     "SessionStart": [
       {
@@ -9,13 +19,6 @@
           }
         ]
       }
-    ]
-  },
-  "permissions": {
-    "allow": [
-      "Bash(.venv/bin/python -m pytest tests/)",
-      "Bash(cd *)",
-      "Bash(git *)"
     ]
   }
 }

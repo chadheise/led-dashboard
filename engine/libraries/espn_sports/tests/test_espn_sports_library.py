@@ -38,10 +38,10 @@ class _FakeClient:
         return _FakeResponse(self._data)
 
 
-def _competitor(home_away: str, abbr: str, score: str = "0", curated_rank: Any = None) -> dict[str, Any]:
+def _competitor(home_away: str, abbr: str, score: str = "0", curated_rank: Any = None, team_id: str = "") -> dict[str, Any]:
     return {
         "homeAway": home_away,
-        "team": {"abbreviation": abbr, "displayName": abbr},
+        "team": {"id": team_id, "abbreviation": abbr, "displayName": abbr},
         "score": score,
         "curatedRank": curated_rank,
     }
@@ -107,6 +107,61 @@ def test_fetch_league_skips_malformed_event_but_returns_others() -> None:
     games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "mlb"))
 
     assert [g["id"] for g in games] == ["good"]
+
+
+def _soccer_event(home_abbr: str, away_abbr: str, home_id: str, away_id: str,
+                  home_score: str, away_score: str, details: list[dict[str, Any]]) -> dict[str, Any]:
+    """Minimal ESPN event payload for a live soccer game with goal details."""
+    return {
+        "id": "99",
+        "status": {"type": {"shortDetail": "90'", "state": "in"}},
+        "competitions": [
+            {
+                "competitors": [
+                    _competitor("home", home_abbr, score=home_score, team_id=home_id),
+                    _competitor("away", away_abbr, score=away_score, team_id=away_id),
+                ],
+                "details": details,
+            }
+        ],
+    }
+
+
+def _goal_detail(team_id: str, clock: str, type_text: str = "Goal") -> dict[str, Any]:
+    return {
+        "type": {"text": type_text},
+        "clock": {"displayValue": clock},
+        "team": {"id": team_id},
+    }
+
+
+def test_own_goal_goes_to_benefiting_team() -> None:
+    """ESPN's team.id in a goal detail always points to the benefiting team,
+    even for own goals. An OG committed by AUS (home) benefits USA (away), so
+    ESPN sets team.id = USA's away_id. The goal must land in away_goals.
+    Bug: the OG assignment was previously inverted, inflating the committing
+    team's displayed score via the max(score, goal_count) reconciliation."""
+    from libraries.espn_sports.library import ESPNSportsLibrary
+
+    home_id, away_id = "10", "20"
+    # AUS (home) commits own goal → USA (away) benefits → ESPN: team.id = away_id
+    data = {"events": [_soccer_event(
+        "AUS", "USA", home_id, away_id,
+        home_score="0", away_score="2",
+        details=[
+            _goal_detail(away_id, "34'"),              # USA regular goal
+            _goal_detail(away_id, "55'", "Own Goal"),  # AUS own goal; ESPN team.id = USA (benefiting)
+            _goal_detail(away_id, "78'"),              # USA regular goal
+        ],
+    )]}
+
+    games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "fifa.world"))
+
+    assert len(games) == 1
+    game = games[0]
+    # All 3 goals (2 regular + 1 OG) benefit USA (away); AUS has no goals.
+    assert game["away_goals"] == ["34'", "55'(OG)", "78'"]
+    assert game["home_goals"] == []
 
 
 def test_flag_league_maps_saudi_arabia_to_flag() -> None:

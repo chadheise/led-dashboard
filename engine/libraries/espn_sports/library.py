@@ -563,9 +563,9 @@ class ESPNSportsLibrary(Library):
                         is_pk = "penalty" in d_type and not is_og
                         if is_og:
                             if scoring_id == ht_id:
-                                away_goals.append(f"{clock_val}(OG)")
-                            elif scoring_id == at_id:
                                 home_goals.append(f"{clock_val}(OG)")
+                            elif scoring_id == at_id:
+                                away_goals.append(f"{clock_val}(OG)")
                         elif is_pk:
                             if scoring_id == ht_id:
                                 home_goals.append(f"{clock_val}(PK)")
