@@ -35,6 +35,23 @@ npm run dev             # starts Vite on :5173, proxies /api and /ws to :8000
 
 Open `http://localhost:3000` to see the live simulator preview.
 
+## Testing
+
+Run the full test suite from the `engine/` directory:
+
+```bash
+cd engine
+.venv/bin/python -m pytest
+```
+
+To run just one app's tests:
+
+```bash
+.venv/bin/python -m pytest apps/sports/tests/
+```
+
+Tests are fully offline — no network calls, no hardware required. See `engine/tests/README.md` for details on the snapshot testing framework.
+
 ## Hardware mode (Raspberry Pi + HUB75)
 
 Hardware mode requires the `rpi-rgb-led-matrix` Python bindings, which are not on PyPI and must be compiled from source. `start.sh` handles this automatically — if the module is missing it clones the repo, builds, and installs it into the venv before starting the engine.

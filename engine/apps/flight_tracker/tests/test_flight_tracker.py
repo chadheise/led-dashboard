@@ -9,6 +9,7 @@ Covers the three behaviours that were buggy in real use:
 
 from __future__ import annotations
 
+import datetime
 from typing import Any
 
 from apps.flight_tracker.app import FlightTrackerApp
@@ -87,10 +88,15 @@ def test_date_match_returns_none_when_no_instance_within_tolerance():
 
 
 def test_no_date_picks_soonest_non_cancelled():
+    base = datetime.datetime.now(datetime.timezone.utc)
+
+    def future(days: int) -> str:
+        return (base + datetime.timedelta(days=days)).strftime("%Y-%m-%dT10:00:00Z")
+
     flights = [
-        {"scheduled_off": "2026-06-20T10:00:00Z", "cancelled": True},
-        {"scheduled_off": "2026-06-19T10:00:00Z"},
-        {"scheduled_off": "2026-06-21T10:00:00Z"},
+        {"scheduled_off": future(2), "cancelled": True},
+        {"scheduled_off": future(1)},
+        {"scheduled_off": future(3)},
     ]
     chosen = _select_flight_instance(flights, None)
     assert chosen is flights[1]
