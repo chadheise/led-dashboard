@@ -620,17 +620,25 @@ class SportsApp(DisplayApp):
                 self._stagger_slot_started_at[i] = now
                 self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + 1) % max(1, n_games)
 
-        card_w = self.canvas.width // n
         h = self.canvas.height
         w = self.canvas.width
         img = Image.new("RGB", (w, h), (0, 0, 0))
 
         game_indices = self._resolve_stagger_indices(n, n_games)
 
+        x_start = 0
+        if n > 1:
+            visible = [self._games[idx] for idx in game_indices]
+            logo, x_start = self._wc_logo_strip(visible, w, h)
+            if logo is not None:
+                img.paste(logo.convert("RGB"), (2, (h - logo.height) // 2), logo.split()[3])
+
+        card_w = (w - x_start) // n
+
         for i in range(n):
             game_idx = game_indices[i]
             game = self._games[game_idx]
-            x_off = i * card_w
+            x_off = x_start + i * card_w
             actual_w = card_w if i < n - 1 else w - x_off
             if i > 0:
                 ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))
@@ -687,14 +695,42 @@ class SportsApp(DisplayApp):
 
     # ── Drawing ────────────────────────────────────────────────────────────────
 
+    def _wc_logo_strip(
+        self, games: list[dict[str, Any]], w: int, h: int
+    ) -> tuple[Image.Image | None, int]:
+        """Return (logo_rgba, strip_width) for a screen-level WC logo panel.
+
+        Only fires when every slot in ``games`` is a FIFA World Cup game and
+        the screen is wide enough.  Single-slot layouts use (None, 0) because
+        the card renderer handles the logo internally at full card width.
+        """
+        if w < 192 or not all(g.get("league") == "fifa.world" for g in games):
+            return None, 0
+        from .cards import _wc_logo
+        _pad = 2
+        logo = _wc_logo(h - 2 * _pad)
+        if logo is None or _pad + logo.width >= w // 2:
+            return None, 0
+        return logo, _pad + logo.width + _pad
+
     def _draw_games(self, games: list[dict[str, Any]], n_cols: int) -> None:
         w, h = self.canvas.width, self.canvas.height
         img = Image.new("RGB", (w, h))
         n_cols = min(n_cols, max(1, len(games)))
-        slot_w = w // n_cols
+
+        # Multi-slot WC layouts: place the logo once at screen level so every
+        # slot gets an equal share of the remaining width.  Single-slot layouts
+        # let the card renderer handle the logo internally.
+        x_start = 0
+        if n_cols > 1:
+            logo, x_start = self._wc_logo_strip(games, w, h)
+            if logo is not None:
+                img.paste(logo.convert("RGB"), (2, (h - logo.height) // 2), logo.split()[3])
+
+        slot_w = (w - x_start) // n_cols
 
         for i, game in enumerate(games):
-            x_off = i * slot_w
+            x_off = x_start + i * slot_w
             actual_w = slot_w if i < n_cols - 1 else w - x_off
             if i > 0:
                 ImageDraw.Draw(img).line([(x_off, 0), (x_off, h - 1)], fill=(35, 35, 35))

@@ -19,6 +19,8 @@ harness.load_suites()
 _FRAME_CASES = [
     ("paginate_2up", 2, ["nfl_in_progress", "mlb_in_progress"]),
     ("paginate_4up", 4, ["nfl_in_progress", "mlb_in_progress", "nba_in_progress", "nhl_in_progress"]),
+    ("wc_2up", 2, ["fifa_wc_group_in_progress", "fifa_wc_knockout_in_progress"]),
+    ("wc_3up", 3, ["fifa_wc_group_in_progress", "fifa_wc_knockout_in_progress", "fifa_wc_halftime"]),
 ]
 
 
