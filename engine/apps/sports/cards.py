@@ -17,9 +17,12 @@ Tier map (w x h):
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from enum import Enum, auto
+from pathlib import Path
 
+import cairosvg
 from PIL import Image
 
 from libraries.layout.library import (
@@ -37,6 +40,25 @@ from .model import GameView, TeamView
 
 _GAP = 2
 _MARGIN = 1
+
+_WC_SVG_PATH = Path(__file__).parent / "world_cup_2026.svg"
+_wc_logo_cache: dict[int, Image.Image | None] = {}
+
+
+def _wc_logo(max_h: int) -> Image.Image | None:
+    h = max(4, max_h)
+    if h not in _wc_logo_cache:
+        try:
+            png = cairosvg.svg2png(url=str(_WC_SVG_PATH), output_height=h)
+            img = Image.open(io.BytesIO(png)).convert("RGBA")
+            # The SVG is a near-black mask (#010101 fill). Remap every rendered
+            # pixel to white, preserving the alpha for correct compositing.
+            white = Image.new("RGBA", img.size, (255, 255, 255, 255))
+            white.putalpha(img.split()[3])
+            _wc_logo_cache[h] = white
+        except Exception:
+            _wc_logo_cache[h] = None
+    return _wc_logo_cache[h]
 
 
 class Tier(Enum):
@@ -340,12 +362,29 @@ def _render_compact(frame: Frame, view: GameView) -> None:
 
 def _render_inline(frame: Frame, view: GameView) -> None:
     w = frame.image.width
-    footer, content = frame.region.take_bottom(9)
+    h = frame.image.height
+
+    # World Cup logo panel: same treatment as WIDE — full height with _GAP
+    # padding on all sides; game content recalculates from the remaining width.
+    x_offset = 0
+    if view.league == "fifa.world" and w >= 192:
+        ll = _wc_logo(h - 2 * _GAP)
+        if ll is not None and _GAP + ll.width < w // 2:
+            frame.place(
+                "league.logo", ll,
+                Region(_GAP, 0, ll.width, h),
+                anchor="lm", priority=3,
+            )
+            x_offset = _GAP + ll.width + _GAP
+
+    usable_w = w - x_offset
+    game_region = Region(x_offset, 0, usable_w, h)
+    footer, content = game_region.take_bottom(9)
 
     widget = None
     widget_name = "widget.diamond"
     if view.celebration is not None:
-        widget = widgets.celebration_img(view, content.h - 2, w // 3)
+        widget = widgets.celebration_img(view, content.h - 2, usable_w // 3)
         widget_name = "widget.celebration"
     elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 2, 15))
@@ -354,15 +393,15 @@ def _render_inline(frame: Frame, view: GameView) -> None:
             view.away_pks, view.home_pks,
             view.away.color, view.home.color,
             view.away.plain_abbr, view.home.plain_abbr,
-            content.h - 2, w // 3,
+            content.h - 2, usable_w // 3,
         )
         widget_name = "widget.pk_circles"
     # Without a widget, keep a clear gutter so the two scores don't read as one.
     center_w = widget.width + 2 * (_GAP + 1) if widget is not None else _GAP * 4
-    half_w = (w - center_w) // 2
+    half_w = (usable_w - center_w) // 2
     halves = {
-        "away": Region(0, content.y, half_w, content.h).inset(1, 0),
-        "home": Region(w - half_w, content.y, half_w, content.h).inset(1, 0),
+        "away": Region(x_offset, content.y, half_w, content.h).inset(1, 0),
+        "home": Region(x_offset + usable_w - half_w, content.y, half_w, content.h).inset(1, 0),
     }
 
     if widget is not None:
@@ -456,7 +495,7 @@ def _render_inline(frame: Frame, view: GameView) -> None:
             name_img = _name_img(single_specs[side], team.color, region.w)
             frame.place(f"{side}.name", name_img, region, anchor=outer, priority=1)
 
-    _render_footer(frame, view, footer, show_records=w >= 128, diamond_in_footer=False)
+    _render_footer(frame, view, footer, show_records=usable_w >= 128, diamond_in_footer=False)
 
 
 # ── STACKED: two team rows + footer (tall, narrow) ─────────────────────────────
@@ -561,7 +600,28 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
 
 def _render_wide(frame: Frame, view: GameView) -> None:
     w = frame.image.width
-    footer, content = frame.region.take_bottom(12)
+    h = frame.image.height
+
+    # World Cup logo panel: full frame height on the far left. The game content
+    # then recalculates its layout from the remaining width so both teams get
+    # equal halves and neither is crowded relative to the other.
+    x_offset = 0
+    if view.league == "fifa.world" and w >= 192:
+        ll = _wc_logo(h - 2 * _GAP)
+        if ll is not None and _GAP + ll.width < w // 2:
+            # _GAP px inset on all sides: shift right by _GAP, anchor "lm"
+            # vertically centres the logo leaving _GAP px top and bottom.
+            frame.place(
+                "league.logo", ll,
+                Region(_GAP, 0, ll.width, h),
+                anchor="lm", priority=3,
+            )
+            x_offset = _GAP + ll.width + _GAP
+
+    # Game content occupies [x_offset, w); derive a sub-region for layout.
+    usable_w = w - x_offset
+    game_region = Region(x_offset, 0, usable_w, h)
+    footer, content = game_region.take_bottom(12)
     content = content.inset(0, 1)
 
     # Centre widget reserves its column before the halves are budgeted.
@@ -569,7 +629,7 @@ def _render_wide(frame: Frame, view: GameView) -> None:
     widget: Image.Image | None = None
     widget_name = ""
     if view.celebration is not None:
-        widget = widgets.celebration_img(view, content.h - 2, w // 3)
+        widget = widgets.celebration_img(view, content.h - 2, usable_w // 3)
         widget_name = "widget.celebration"
     elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 4, 31))
@@ -579,22 +639,22 @@ def _render_wide(frame: Frame, view: GameView) -> None:
             view.away_pks, view.home_pks,
             view.away.color, view.home.color,
             view.away.plain_abbr, view.home.plain_abbr,
-            content.h - 2, w // 3,
+            content.h - 2, usable_w // 3,
         )
         widget_name = "widget.pk_circles"
     elif view.is_soccer and view.state in ("in", "post"):
-        widget = widgets.goal_list_img(view, content.h, w // 3)
+        widget = widgets.goal_list_img(view, content.h, usable_w // 3)
         widget_name = "widget.goals"
     center_w = widget.width + 2 * (_GAP + 2) if widget is not None else _GAP * 3
-    half_w = (w - center_w) // 2
+    half_w = (usable_w - center_w) // 2
 
     if widget is not None:
         anchor = "mb" if widget_name == "widget.goals" else "mm"
         frame.place(widget_name, widget, content, anchor=anchor, priority=2)
 
     halves = {
-        "away": Region(0, content.y, half_w, content.h),
-        "home": Region(w - half_w, content.y, half_w, content.h),
+        "away": Region(x_offset, content.y, half_w, content.h),
+        "home": Region(x_offset + usable_w - half_w, content.y, half_w, content.h),
     }
 
     # Logos at the outer edges; text budget is the remainder of each half.
