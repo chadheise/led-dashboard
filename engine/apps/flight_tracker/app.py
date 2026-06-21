@@ -100,20 +100,28 @@ def _phase(tracked: dict[str, Any] | None) -> str:
     return "far_future"
 
 
-def _poll_interval_seconds(phase: str, tracked: dict[str, Any], tier: str) -> float:
+def _poll_interval_seconds(
+    phase: str,
+    tracked: dict[str, Any],
+    tier: str,
+    interval_approaching_far: float = 600.0,
+    interval_approaching_near: float = 150.0,
+    interval_active: float = 150.0,
+    interval_recently_landed: float = 300.0,
+) -> float:
     if phase == "approaching":
         scheduled_off = _parse_dt(tracked.get("scheduled_off"))
         near = (
             scheduled_off is not None
             and scheduled_off - datetime.now(timezone.utc) <= timedelta(minutes=15)
         )
-        base = 150.0 if near else 600.0
+        base = interval_approaching_near if near else interval_approaching_far
     elif phase == "active":
-        base = 150.0
+        base = interval_active
     elif phase == "recently_landed":
-        base = 300.0
+        base = interval_recently_landed
     else:
-        base = 600.0
+        base = interval_approaching_far
     if tier in ("conservative", "minimal"):
         base *= 2
     return base
@@ -191,7 +199,42 @@ class FlightTrackerApp(DisplayApp):
     )
     icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location"]
-    global_config_schema: ClassVar[dict[str, Any]] = {}
+    global_config_schema: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "title": "Flight Tracker",
+        "properties": {
+            "refresh_interval": {
+                "type": "number",
+                "title": "Refresh interval (s)",
+                "default": 60,
+                "minimum": 30,
+            },
+            "poll_interval_approaching_far": {
+                "type": "number",
+                "title": "Poll interval — approaching >15 min (s)",
+                "default": 600,
+                "minimum": 60,
+            },
+            "poll_interval_approaching_near": {
+                "type": "number",
+                "title": "Poll interval — approaching ≤15 min (s)",
+                "default": 150,
+                "minimum": 30,
+            },
+            "poll_interval_active": {
+                "type": "number",
+                "title": "Poll interval — active/airborne (s)",
+                "default": 150,
+                "minimum": 30,
+            },
+            "poll_interval_recently_landed": {
+                "type": "number",
+                "title": "Poll interval — recently landed (s)",
+                "default": 300,
+                "minimum": 30,
+            },
+        },
+    }
     config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Flight Tracker",
@@ -235,12 +278,6 @@ class FlightTrackerApp(DisplayApp):
                 "x-input-type": "color",
                 "default": "#C8C8C8",
             },
-            "refresh_interval": {
-                "type": "number",
-                "title": "Refresh interval (s)",
-                "default": 60,
-                "minimum": 30,
-            },
             "units": {
                 "type": "string",
                 "title": "Units",
@@ -277,6 +314,10 @@ class FlightTrackerApp(DisplayApp):
         self._show_imperial: bool = False
         self._unit_ts: float = time.monotonic()
         self._is_active: bool = False
+
+    @property
+    def refresh_interval(self) -> float:
+        return float(self.global_config.get("refresh_interval", 60.0))
 
     async def on_activate(self) -> None:
         self._is_active = True
@@ -367,6 +408,10 @@ class FlightTrackerApp(DisplayApp):
         tz = self._location.get_timezone()
         tier = self._flightaware.budget_tier
         now_mono = time.monotonic()
+        pi_far    = float(self.global_config.get("poll_interval_approaching_far", 600.0))
+        pi_near   = float(self.global_config.get("poll_interval_approaching_near", 150.0))
+        pi_active = float(self.global_config.get("poll_interval_active", 150.0))
+        pi_landed = float(self.global_config.get("poll_interval_recently_landed", 300.0))
 
         to_poll = [
             fn for fn in flight_numbers
@@ -384,7 +429,10 @@ class FlightTrackerApp(DisplayApp):
                 if isinstance(result, dict):
                     self._tracked[fn] = result
                 new_phase = _phase(self._tracked.get(fn))
-                interval = _poll_interval_seconds(new_phase, self._tracked.get(fn) or {}, tier)
+                interval = _poll_interval_seconds(
+                    new_phase, self._tracked.get(fn) or {}, tier,
+                    pi_far, pi_near, pi_active, pi_landed,
+                )
                 self._next_poll_due[fn] = now_mono + interval
 
         self._fetched_once = True

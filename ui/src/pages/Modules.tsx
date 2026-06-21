@@ -60,6 +60,26 @@ interface AppInfo {
   schema: Schema;
 }
 
+function flightListIsValid(
+  schema: Schema | undefined,
+  config: Record<string, unknown>
+): boolean {
+  if (!schema) return true;
+  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
+    if (prop["x-input-type"] === "flight-list") {
+      const flights = config[key];
+      if (!Array.isArray(flights)) return false;
+      return flights.some(
+        (f) =>
+          typeof f === "object" &&
+          f !== null &&
+          String((f as Record<string, unknown>).number ?? "").trim() !== ""
+      );
+    }
+  }
+  return true;
+}
+
 // ── Local layout styles (not visual, no theming needed) ───────────────────────
 
 const hdr: React.CSSProperties = {
@@ -385,7 +405,7 @@ export default function Modules() {
         (fName !== origName ||
           fAppId !== origAppId ||
           JSON.stringify(fConfig) !== JSON.stringify(origConfig));
-  const canSave = hasChanges;
+  const canSave = hasChanges && flightListIsValid(currentSchema, fConfig);
 
   return (
     <div

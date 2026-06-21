@@ -109,8 +109,7 @@ export default function FlightList({ title, value, onChange }: Props) {
           </label>
 
           <label style={labelStyle}>
-            Date{' '}
-            <span style={{ color: C.textDim, fontSize: F.size.xs }}>(optional)</span>
+            Date
             <input
               type="date"
               value={flight.date ?? ''}
