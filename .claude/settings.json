@@ -1,17 +1,16 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/bin/python -m pytest tests/)",
+      "Bash(.venv/bin/python -m pytest *)",
       "Bash(cd *)",
       "Bash(git *)",
-      "Bash(xargs -I{} sh -c 'git show {} -- engine/libraries/espn_sports/library.py 2>/dev/null | grep -l \"home_goals\\\\|own\" && echo {}')",
-      "Bash(.venv/bin/python -m pytest libraries/espn_sports/tests/test_espn_sports_library.py -v)",
-      "Bash(.venv/bin/python -m pytest apps/sports/tests/ -v)",
       "Bash(gh api *)",
       "Bash(gh repo *)",
-      "Bash(.venv/bin/python -m pytest apps/flight_tracker/tests/test_flight_tracker.py::test_no_date_picks_soonest_non_cancelled -v)",
       "Bash(.venv/bin/python -c ' *)",
-      "Bash(.venv/bin/python -m pytest apps/flight_tracker/tests/test_flight_tracker.py -v)"
+      "Skill(update-config)",
+      "Skill(update-config:*)",
+      "Bash(PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --fixture fifa_wc_group_in_progress --scale 4)",
+      "Bash(PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --scale 4 --heights 64)"
     ]
   },
   "hooks": {

@@ -27,7 +27,7 @@ def main() -> int:
             GPIO.wait_for_edge(BUTTON_PIN, GPIO.FALLING)
             time.sleep(0.1)  # debounce
             if GPIO.input(BUTTON_PIN) == GPIO.LOW:
-                print("Button pressed — initiating shutdown", flush=True)
+                print("Button pressed - initiating shutdown", flush=True)
                 try:
                     subprocess.run(SHUTDOWN_CMD, check=True)
                 except Exception as exc:  # noqa: BLE001 — log and keep monitoring

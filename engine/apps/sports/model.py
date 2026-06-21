@@ -57,6 +57,7 @@ class GameView:
     home_pks: list[bool]
     ended_in_shootout: bool    # completed game decided by penalty shootout
     is_live_shootout: bool     # live game currently in shootout phase
+    league: str = ""           # ESPN league identifier, e.g. "fifa.world"
     celebration: CelebrationView | None = None
 
     @property
@@ -236,6 +237,7 @@ def build_game_view(
         home=_team_view(game, "home", home_palette, logos, possession),
         sport=sport,
         state=state,
+        league=str(game.get("league") or ""),
         status=_compose_status(game, tz=tz, time_format=time_format, now=now),
         match_note=str(game.get("match_note") or "") if sport == "soccer" else "",
         situation=dict(game.get("situation") or {}),

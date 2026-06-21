@@ -167,3 +167,10 @@ Reuse existing helpers in `engine/libraries/` (e.g. `text_renderer` for fonts,
 - **When making structural or behavioral changes** (new directories, renamed
   commands, changed test patterns), update this file and `engine/tests/README.md`
   to keep them accurate. They are the authoritative agent guide.
+- **ASCII-only in system scripts and log strings**: `system_scripts/` runs under
+  systemd on the Pi, which may use a latin-1 locale. Never use Unicode punctuation
+  (em dash `—`, curly quotes `"" ''`, ellipsis `…`, etc.) in any string that will
+  be printed to stdout/stderr in those scripts — use plain ASCII equivalents
+  (`-`, `"`, `'`, `...`). This applies to all `print()` and `logging` calls in
+  `system_scripts/`. A Unicode character in a log message will crash the process
+  before the intended action (e.g. shutdown) executes.
