@@ -276,6 +276,8 @@ class SportsApp(DisplayApp):
         """
         idle = float(self.config.get("refresh_interval", 60.0))
         live = max(5.0, float(self.config.get("live_refresh_interval", 15.0)))
+        if any(g.get("is_live_shootout") for g in self._games):
+            return min(5.0, live, idle)  # shootout kicks land fast — poll at 5s
         if any(g.get("state") == "in" for g in self._games):
             return min(live, idle)  # never slower than idle
         return idle

@@ -186,23 +186,63 @@ def _abbreviate_note(note: str) -> str:
 
 def soccer_status_img(view: GameView, font: int, max_w: int) -> Image.Image:
     """Footer centre for soccer: yellow minute + gray match note, degrading to
-    an abbreviated note and finally the minute alone."""
+    an abbreviated note and finally the minute alone.
+
+    For shootout games the PK score is embedded in the status so the winner
+    is readable on screens too small to show the circles widget.
+    """
     minute = view.status
+    short_minute: str | None = None   # abbreviated form tried when minute is too wide
     if view.state == "post":
-        minute = "Final"
+        upper = view.status.upper()
+        if "PK" in upper or "PEN" in upper:
+            minute = "Final/PK"
+            short_minute = "Fnl/PK"
+        else:
+            minute = "Final"
+            short_minute = "Fnl"
     elif minute.upper() == "HT":
         minute = "Half"
+    elif view.is_live_shootout:
+        minute = "Penalties"
+        short_minute = "PKs"
 
-    for note in (view.match_note, _abbreviate_note(view.match_note)):
-        if not note:
-            break
-        img = _baseline_hstack([(minute, YELLOW), (" | ", GRAY), (note, GRAY)], font)
+    # Build colored PK score segments when data is available so the winner
+    # is unambiguous on screens too small to show the circles widget.
+    # Away score renders in away color, home score in home color.
+    pk_parts: list[tuple[str, RGB]] = []
+    if view.is_penalty_shootout and (view.away_pks or view.home_pks):
+        away_n = sum(view.away_pks)
+        home_n = sum(view.home_pks)
+        pk_parts = [
+            (f" {away_n}", view.away.color),
+            ("-", GRAY),
+            (str(home_n), view.home.color),
+        ]
+
+    # Degradation ladder.  Priority: show pk score > use long minute label >
+    # show note.  "Fnl/PK" is tried before "Final/PK" alone so narrower
+    # screens still get the score even at the cost of a shorter label.
+    minutes = [minute] + ([short_minute] if short_minute else [])
+    notes = [n for n in (view.match_note, _abbreviate_note(view.match_note)) if n]
+
+    candidates: list[list[tuple[str, RGB]]] = []
+    if pk_parts:
+        # pk score present: try long and short labels, each with/without note
+        for m in minutes:
+            for note in notes:
+                candidates.append([(m, YELLOW)] + pk_parts + [(" | ", GRAY), (note, GRAY)])
+            candidates.append([(m, YELLOW)] + pk_parts)
+    # no pk score (or it didn't fit above): label + note, then label alone
+    for m in minutes:
+        for note in notes:
+            candidates.append([(m, YELLOW), (" | ", GRAY), (note, GRAY)])
+        candidates.append([(m, YELLOW)])
+
+    for parts in candidates:
+        img = _baseline_hstack(parts, font)
         if img.width <= max_w:
             return img
-
-    img = render_text(minute, YELLOW, font)
-    if img.width <= max_w:
-        return img
     return truncate_to_fit(minute, YELLOW, font, max_w)
 
 
@@ -281,6 +321,75 @@ def goal_list_img(
     for img in imgs:
         out.paste(img, ((col_w - img.width) // 2, y))
         y += row_h + _GOAL_GAP
+    return out
+
+
+_PK_SCORED: RGB = (30, 200, 60)
+_PK_MISSED: RGB = (220, 40, 40)
+_PK_EMPTY: RGB = (80, 80, 80)
+_PK_MIN_CIRCLES = 5              # always show at least 5 circles per row
+_PK_LABEL_GAP = 2                # pixels between label and first circle
+
+
+def pk_circles_img(
+    away_pks: list[bool],
+    home_pks: list[bool],
+    away_color: RGB,
+    home_color: RGB,
+    away_abbr: str,
+    home_abbr: str,
+    max_h: int,
+    max_w: int,
+) -> Image.Image | None:
+    """Two labeled rows of circles showing penalty shootout kick results.
+
+    Layout per row: [ABBR] ● ● ○ ○ ○
+    Abbreviation is in the team's color. Filled green = scored, filled red =
+    missed, open gray outline = not yet taken. Always shows at least 5 circles;
+    expands for sudden-death kicks beyond 5.
+
+    Returns None when there is not enough room to draw a legible widget.
+    """
+    n = max(_PK_MIN_CIRCLES, len(away_pks), len(home_pks))
+    row_h = max_h // 2
+    diam = max(3, min(row_h - 1, 7))
+    diam = diam if diam % 2 else diam - 1
+    circ_gap = max(1, diam // 3)
+
+    # Measure the widest label so both rows align their circles
+    away_label = render_text(away_abbr, away_color, 7)
+    home_label = render_text(home_abbr, home_color, 7)
+    label_w = max(away_label.width, home_label.width)
+
+    circles_w = n * diam + (n - 1) * circ_gap
+    total_w = label_w + _PK_LABEL_GAP + circles_w
+    if total_w > max_w or diam < 3 or row_h < diam:
+        return None
+
+    out = Image.new("RGB", (total_w, 2 * row_h), (0, 0, 0))
+    draw = ImageDraw.Draw(out)
+
+    def _draw_row(results: list[bool], y_row: int) -> None:
+        x0_base = label_w + _PK_LABEL_GAP
+        y_circ = y_row + (row_h - diam) // 2
+        for i in range(n):
+            x0 = x0_base + i * (diam + circ_gap)
+            x1 = x0 + diam - 1
+            y1 = y_circ + diam - 1
+            if i < len(results):
+                fill = _PK_SCORED if results[i] else _PK_MISSED
+                draw.ellipse([x0, y_circ, x1, y1], fill=fill)
+            else:
+                draw.ellipse([x0, y_circ, x1, y1], fill=None, outline=_PK_EMPTY)
+
+    away_lbl = render_text(away_abbr, away_color, 7)
+    out.paste(away_lbl, (label_w - away_lbl.width, (row_h - away_lbl.height) // 2))
+    _draw_row(away_pks, 0)
+
+    home_lbl = render_text(home_abbr, home_color, 7)
+    out.paste(home_lbl, (label_w - home_lbl.width, row_h + (row_h - home_lbl.height) // 2))
+    _draw_row(home_pks, row_h)
+
     return out
 
 

@@ -294,6 +294,38 @@ def _extra_fixtures() -> dict[str, dict[str, Any]]:
             situation={"outs": 1, "onFirst": True},
             _celebration={"kind": "home_run", "side": "away", "pulse_on": True, "anim_frame": 4},
         ),
+        # Live penalty shootout — circles widget with partial results.
+        "soccer_live_shootout": _game(
+            "fifa.world", "soccer",
+            ("BRA", "Brazil", "Brazil"), ("ARG", "Argentina", "Argentina"),
+            away_score="1", home_score="1",
+            away_color="009c3b", home_color="74acdf",
+            away_alt_color="ffdf00", home_alt_color="ffffff",
+            status="Penalties", state="in",
+            match_note="Quarter-Final",
+            away_goals=["35'"], home_goals=["78'"],
+            away_id="bra", home_id="arg",
+            away_pks=[True, False, True, True],
+            home_pks=[True, True, False, True],
+            is_live_shootout=True,
+            ended_in_shootout=False,
+        ),
+        # Completed game decided by penalty shootout — full circles + Final/PK footer.
+        "soccer_completed_shootout": _game(
+            "fifa.world", "soccer",
+            ("FRA", "France", "France"), ("ENG", "England", "England"),
+            away_score="1", home_score="1",
+            away_color="003189", home_color="012169",
+            away_alt_color="ed2939", home_alt_color="ffffff",
+            status="Final/PK", state="post",
+            match_note="Semi-Final",
+            away_goals=["52'"], home_goals=["88'"],
+            away_id="fra", home_id="eng",
+            away_pks=[True, True, True, True, False],
+            home_pks=[True, False, True, False, True],
+            is_live_shootout=False,
+            ended_in_shootout=True,
+        ),
         # Worst case: long city + long nickname + ranks + 3-digit scores.
         "long_everything": _game(
             "mens-college-basketball", "basketball",

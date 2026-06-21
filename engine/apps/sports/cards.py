@@ -349,6 +349,14 @@ def _render_inline(frame: Frame, view: GameView) -> None:
         widget_name = "widget.celebration"
     elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 2, 15))
+    elif view.is_soccer and view.is_penalty_shootout:
+        widget = widgets.pk_circles_img(
+            view.away_pks, view.home_pks,
+            view.away.color, view.home.color,
+            view.away.plain_abbr, view.home.plain_abbr,
+            content.h - 2, w // 3,
+        )
+        widget_name = "widget.pk_circles"
     # Without a widget, keep a clear gutter so the two scores don't read as one.
     center_w = widget.width + 2 * (_GAP + 1) if widget is not None else _GAP * 4
     half_w = (w - center_w) // 2
@@ -566,6 +574,14 @@ def _render_wide(frame: Frame, view: GameView) -> None:
     elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 4, 31))
         widget_name = "widget.diamond"
+    elif view.is_soccer and view.is_penalty_shootout:
+        widget = widgets.pk_circles_img(
+            view.away_pks, view.home_pks,
+            view.away.color, view.home.color,
+            view.away.plain_abbr, view.home.plain_abbr,
+            content.h - 2, w // 3,
+        )
+        widget_name = "widget.pk_circles"
     elif view.is_soccer and view.state in ("in", "post"):
         widget = widgets.goal_list_img(view, content.h, w // 3)
         widget_name = "widget.goals"
