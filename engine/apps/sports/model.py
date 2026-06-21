@@ -53,6 +53,10 @@ class GameView:
     situation: dict[str, Any]  # baseball outs/bases
     away_goals: list[str]
     home_goals: list[str]
+    away_pks: list[bool]       # soccer shootout: True=scored, False=missed
+    home_pks: list[bool]
+    ended_in_shootout: bool    # completed game decided by penalty shootout
+    is_live_shootout: bool     # live game currently in shootout phase
     celebration: CelebrationView | None = None
 
     @property
@@ -62,6 +66,11 @@ class GameView:
     @property
     def is_soccer(self) -> bool:
         return self.sport == "soccer"
+
+    @property
+    def is_penalty_shootout(self) -> bool:
+        """True while in or having ended by a penalty shootout."""
+        return self.is_live_shootout or self.ended_in_shootout
 
 
 def _rank_text(rank: Any) -> str:
@@ -232,5 +241,9 @@ def build_game_view(
         situation=dict(game.get("situation") or {}),
         away_goals=list(game.get("away_goals") or []),
         home_goals=list(game.get("home_goals") or []),
+        away_pks=[bool(v) for v in (game.get("away_pks") or [])],
+        home_pks=[bool(v) for v in (game.get("home_pks") or [])],
+        ended_in_shootout=bool(game.get("ended_in_shootout", False)),
+        is_live_shootout=bool(game.get("is_live_shootout", False)),
         celebration=celebration,
     )

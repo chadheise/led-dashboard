@@ -550,6 +550,22 @@ class ESPNSportsLibrary(Library):
                 away_goals: list[str] = []
                 home_points: int | None = None
                 away_points: int | None = None
+                # Shootout penalty kicks: True=scored, False=missed
+                home_pks: list[bool] = []
+                away_pks: list[bool] = []
+                # Whether this game is in or ended by a penalty shootout
+                status_name = status_type.get("name", "")
+                short_detail = status_type.get("shortDetail", "").lower()
+                ended_in_shootout = (
+                    "STATUS_FINAL_PEN" in status_name
+                    or "final/pk" in short_detail
+                    or "final (pk)" in short_detail
+                    or "final (pen)" in short_detail
+                )
+                is_live_shootout = (
+                    status_type.get("state", "pre") == "in"
+                    and ("penalties" in short_detail or (not ended_in_shootout and "/pk" in short_detail))
+                )
                 if sport == "soccer":
                     ht_id = home_team.get("id", "")
                     at_id = away_team.get("id", "")
@@ -557,9 +573,18 @@ class ESPNSportsLibrary(Library):
                         d_type = ((detail.get("type") or {}).get("text") or "").lower()
                         if "goal" not in d_type and "penalty" not in d_type:
                             continue
+                        period_num = int((detail.get("period") or {}).get("number") or 0)
                         clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
                         scoring_id = ((detail.get("team") or {}).get("id") or "")
                         is_og = "own" in d_type
+                        # Period 5+ = penalty shootout phase; treat separately
+                        if period_num >= 5 and "penalty" in d_type and not is_og:
+                            scored = "miss" not in d_type and "saved" not in d_type
+                            if scoring_id == ht_id:
+                                home_pks.append(scored)
+                            elif scoring_id == at_id:
+                                away_pks.append(scored)
+                            continue
                         is_pk = "penalty" in d_type and not is_og
                         if is_og:
                             if scoring_id == ht_id:
@@ -629,6 +654,10 @@ class ESPNSportsLibrary(Library):
                         "away_goals": away_goals,
                         "home_points": home_points,
                         "away_points": away_points,
+                        "home_pks": home_pks,
+                        "away_pks": away_pks,
+                        "ended_in_shootout": ended_in_shootout,
+                        "is_live_shootout": is_live_shootout,
                     }
                 )
             except Exception as exc:
