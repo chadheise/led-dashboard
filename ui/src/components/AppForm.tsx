@@ -284,6 +284,13 @@ export default function AppForm({ schema, value, onChange }: Props) {
           if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string') {
             clocksVal = (v as string[]).map(tz => ({ timezone: tz }))
           }
+          // The auto-resolved local clock gets its own color picker in the list,
+          // bound to the sibling `local_color` config key (migrated from the
+          // pre-per-clock-color `text_color`). Shown when local time is enabled.
+          const showLocal = 'show_local' in value
+            ? !!value.show_local
+            : !!(props.show_local?.default ?? true)
+          const localColor = String(value.local_color ?? value.text_color ?? '#C8C8C8')
           return (
             <CityClockList
               key={key}
@@ -292,6 +299,9 @@ export default function AppForm({ schema, value, onChange }: Props) {
               options={options}
               value={clocksVal}
               onChange={clocks => onChange({ ...value, [key]: clocks })}
+              showLocal={showLocal}
+              localColor={localColor}
+              onLocalColorChange={c => onChange({ ...value, local_color: c })}
             />
           )
         }

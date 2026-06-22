@@ -17,10 +17,22 @@ interface Props {
   options: Option[]
   value: unknown
   onChange: (v: CityClock[]) => void
+  /** Local-time row: rendered first when shown, with its own color picker. */
+  showLocal?: boolean
+  localColor?: string
+  onLocalColorChange?: (color: string) => void
 }
 
 const DEFAULT_COLOR = '#C8C8C8'
 const MAX_RESULTS = 8
+
+const colorSwatchStyle: React.CSSProperties = {
+  width: 34, height: 34, padding: 2, cursor: 'pointer', flexShrink: 0,
+  border: `1px solid ${C.border}`, borderRadius: 3, background: 'none',
+}
+
+const safeColor = (c: string | undefined): string =>
+  /^#[0-9a-fA-F]{6}$/.test(c ?? '') ? (c as string) : DEFAULT_COLOR
 
 const rowStyle: React.CSSProperties = {
   display: 'flex',
@@ -148,13 +160,10 @@ function CityRow({
 
       <input
         type="color"
-        value={/^#[0-9a-fA-F]{6}$/.test(clock.color ?? '') ? (clock.color as string) : DEFAULT_COLOR}
+        value={safeColor(clock.color)}
         onChange={e => onChange({ color: e.target.value })}
         title="Text color"
-        style={{
-          width: 34, height: 34, padding: 2, cursor: 'pointer', flexShrink: 0,
-          border: `1px solid ${C.border}`, borderRadius: 3, background: 'none',
-        }}
+        style={colorSwatchStyle}
       />
 
       <button type="button" onClick={onRemove} style={removeBtnStyle} title="Remove">×</button>
@@ -162,7 +171,30 @@ function CityRow({
   )
 }
 
-export default function CityClockList({ title, description, options, value, onChange }: Props) {
+/** The auto-resolved local clock: a fixed label plus its own color picker. */
+function LocalRow({ color, onColorChange }: { color: string; onColorChange: (c: string) => void }) {
+  return (
+    <div style={rowStyle}>
+      <span style={{ flex: 1, color: C.textSecondary, fontFamily: F.family, fontSize: F.size.sm }}>
+        Local time
+      </span>
+      <input
+        type="color"
+        value={safeColor(color)}
+        onChange={e => onColorChange(e.target.value)}
+        title="Text color"
+        style={colorSwatchStyle}
+      />
+      {/* Spacer matching the city rows' remove button so swatches align. */}
+      <span style={{ width: 18, flexShrink: 0 }} aria-hidden />
+    </div>
+  )
+}
+
+export default function CityClockList({
+  title, description, options, value, onChange,
+  showLocal, localColor, onLocalColorChange,
+}: Props) {
   const clocks: CityClock[] = Array.isArray(value) ? (value as CityClock[]) : []
   const labelFor = useMemo(() => {
     const map = new Map(options.map(o => [o.value, o.label]))
@@ -181,6 +213,10 @@ export default function CityClockList({ title, description, options, value, onCh
       <span style={{ ...labelStyle, display: 'block' }}>{title}</span>
       {description && (
         <span style={{ color: C.textDim, fontSize: F.size.xs, fontFamily: F.family }}>{description}</span>
+      )}
+
+      {showLocal && onLocalColorChange && (
+        <LocalRow color={localColor ?? DEFAULT_COLOR} onColorChange={onLocalColorChange} />
       )}
 
       {clocks.map((clock, idx) => (

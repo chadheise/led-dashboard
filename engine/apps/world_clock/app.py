@@ -118,10 +118,10 @@ class WorldClockApp(DisplayApp):
             },
             "cities": {
                 "type": "array",
-                "title": "Cities",
+                "title": "Clocks",
                 "description": (
-                    "Add any world city with a typeahead search and pick its own "
-                    "text color. Each row is one clock."
+                    "Your local time plus any world city — search by typeahead "
+                    "and give each clock its own text color."
                 ),
                 "x-input-type": "city-clock-list",
                 "items": {
@@ -143,16 +143,6 @@ class WorldClockApp(DisplayApp):
                 "title": "Seconds per page",
                 "default": 8,
                 "minimum": 3,
-            },
-            "text_color": {
-                "type": "string",
-                "title": "Local time color",
-                "description": (
-                    "Color for your local time, and the default for any city "
-                    "without its own color."
-                ),
-                "x-input-type": "color",
-                "default": _DEFAULT_COLOR,
             },
             "refresh_interval": {
                 "type": "number",
@@ -256,7 +246,12 @@ class WorldClockApp(DisplayApp):
             return
 
         w, h = self.canvas.width, self.canvas.height
-        default_color = parse_color(str(self.config.get("text_color", _DEFAULT_COLOR)))
+        # The local-time color doubles as the fallback tint for any city saved
+        # without its own color. ``text_color`` is the pre-per-clock-color key,
+        # migrated here so older instances keep their chosen color.
+        default_color = parse_color(
+            str(self.config.get("local_color") or self.config.get("text_color") or _DEFAULT_COLOR)
+        )
         time_fmt = str(self.library_configs.get("location", {}).get("time_format", "12h"))
 
         now_utc = datetime.now(timezone.utc)

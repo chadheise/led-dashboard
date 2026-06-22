@@ -94,6 +94,56 @@ def test_per_city_color_renders_distinct_pixels():
     assert any(r > 150 and g < 60 and b < 60 for r, g, b in triples)
 
 
+# ── Local / default color ────────────────────────────────────────────────────
+
+
+def _has_color(app: WorldClockApp, want: tuple[int, int, int]) -> bool:
+    px = list(app.canvas._pixels)
+    triples = zip(px[0::3], px[1::3], px[2::3])
+    return any(
+        abs(r - want[0]) < 40 and abs(g - want[1]) < 40 and abs(b - want[2]) < 40
+        for r, g, b in triples
+    )
+
+
+def test_local_color_is_the_fallback_tint_for_uncolored_cities():
+    # A city saved without its own color renders in the configured local color.
+    app = _make_app({
+        "show_local": False,
+        "local_color": "#00FF00",
+        "cities": [{"timezone": "Asia/Tokyo"}],
+    })
+    asyncio.run(app.fetch_data())
+    asyncio.run(app.render_frame())
+    assert _has_color(app, (0, 255, 0))
+
+
+def test_local_color_takes_precedence_over_legacy_text_color():
+    # Old instances stored the single color under `text_color`; a newer
+    # `local_color` wins when both are present.
+    app = _make_app({
+        "show_local": False,
+        "text_color": "#FF0000",
+        "local_color": "#00FF00",
+        "cities": [{"timezone": "Asia/Tokyo"}],
+    })
+    asyncio.run(app.fetch_data())
+    asyncio.run(app.render_frame())
+    assert _has_color(app, (0, 255, 0))
+    assert not _has_color(app, (255, 0, 0))
+
+
+def test_legacy_text_color_still_applies_when_no_local_color():
+    app = _make_app({
+        "show_local": False,
+        "text_color": "#FF0000",
+        "cities": [{"timezone": "Asia/Tokyo"}],
+    })
+    asyncio.run(app.fetch_data())
+    asyncio.run(app.render_frame())
+    assert _has_color(app, (255, 0, 0))
+
+
 # ── Typeahead options cover any world city ───────────────────────────────────
 
 
