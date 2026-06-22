@@ -204,7 +204,7 @@ class SceneManager:
             return
 
         current_pinned = any(
-            await app.should_pin() for app, _ in self._current_scene()
+            [await app.should_pin() for app, _ in self._current_scene()]
         )
 
         if current_pinned:
