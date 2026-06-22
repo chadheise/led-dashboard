@@ -237,6 +237,10 @@ class SportsApp(DisplayApp):
         self._sidebar_idx = 0
         self._sidebar_started_at = self._now()
 
+        # World Cup logo slide-animation clock: the logo cycles in/out relative
+        # to this start so the panel only occupies the screen briefly.
+        self._wc_cycle_start = self._now()
+
     def _get_user_tz(self) -> ZoneInfo | None:
         """Return the user's timezone, re-computing only when the stored location changes."""
         loc_cfg = self.library_configs.get("location", {}).get("location", {})
@@ -488,10 +492,16 @@ class SportsApp(DisplayApp):
     async def on_activate(self) -> None:
         self._page_idx = 0
         self._page_started_at = self._now()
+        self._wc_cycle_start = self._now()
         self._marquee.reset(self.canvas)
         self._marquee_strip = None
         self._init_stagger_state()
         await self.fetch_data()
+
+    def _wc_reveal(self) -> float:
+        """Current World Cup logo slide position (0=hidden .. 1=fully shown)."""
+        from .cards import wc_logo_reveal
+        return wc_logo_reveal(self._now() - self._wc_cycle_start)
 
     async def render_frame(self) -> None:
         if not self._games:
@@ -627,11 +637,12 @@ class SportsApp(DisplayApp):
         game_indices = self._resolve_stagger_indices(n, n_games)
 
         x_start = 0
+        wc_overlay: tuple[Image.Image, int] | None = None
         if n > 1:
             visible = [self._games[idx] for idx in game_indices]
-            logo, x_start = self._wc_logo_strip(visible, w, h)
+            logo, logo_x, x_start = self._wc_logo_strip(visible, w, h)
             if logo is not None:
-                img.paste(logo.convert("RGB"), (2, (h - logo.height) // 2), logo.split()[3])
+                wc_overlay = (logo, logo_x)
 
         card_w = (w - x_start) // n
 
@@ -646,6 +657,10 @@ class SportsApp(DisplayApp):
                 actual_w -= 1
             card = self._render_slot_image(game, actual_w, h)
             img.paste(card, (x_off, 0))
+
+        if wc_overlay is not None:
+            logo, logo_x = wc_overlay
+            img.paste(logo.convert("RGB"), (logo_x, (h - logo.height) // 2), logo.split()[3])
 
         blit(self.canvas, img)
 
@@ -697,21 +712,24 @@ class SportsApp(DisplayApp):
 
     def _wc_logo_strip(
         self, games: list[dict[str, Any]], w: int, h: int
-    ) -> tuple[Image.Image | None, int]:
-        """Return (logo_rgba, strip_width) for a screen-level WC logo panel.
+    ) -> tuple[Image.Image | None, int, int]:
+        """Return (logo_rgba, logo_x, content_x) for a screen-level WC logo panel.
 
         Only fires when every slot in ``games`` is a FIFA World Cup game and
-        the screen is wide enough.  Single-slot layouts use (None, 0) because
-        the card renderer handles the logo internally at full card width.
+        the screen is wide enough.  ``logo_x`` is the logo's left edge (negative
+        while sliding in) and ``content_x`` the left margin the cards start at;
+        both follow the slide animation.  Returns (None, 0, 0) when the panel
+        does not apply — single-slot layouts included, since the card renderer
+        handles the logo internally at full card width.
         """
-        if w < 192 or not all(g.get("league") == "fifa.world" for g in games):
-            return None, 0
-        from .cards import _wc_logo
-        _pad = 2
-        logo = _wc_logo(h - 2 * _pad)
-        if logo is None or _pad + logo.width >= w // 2:
-            return None, 0
-        return logo, _pad + logo.width + _pad
+        if not all(g.get("league") == "fifa.world" for g in games):
+            return None, 0, 0
+        from .cards import wc_panel
+        panel = wc_panel(w, h, self._wc_reveal())
+        if panel is None:
+            return None, 0, 0
+        logo, logo_x, content_x = panel
+        return logo, logo_x, content_x
 
     def _draw_games(self, games: list[dict[str, Any]], n_cols: int) -> None:
         w, h = self.canvas.width, self.canvas.height
@@ -722,10 +740,11 @@ class SportsApp(DisplayApp):
         # slot gets an equal share of the remaining width.  Single-slot layouts
         # let the card renderer handle the logo internally.
         x_start = 0
+        wc_overlay: tuple[Image.Image, int] | None = None
         if n_cols > 1:
-            logo, x_start = self._wc_logo_strip(games, w, h)
+            logo, logo_x, x_start = self._wc_logo_strip(games, w, h)
             if logo is not None:
-                img.paste(logo.convert("RGB"), (2, (h - logo.height) // 2), logo.split()[3])
+                wc_overlay = (logo, logo_x)
 
         slot_w = (w - x_start) // n_cols
 
@@ -738,6 +757,10 @@ class SportsApp(DisplayApp):
                 actual_w -= 1
             card = self._render_slot_image(game, actual_w, h)
             img.paste(card, (x_off, 0))
+
+        if wc_overlay is not None:
+            logo, logo_x = wc_overlay
+            img.paste(logo.convert("RGB"), (logo_x, (h - logo.height) // 2), logo.split()[3])
 
         blit(self.canvas, img)
 
@@ -756,7 +779,7 @@ class SportsApp(DisplayApp):
                 time_format=str(loc_cfg.get("time_format", "12h")),
                 celebration=self._celebration_view(game_key(game)),
             )
-            return render_card(view, w, h).image
+            return render_card(view, w, h, wc_reveal=self._wc_reveal()).image
         except Exception:
             # One bad game must not blank the whole frame (the scene manager
             # catches render errors after the canvas is already cleared).

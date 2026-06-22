@@ -44,6 +44,35 @@ _MARGIN = 1
 _WC_SVG_PATH = Path(__file__).parent / "world_cup_2026.svg"
 _wc_logo_cache: dict[int, Image.Image | None] = {}
 
+# World Cup logo slide animation. The logo occupies a left strip while shown,
+# which crowds the game content, so instead of sitting there permanently it
+# only appears briefly each cycle: it slides in from the left, holds fully
+# visible, then slides back out, leaving the content the full width the rest of
+# the time.
+_WC_CYCLE_SECONDS = 120.0   # one appearance every 2 minutes
+_WC_SLIDE_SECONDS = 2.0     # slide-in / slide-out duration
+_WC_HOLD_SECONDS = 10.0     # fully-visible dwell between the two slides
+
+
+def wc_logo_reveal(elapsed: float) -> float:
+    """Fraction (0..1) of the World Cup logo strip on-screen at ``elapsed`` seconds.
+
+    The cycle repeats every ``_WC_CYCLE_SECONDS``: the logo slides in over
+    ``_WC_SLIDE_SECONDS`` (0 -> 1), holds at 1 for ``_WC_HOLD_SECONDS``, slides
+    back out over ``_WC_SLIDE_SECONDS`` (1 -> 0), then stays hidden at 0 until
+    the next cycle begins.
+    """
+    t = elapsed % _WC_CYCLE_SECONDS
+    if t < _WC_SLIDE_SECONDS:
+        return t / _WC_SLIDE_SECONDS
+    t -= _WC_SLIDE_SECONDS
+    if t < _WC_HOLD_SECONDS:
+        return 1.0
+    t -= _WC_HOLD_SECONDS
+    if t < _WC_SLIDE_SECONDS:
+        return 1.0 - t / _WC_SLIDE_SECONDS
+    return 0.0
+
 
 def _wc_logo(max_h: int) -> Image.Image | None:
     h = max(4, max_h)
@@ -59,6 +88,40 @@ def _wc_logo(max_h: int) -> Image.Image | None:
         except Exception:
             _wc_logo_cache[h] = None
     return _wc_logo_cache[h]
+
+
+def wc_panel(w: int, h: int, reveal: float) -> tuple[Image.Image, int, int] | None:
+    """Resolve the World Cup logo panel at slide ``reveal`` (0..1), or ``None``.
+
+    Returns ``(logo, logo_x, content_x)`` where ``logo`` is the white logo
+    image, ``logo_x`` its left edge (negative while it is sliding in from
+    off-screen), and ``content_x`` the left margin the game content must start
+    at so it tracks the logo's right edge. Returns ``None`` when the panel does
+    not apply: the slot is too narrow, the logo failed to render, or it would
+    take more than half the width. At ``reveal == 1`` the geometry matches the
+    historical fixed strip (logo at ``_GAP``, content at ``_GAP + W + _GAP``).
+    """
+    if w < 192 or reveal <= 0.0:
+        return None
+    logo = _wc_logo(h - 2 * _GAP)
+    if logo is None or _GAP + logo.width >= w // 2:
+        return None
+    full = _GAP + logo.width + _GAP
+    content_x = round(reveal * full)
+    logo_x = content_x - _GAP - logo.width
+    return logo, logo_x, content_x
+
+
+def _composite_wc_overlay(frame: Frame, logo: Image.Image, logo_x: int) -> None:
+    """Paste the (possibly partly off-screen) sliding logo onto the frame image.
+
+    Used while the logo is mid-slide: ``frame.place`` would reject a clipped
+    element, so the overlay is composited directly and left out of the layout
+    box audit. The game content has already been laid out clear of it.
+    """
+    y = (frame.image.height - logo.height) // 2
+    frame.image.paste(logo.convert("RGB"), (logo_x, y), logo.split()[3])
+
 
 
 class Tier(Enum):
@@ -83,16 +146,22 @@ def select_tier(w: int, h: int) -> Tier:
     return Tier.STACKED if w < 128 else Tier.WIDE
 
 
-def render_card(view: GameView, w: int, h: int) -> CardRender:
+def render_card(view: GameView, w: int, h: int, wc_reveal: float = 1.0) -> CardRender:
+    """Render one game card. ``wc_reveal`` (0..1) is the World Cup logo's slide
+    position for the two wide tiers that show it; the default of 1 keeps the
+    logo fully visible (the historical fixed-strip behaviour)."""
     frame = Frame(w, h)
-    renderer = {
-        Tier.MINIMAL: _render_minimal,
-        Tier.COMPACT: _render_compact,
-        Tier.INLINE: _render_inline,
-        Tier.STACKED: _render_stacked,
-        Tier.WIDE: _render_wide,
-    }[select_tier(w, h)]
-    renderer(frame, view)
+    tier = select_tier(w, h)
+    if tier is Tier.MINIMAL:
+        _render_minimal(frame, view)
+    elif tier is Tier.COMPACT:
+        _render_compact(frame, view)
+    elif tier is Tier.INLINE:
+        _render_inline(frame, view, wc_reveal)
+    elif tier is Tier.STACKED:
+        _render_stacked(frame, view)
+    else:
+        _render_wide(frame, view, wc_reveal)
     return CardRender(frame.image, frame.boxes)
 
 
@@ -360,22 +429,28 @@ def _render_compact(frame: Frame, view: GameView) -> None:
 # ── INLINE: one row per game (short, wide) ─────────────────────────────────────
 
 
-def _render_inline(frame: Frame, view: GameView) -> None:
+def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     w = frame.image.width
     h = frame.image.height
 
     # World Cup logo panel: same treatment as WIDE — full height with _GAP
     # padding on all sides; game content recalculates from the remaining width.
+    # The panel slides in/out over time (``wc_reveal``); content tracks its
+    # right edge so the freed width is reclaimed while it is hidden.
     x_offset = 0
-    if view.league == "fifa.world" and w >= 192:
-        ll = _wc_logo(h - 2 * _GAP)
-        if ll is not None and _GAP + ll.width < w // 2:
-            frame.place(
-                "league.logo", ll,
-                Region(_GAP, 0, ll.width, h),
-                anchor="lm", priority=3,
-            )
-            x_offset = _GAP + ll.width + _GAP
+    wc_overlay: tuple[Image.Image, int] | None = None
+    if view.league == "fifa.world":
+        panel = wc_panel(w, h, wc_reveal)
+        if panel is not None:
+            logo, logo_x, x_offset = panel
+            if wc_reveal >= 1.0:
+                frame.place(
+                    "league.logo", logo,
+                    Region(_GAP, 0, logo.width, h),
+                    anchor="lm", priority=3,
+                )
+            else:
+                wc_overlay = (logo, logo_x)
 
     usable_w = w - x_offset
     game_region = Region(x_offset, 0, usable_w, h)
@@ -497,6 +572,9 @@ def _render_inline(frame: Frame, view: GameView) -> None:
 
     _render_footer(frame, view, footer, show_records=usable_w >= 128, diamond_in_footer=False)
 
+    if wc_overlay is not None:
+        _composite_wc_overlay(frame, *wc_overlay)
+
 
 # ── STACKED: two team rows + footer (tall, narrow) ─────────────────────────────
 
@@ -598,25 +676,31 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
 # ── WIDE: full layout (tall, wide) ─────────────────────────────────────────────
 
 
-def _render_wide(frame: Frame, view: GameView) -> None:
+def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     w = frame.image.width
     h = frame.image.height
 
     # World Cup logo panel: full frame height on the far left. The game content
     # then recalculates its layout from the remaining width so both teams get
-    # equal halves and neither is crowded relative to the other.
+    # equal halves and neither is crowded relative to the other. The panel
+    # slides in/out over time (``wc_reveal``); content tracks its right edge so
+    # the freed width is reclaimed while it is hidden.
     x_offset = 0
-    if view.league == "fifa.world" and w >= 192:
-        ll = _wc_logo(h - 2 * _GAP)
-        if ll is not None and _GAP + ll.width < w // 2:
-            # _GAP px inset on all sides: shift right by _GAP, anchor "lm"
-            # vertically centres the logo leaving _GAP px top and bottom.
-            frame.place(
-                "league.logo", ll,
-                Region(_GAP, 0, ll.width, h),
-                anchor="lm", priority=3,
-            )
-            x_offset = _GAP + ll.width + _GAP
+    wc_overlay: tuple[Image.Image, int] | None = None
+    if view.league == "fifa.world":
+        panel = wc_panel(w, h, wc_reveal)
+        if panel is not None:
+            logo, logo_x, x_offset = panel
+            if wc_reveal >= 1.0:
+                # _GAP px inset on all sides: shift right by _GAP, anchor "lm"
+                # vertically centres the logo leaving _GAP px top and bottom.
+                frame.place(
+                    "league.logo", logo,
+                    Region(_GAP, 0, logo.width, h),
+                    anchor="lm", priority=3,
+                )
+            else:
+                wc_overlay = (logo, logo_x)
 
     # Game content occupies [x_offset, w); derive a sub-region for layout.
     usable_w = w - x_offset
@@ -779,3 +863,6 @@ def _render_wide(frame: Frame, view: GameView) -> None:
                         score_region, anchor=f"{align}t", priority=0)
 
     _render_footer(frame, view, footer, show_records=True, diamond_in_footer=False)
+
+    if wc_overlay is not None:
+        _composite_wc_overlay(frame, *wc_overlay)
