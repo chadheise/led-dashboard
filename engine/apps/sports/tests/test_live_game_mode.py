@@ -35,6 +35,13 @@ def _game_copy(fixture_id: str) -> dict[str, Any]:
     return dict(suite.fixtures[fixture_id])
 
 
+def _pin_wc_logo_shown(app: Any) -> None:
+    """Pin the World Cup logo slide animation to its fully-shown hold phase so
+    snapshots that include a WC game stay deterministic. An elapsed offset
+    inside the hold window always resolves to reveal == 1."""
+    app._wc_cycle_start = app._now() - 5.0
+
+
 # ── Selection logic ─────────────────────────────────────────────────────────
 
 
@@ -154,6 +161,7 @@ def test_live_game_mode_any_snapshot(snapshot_update: bool) -> None:
     def seed(app: Any) -> None:
         app._games = games
         app._logos = fixture_logos_for_games(games)
+        _pin_wc_logo_shown(app)
 
     image = harness.render_app_frame(
         SportsApp,
@@ -199,6 +207,7 @@ def test_live_game_mode_single_game_full_width_snapshot(snapshot_update: bool) -
     def seed(app: Any) -> None:
         app._games = games
         app._logos = fixture_logos_for_games(games)
+        _pin_wc_logo_shown(app)
 
     image = harness.render_app_frame(
         SportsApp,

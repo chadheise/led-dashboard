@@ -251,7 +251,6 @@ class FlightTrackerApp(DisplayApp):
                         "date": {"type": "string", "default": "", "x-input-type": "date"},
                     },
                 },
-                "maxItems": 5,
                 "default": [{"number": "", "label": "", "date": ""}],
             },
             "display_mode": {
@@ -334,8 +333,8 @@ class FlightTrackerApp(DisplayApp):
         legacy ``flight_numbers`` (list[str]) + ``label`` (str) config so module
         instances saved before per-flight labels keep working. Flight numbers
         are normalized (whitespace-stripped, uppercased); blanks are dropped and
-        the list is capped at 5. Migrates the legacy global ``date`` field as a
-        fallback for per-flight dates not yet set.
+        the legacy global ``date`` field is migrated as a fallback for
+        per-flight dates not yet set.
         """
         raw = self.config.get("flights")
         if not isinstance(raw, list) or not raw:
@@ -369,7 +368,7 @@ class FlightTrackerApp(DisplayApp):
                 "label": str(item.get("label", "") or ""),
                 "date": date,
             })
-        return flights[:5]
+        return flights
 
     def _flight_numbers(self) -> list[str]:
         return [f["number"] for f in self._flights()]

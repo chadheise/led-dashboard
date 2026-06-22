@@ -5,12 +5,14 @@ import MultiPicker from './MultiPicker'
 import TeamPicker from './TeamPicker'
 import StreamList from './StreamList'
 import FlightList from './FlightList'
+import CityClockList from './CityClockList'
 
 // ── Schema types ───────────────────────────────────────────────────────────────
 
 interface SchemaProperty {
   type: string
   title?: string
+  description?: string
   default?: unknown
   enum?: string[]
   minimum?: number
@@ -33,6 +35,8 @@ interface SchemaProperty {
    *   'date'         Native date-only picker; value is a "YYYY-MM-DD" string
    *   'location'     Paired latitude / longitude fields (value: {latitude,longitude})
    *   'flight-list'  List of {number,label} rows for the Flight Tracker app
+   *   'city-clock-list' List of {timezone,color} rows with a city typeahead
+   *                  (options from x-enum-labels) for the World Clock app
    *   'multi-select' Checkbox group built from items.enum
    *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
    *   'duration'     Number + unit selector ({value, unit}); units from x-duration-units
@@ -265,6 +269,39 @@ export default function AppForm({ schema, value, onChange }: Props) {
               title={title}
               value={flightsVal}
               onChange={flights => onChange({ ...value, [key]: flights })}
+            />
+          )
+        }
+
+        if (xType === 'city-clock-list') {
+          const options = Object.entries(prop['x-enum-labels'] ?? {}).map(([value, label]) => ({
+            value,
+            label,
+          }))
+          // Migrate a legacy bare-timezone string[] so an instance saved before
+          // per-city colors still shows its cities (each gets a default color).
+          let clocksVal = v
+          if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string') {
+            clocksVal = (v as string[]).map(tz => ({ timezone: tz }))
+          }
+          // The auto-resolved local clock gets its own color picker in the list,
+          // bound to the sibling `local_color` config key (migrated from the
+          // pre-per-clock-color `text_color`). Shown when local time is enabled.
+          const showLocal = 'show_local' in value
+            ? !!value.show_local
+            : !!(props.show_local?.default ?? true)
+          const localColor = String(value.local_color ?? value.text_color ?? '#C8C8C8')
+          return (
+            <CityClockList
+              key={key}
+              title={title}
+              description={prop.description}
+              options={options}
+              value={clocksVal}
+              onChange={clocks => onChange({ ...value, [key]: clocks })}
+              showLocal={showLocal}
+              localColor={localColor}
+              onLocalColorChange={c => onChange({ ...value, local_color: c })}
             />
           )
         }

@@ -15,13 +15,20 @@ from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, can_fit_text, draw_status_message
 from libraries.location.library import LocationLibrary
-from libraries.timezones.library import city_name, current_time, list_cities, resolve_zone
+from libraries.timezones.library import (
+    city_name,
+    current_time,
+    list_timezone_options,
+    resolve_zone,
+)
 
 logger = logging.getLogger(__name__)
 
-_CITY_OPTIONS: list[dict[str, str]] = list_cities()
-_CITY_ENUM: list[str] = [c["timezone"] for c in _CITY_OPTIONS]
-_CITY_LABELS: dict[str, str] = {c["timezone"]: c["label"] for c in _CITY_OPTIONS}
+_TZ_OPTIONS: list[dict[str, str]] = list_timezone_options()
+_TZ_ENUM: list[str] = [c["timezone"] for c in _TZ_OPTIONS]
+_TZ_LABELS: dict[str, str] = {c["timezone"]: c["label"] for c in _TZ_OPTIONS}
+
+_DEFAULT_COLOR: str = "#C8C8C8"
 
 _MIN_CELL_W: int = 64
 _MIN_CELL_H: int = 28
@@ -47,6 +54,24 @@ def _dim(color: tuple[int, int, int], factor: float = 0.6) -> tuple[int, int, in
     return tuple(max(0, int(c * factor)) for c in color)  # type: ignore[return-value]
 
 
+def _parse_city_item(item: Any) -> tuple[str | None, str | None]:
+    """Normalize one configured city into (timezone, color hex or None).
+
+    Accepts the current per-city object form ``{"timezone", "color"}`` as well
+    as the legacy bare-timezone string, so instances saved before per-city
+    colors keep working.
+    """
+    if isinstance(item, str):
+        return (item or None), None
+    if isinstance(item, dict):
+        tz_name = item.get("timezone")
+        if not isinstance(tz_name, str) or not tz_name:
+            return None, None
+        color = item.get("color")
+        return tz_name, (color if isinstance(color, str) and color else None)
+    return None, None
+
+
 def _format_time(dt: datetime, time_fmt: str) -> tuple[str, str]:
     """Returns (display string, representative sample for sizing)."""
     if time_fmt == "24h":
@@ -56,12 +81,16 @@ def _format_time(dt: datetime, time_fmt: str) -> tuple[str, str]:
     return f"{h_val}:{dt.minute:02d} {ampm}", "12:00 PM"
 
 
-_DEBUG_ENTRIES: list[tuple[str, str]] = [
-    ("America/Chicago", "Chicago"),
-    ("Europe/London", "London"),
-    ("Asia/Tokyo", "Tokyo"),
-    ("Australia/Sydney", "Sydney"),
-    ("Pacific/Honolulu", "Honolulu"),
+# Each clock entry is (timezone, on-screen label, per-entry color hex or None).
+# A None color falls back to the configured default/local text color.
+ClockEntry = tuple[str, str, str | None]
+
+_DEBUG_ENTRIES: list[ClockEntry] = [
+    ("America/Chicago", "Chicago", None),
+    ("Europe/London", "London", "#7FB2FF"),
+    ("Asia/Tokyo", "Tokyo", "#FF8A8A"),
+    ("Australia/Sydney", "Sydney", "#86E08C"),
+    ("Pacific/Honolulu", "Honolulu", "#FFD27F"),
 ]
 
 
@@ -69,8 +98,9 @@ class WorldClockApp(DisplayApp):
     id: ClassVar[str] = "world_clock"
     name: ClassVar[str] = "World Clock"
     description: ClassVar[str] = (
-        "Live local and world-city clocks — add cities from a curated global "
-        "list and see their current dates and times alongside your own"
+        "Live local and world-city clocks — add any world city by typeahead "
+        "search, give each its own text color, and see their current dates and "
+        "times alongside your own"
     )
     icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
     libraries: ClassVar[list[str]] = ["timezones", "location"]
@@ -88,10 +118,24 @@ class WorldClockApp(DisplayApp):
             },
             "cities": {
                 "type": "array",
-                "title": "Cities",
-                "items": {"type": "string", "enum": _CITY_ENUM},
-                "x-input-type": "multi-picker",
-                "x-enum-labels": _CITY_LABELS,
+                "title": "Clocks",
+                "description": (
+                    "Your local time plus any world city — search by typeahead "
+                    "and give each clock its own text color."
+                ),
+                "x-input-type": "city-clock-list",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "timezone": {"type": "string", "enum": _TZ_ENUM},
+                        "color": {
+                            "type": "string",
+                            "x-input-type": "color",
+                            "default": _DEFAULT_COLOR,
+                        },
+                    },
+                },
+                "x-enum-labels": _TZ_LABELS,
                 "default": [],
             },
             "cycle_seconds": {
@@ -99,12 +143,6 @@ class WorldClockApp(DisplayApp):
                 "title": "Seconds per page",
                 "default": 8,
                 "minimum": 3,
-            },
-            "text_color": {
-                "type": "string",
-                "title": "Text color",
-                "x-input-type": "color",
-                "default": "#C8C8C8",
             },
             "refresh_interval": {
                 "type": "number",
@@ -128,7 +166,7 @@ class WorldClockApp(DisplayApp):
         library_configs: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(config, canvas, global_config, library_configs)
-        self._entries: list[tuple[str, str]] = []
+        self._entries: list[ClockEntry] = []
         self._home_tz: str | None = None
         self._fetched_once: bool = False
         self._local_key: tuple[float, float] | None = None
@@ -148,13 +186,15 @@ class WorldClockApp(DisplayApp):
         local = await self._resolve_local()
         self._home_tz = local[0] if local is not None else None
 
-        entries: list[tuple[str, str]] = []
+        entries: list[ClockEntry] = []
         if self.config.get("show_local", True) and local is not None:
-            entries.append(local)
+            # Local time uses the default/local text color (None -> fallback).
+            entries.append((local[0], local[1], None))
 
-        for tz_name in self.config.get("cities", []):
-            if isinstance(tz_name, str) and tz_name:
-                entries.append((tz_name, city_name(tz_name)))
+        for item in self.config.get("cities", []):
+            tz_name, color = _parse_city_item(item)
+            if tz_name:
+                entries.append((tz_name, city_name(tz_name), color))
 
         self._entries = entries
         self._fetched_once = True
@@ -206,18 +246,23 @@ class WorldClockApp(DisplayApp):
             return
 
         w, h = self.canvas.width, self.canvas.height
-        text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
+        # The local-time color doubles as the fallback tint for any city saved
+        # without its own color. ``text_color`` is the pre-per-clock-color key,
+        # migrated here so older instances keep their chosen color.
+        default_color = parse_color(
+            str(self.config.get("local_color") or self.config.get("text_color") or _DEFAULT_COLOR)
+        )
         time_fmt = str(self.library_configs.get("location", {}).get("time_format", "12h"))
 
         now_utc = datetime.now(timezone.utc)
         home_zone = resolve_zone(self._home_tz) if self._home_tz else None
         home_date: date | None = now_utc.astimezone(home_zone).date() if home_zone else None
 
-        rows: list[tuple[str, dict[str, Any]]] = []
-        for tz_name, label in self._entries:
+        rows: list[tuple[str, dict[str, Any], tuple[int, int, int]]] = []
+        for tz_name, label, color in self._entries:
             info = current_time(tz_name, reference=now_utc)
             if info is not None:
-                rows.append((label, info))
+                rows.append((label, info, parse_color(color) if color else default_color))
 
         if not rows:
             self._draw_message("No data")
@@ -246,13 +291,13 @@ class WorldClockApp(DisplayApp):
         cell_h = h // n_rows_used
 
         img = Image.new("RGB", (w, h))
-        for i, (label, info) in enumerate(page):
+        for i, (label, info, color) in enumerate(page):
             col, row = i % cols, i // cols
             x0 = col * cell_w
             y0 = row * cell_h
             actual_w = cell_w if col < cols - 1 else w - x0
             actual_h = cell_h if row < n_rows_used - 1 else h - y0
-            self._draw_clock_cell(img, label, info, x0, y0, actual_w, actual_h, text_color, time_fmt, home_date)
+            self._draw_clock_cell(img, label, info, x0, y0, actual_w, actual_h, color, time_fmt, home_date)
 
         blit(self.canvas, img)
 

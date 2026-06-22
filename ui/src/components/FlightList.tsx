@@ -12,8 +12,6 @@ interface Props {
   onChange: (v: Flight[]) => void
 }
 
-const MAX_FLIGHTS = 5
-
 const rowStyle: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
@@ -61,7 +59,6 @@ export default function FlightList({ title, value, onChange }: Props) {
   }
 
   const add = () => {
-    if (flights.length >= MAX_FLIGHTS) return
     onChange([...flights, { ...DEFAULT_FLIGHT }])
   }
 
@@ -120,9 +117,7 @@ export default function FlightList({ title, value, onChange }: Props) {
         </div>
       ))}
 
-      {flights.length < MAX_FLIGHTS && (
-        <button onClick={add} style={addBtnStyle}>+ Add flight</button>
-      )}
+      <button onClick={add} style={addBtnStyle}>+ Add flight</button>
     </div>
   )
 }

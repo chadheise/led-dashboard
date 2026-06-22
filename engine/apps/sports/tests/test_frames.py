@@ -37,6 +37,10 @@ def test_sports_frame_snapshot(
     def seed(app: Any) -> None:
         app._games = games
         app._logos = fixture_logos_for_games(games)
+        # Pin the World Cup logo slide animation to its fully-shown hold phase so
+        # these slot-splitting snapshots are deterministic (and unchanged): an
+        # elapsed offset inside the hold window always resolves to reveal == 1.
+        app._wc_cycle_start = app._now() - 5.0
 
     image = harness.render_app_frame(
         SportsApp,

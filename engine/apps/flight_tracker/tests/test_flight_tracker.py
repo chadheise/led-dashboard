@@ -36,10 +36,10 @@ def test_flight_numbers_normalize_spaces_and_case():
     assert app._flight_numbers() == ["DL1070", "DAL1070", "UA100"]
 
 
-def test_flight_numbers_drop_blanks_and_cap_at_five():
+def test_flight_numbers_drop_blanks_no_cap():
     app = _app({"flights": [{"number": n} for n in
                             ["AA1", "", "  ", "AA2", "AA3", "AA4", "AA5", "AA6"]]})
-    assert app._flight_numbers() == ["AA1", "AA2", "AA3", "AA4", "AA5"]
+    assert app._flight_numbers() == ["AA1", "AA2", "AA3", "AA4", "AA5", "AA6"]
 
 
 # ── Per-flight labels (req 3) ──────────────────────────────────────────────────

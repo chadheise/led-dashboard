@@ -5,7 +5,7 @@ import json
 import logging
 from pathlib import Path
 from typing import Any, ClassVar
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from libraries.base import Library
 
@@ -27,6 +27,26 @@ def list_cities() -> list[dict[str, str]]:
     ("City, Country") suitable for UI picker options.
     """
     return [{**entry, "label": _entry_label(entry)} for entry in _CITIES]
+
+
+def list_timezone_options() -> list[dict[str, str]]:
+    """Every selectable timezone for a city typeahead, as {"timezone", "label"}.
+
+    The curated cities come first with their full "City, Country" labels; then
+    every other IANA zone that names a place (contains "/", excluding the
+    synthetic "Etc/*" group) follows, labelled by its derived city name. Each
+    group is sorted by label so the resulting list reads naturally and any
+    world city — not just the curated ones — can be found by typing.
+    """
+    curated = sorted(list_cities(), key=lambda e: e["label"].lower())
+    seen = {e["timezone"] for e in curated}
+    extra: list[dict[str, str]] = []
+    for tz_name in available_timezones():
+        if tz_name in seen or "/" not in tz_name or tz_name.startswith("Etc/"):
+            continue
+        extra.append({"timezone": tz_name, "label": _derive_city_name(tz_name)})
+    extra.sort(key=lambda e: e["label"].lower())
+    return [{"timezone": e["timezone"], "label": e["label"]} for e in curated + extra]
 
 
 def _derive_city_name(tz_name: str) -> str:
@@ -109,6 +129,7 @@ class TimezonesLibrary(Library):
     global_config_schema: ClassVar[dict[str, Any]] = {}
 
     list_cities = staticmethod(list_cities)
+    list_timezone_options = staticmethod(list_timezone_options)
     city_name = staticmethod(city_name)
     city_label = staticmethod(city_label)
     resolve_zone = staticmethod(resolve_zone)

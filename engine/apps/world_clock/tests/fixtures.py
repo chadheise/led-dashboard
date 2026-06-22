@@ -10,16 +10,18 @@ from typing import Any
 
 from tests.framework import harness
 
+# Entries are (timezone, label, color); None color renders in the default
+# text color so these golden snapshots are unaffected by per-city colors.
 _FIVE = [
-    ("America/Chicago", "Chicago"),
-    ("Europe/London", "London"),
-    ("Asia/Tokyo", "Tokyo"),
-    ("Australia/Sydney", "Sydney"),
-    ("Pacific/Honolulu", "Honolulu"),
+    ("America/Chicago", "Chicago", None),
+    ("Europe/London", "London", None),
+    ("Asia/Tokyo", "Tokyo", None),
+    ("Australia/Sydney", "Sydney", None),
+    ("Pacific/Honolulu", "Honolulu", None),
 ]
 
 
-def _seed(entries: list[tuple[str, str]]):
+def _seed(entries: list[tuple[str, str, str | None]]):
     def seed(app: Any) -> None:
         app._entries = list(entries)
         app._home_tz = entries[0][0] if entries else None
