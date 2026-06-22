@@ -274,12 +274,9 @@ export default function AppForm({ schema, value, onChange }: Props) {
         }
 
         if (xType === 'city-clock-list') {
-          const options = Object.entries(prop['x-enum-labels'] ?? {}).map(([value, label]) => ({
-            value,
-            label,
-          }))
           // Migrate a legacy bare-timezone string[] so an instance saved before
-          // per-city colors still shows its cities (each gets a default color).
+          // per-city colors still shows its cities (the name backfills from the
+          // timezone server-side; each gets a default color).
           let clocksVal = v
           if (Array.isArray(v) && v.length > 0 && typeof v[0] === 'string') {
             clocksVal = (v as string[]).map(tz => ({ timezone: tz }))
@@ -296,7 +293,6 @@ export default function AppForm({ schema, value, onChange }: Props) {
               key={key}
               title={title}
               description={prop.description}
-              options={options}
               value={clocksVal}
               onChange={clocks => onChange({ ...value, [key]: clocks })}
               showLocal={showLocal}

@@ -8,7 +8,6 @@ import asyncio
 from typing import Any
 
 from canvas.simulator import SimulatorCanvas
-from libraries.timezones.library import list_timezone_options
 
 from apps.world_clock.app import WorldClockApp, _parse_city_item
 
@@ -23,26 +22,27 @@ def _make_app(config: dict[str, Any]) -> WorldClockApp:
 # ── _parse_city_item ─────────────────────────────────────────────────────────
 
 
-def test_parse_city_item_object_form():
-    assert _parse_city_item({"timezone": "Europe/London", "color": "#FF0000"}) == (
-        "Europe/London",
-        "#FF0000",
-    )
+def test_parse_city_item_object_with_name():
+    # Any-city items carry the chosen city name (which can differ from the
+    # timezone's representative city).
+    assert _parse_city_item(
+        {"name": "Boston, United States", "timezone": "America/New_York", "color": "#FF0000"}
+    ) == ("America/New_York", "Boston, United States", "#FF0000")
 
 
-def test_parse_city_item_object_without_color():
-    assert _parse_city_item({"timezone": "Asia/Tokyo"}) == ("Asia/Tokyo", None)
+def test_parse_city_item_object_without_name_or_color():
+    assert _parse_city_item({"timezone": "Asia/Tokyo"}) == ("Asia/Tokyo", None, None)
 
 
 def test_parse_city_item_legacy_string():
     # Instances saved before per-city colors stored a bare timezone string.
-    assert _parse_city_item("America/Chicago") == ("America/Chicago", None)
+    assert _parse_city_item("America/Chicago") == ("America/Chicago", None, None)
 
 
 def test_parse_city_item_garbage():
-    assert _parse_city_item(None) == (None, None)
-    assert _parse_city_item({"color": "#FFFFFF"}) == (None, None)
-    assert _parse_city_item("") == (None, None)
+    assert _parse_city_item(None) == (None, None, None)
+    assert _parse_city_item({"color": "#FFFFFF"}) == (None, None, None)
+    assert _parse_city_item("") == (None, None, None)
 
 
 # ── fetch_data builds colored entries ────────────────────────────────────────
@@ -63,6 +63,18 @@ def test_fetch_data_carries_per_city_color():
         ("Europe/London", "London", "#FF0000"),
         ("Asia/Tokyo", "Tokyo", None),
     ]
+
+
+def test_fetch_data_uses_stored_name_over_timezone_city():
+    # "Boston" shares America/New_York with New York, but the configured name
+    # must be shown on screen, not the timezone's representative city.
+    app = _make_app({
+        "show_local": False,
+        "cities": [{"name": "Boston, United States", "timezone": "America/New_York"}],
+    })
+    asyncio.run(app.fetch_data())
+
+    assert app._entries == [("America/New_York", "Boston, United States", None)]
 
 
 def test_fetch_data_accepts_legacy_string_cities():
@@ -142,23 +154,3 @@ def test_legacy_text_color_still_applies_when_no_local_color():
     asyncio.run(app.fetch_data())
     asyncio.run(app.render_frame())
     assert _has_color(app, (255, 0, 0))
-
-
-# ── Typeahead options cover any world city ───────────────────────────────────
-
-
-def test_timezone_options_include_non_curated_cities():
-    options = list_timezone_options()
-    by_tz = {o["timezone"]: o["label"] for o in options}
-
-    # Curated city keeps its rich "City, Country" label...
-    assert by_tz.get("America/New_York") == "New York, United States"
-    # ...and a non-curated IANA zone is still selectable via a derived label.
-    assert by_tz.get("America/Argentina/Ushuaia") == "Ushuaia"
-
-
-def test_timezone_options_are_clean_place_zones():
-    for o in list_timezone_options():
-        assert "/" in o["timezone"]
-        assert not o["timezone"].startswith("Etc/")
-        assert o["label"]
