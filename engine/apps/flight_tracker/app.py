@@ -350,12 +350,12 @@ class FlightTrackerApp(DisplayApp):
         """Auto-hide gate: skip the module when no flight is active.
 
         Active flights are those departing within the next 2 hours, airborne,
-        or landed within the last 2 hours. Until the first fetch populates the
-        tracked state we stay in rotation so the module gets a chance to
-        activate and load data (polling is gated on activation).
+        or landed within the last 2 hours. Stay hidden until the first
+        (background) fetch resolves so a flight with no info available never
+        flashes its "not available" card before we know to skip it.
         """
         if not self._fetched_once:
-            return True
+            return False
         now = datetime.now(timezone.utc)
         return any(
             _is_active_flight(self._tracked.get(fn), now)
@@ -428,7 +428,13 @@ class FlightTrackerApp(DisplayApp):
             self._seed_debug()
             return
 
-        if not self._is_active:
+        # Poll in the background only for the initial load, so the auto-hide
+        # gate (should_display) can evaluate real schedule data before the
+        # module is ever shown. Once data is loaded, restrict polling to when
+        # the module is active to conserve AeroAPI budget; the auto-hide gate
+        # then works off the cached timestamps and reactivates the module
+        # (resuming live polling) when a flight enters its active window.
+        if not self._is_active and self._fetched_once:
             return
 
         if not self._flightaware.has_api_key:

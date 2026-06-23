@@ -121,12 +121,12 @@ def _should_display(app: FlightTrackerApp) -> bool:
     return asyncio.run(app.should_display())
 
 
-def test_auto_hide_shows_before_first_fetch():
-    # Until the first fetch loads data the module stays in rotation so it can
-    # activate and poll (fetching is gated on activation).
+def test_auto_hide_hidden_before_first_fetch():
+    # Stay hidden until the initial background fetch resolves, so a not-found
+    # flight never flashes its "not available" card before we know to skip it.
     app = _app({"flights": [{"number": "DL1"}]})
     assert app._fetched_once is False
-    assert _should_display(app) is True
+    assert _should_display(app) is False
 
 
 def test_auto_hide_skips_when_no_active_flights():
@@ -197,3 +197,18 @@ def test_auto_hide_skips_not_found_flight():
     app._fetched_once = True
     app._tracked = {"DL1": {"found": False, "ident": "DL1"}}
     assert _should_display(app) is False
+
+
+def test_initial_fetch_runs_while_inactive_then_gates_on_active():
+    # The module isn't on-screen yet (inactive) but must still do one initial
+    # fetch so the auto-hide gate has real data before it could ever be shown.
+    app = _app({"flights": [{"number": "DL1"}]})
+    assert app._is_active is False and app._fetched_once is False
+    # No API key configured -> fetch resolves immediately via the has_api_key
+    # branch, but only because the initial-load gate let it run while inactive.
+    asyncio.run(app.fetch_data())
+    assert app._fetched_once is True
+    # Once loaded, subsequent inactive fetches return early (budget gate).
+    app._tracked = {"sentinel": {}}
+    asyncio.run(app.fetch_data())
+    assert app._tracked == {"sentinel": {}}
