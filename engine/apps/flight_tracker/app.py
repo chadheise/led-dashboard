@@ -23,6 +23,10 @@ from libraries.location.library import LocationLibrary
 _UNIT_CYCLE_S: float = 4.0
 _GATED_PHASES = ("unknown", "not_found", "approaching", "active", "recently_landed")
 
+# Auto-hide window: a flight counts as "active" from 2h before its (estimated)
+# departure, while airborne, and until 2h after it lands.
+_ACTIVE_WINDOW = timedelta(hours=2)
+
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
     while text:
@@ -125,6 +129,30 @@ def _poll_interval_seconds(
     if tier in ("conservative", "minimal"):
         base *= 2
     return base
+
+
+def _is_active_flight(tracked: dict[str, Any] | None, now: datetime) -> bool:
+    """Whether a tracked flight is "active" for the auto-hide gate.
+
+    Active means any of: departing within the next 2 hours, currently airborne,
+    or landed within the last 2 hours. Operates purely on the cached schedule
+    timestamps so the gate keeps working as the clock advances even when the
+    module isn't being polled.
+    """
+    if not tracked or not tracked.get("found"):
+        return False
+    # Landed within the last 2 hours.
+    actual_on = _parse_dt(tracked.get("actual_on"))
+    if actual_on is not None:
+        return timedelta(0) <= now - actual_on <= _ACTIVE_WINDOW
+    # Airborne (departed, not yet landed) — relevant for the whole flight.
+    if _parse_dt(tracked.get("actual_off")) is not None:
+        return True
+    # Departing within the next 2 hours (estimated, falling back to scheduled).
+    departure = _parse_dt(tracked.get("estimated_off")) or _parse_dt(tracked.get("scheduled_off"))
+    if departure is not None:
+        return timedelta(0) <= departure - now <= _ACTIVE_WINDOW
+    return False
 
 
 def _card_kind(tracked: dict[str, Any] | None) -> str:
@@ -317,6 +345,22 @@ class FlightTrackerApp(DisplayApp):
     @property
     def refresh_interval(self) -> float:
         return float(self.global_config.get("refresh_interval", 60.0))
+
+    async def should_display(self) -> bool:
+        """Auto-hide gate: skip the module when no flight is active.
+
+        Active flights are those departing within the next 2 hours, airborne,
+        or landed within the last 2 hours. Until the first fetch populates the
+        tracked state we stay in rotation so the module gets a chance to
+        activate and load data (polling is gated on activation).
+        """
+        if not self._fetched_once:
+            return True
+        now = datetime.now(timezone.utc)
+        return any(
+            _is_active_flight(self._tracked.get(fn), now)
+            for fn in self._flight_numbers()
+        )
 
     async def on_activate(self) -> None:
         self._is_active = True

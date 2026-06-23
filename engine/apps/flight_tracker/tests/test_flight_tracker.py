@@ -12,6 +12,8 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
+import asyncio
+
 from apps.flight_tracker.app import FlightTrackerApp
 from canvas.simulator import SimulatorCanvas
 from libraries.flightaware.library import _select_flight_instance
@@ -100,3 +102,98 @@ def test_no_date_picks_soonest_non_cancelled():
     ]
     chosen = _select_flight_instance(flights, None)
     assert chosen is flights[1]
+
+
+# ── Auto-hide gate (should_display) ────────────────────────────────────────────
+
+_NOW = datetime.datetime.now(datetime.timezone.utc)
+
+
+def _iso(delta: datetime.timedelta) -> str:
+    return (_NOW + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _hours(h: float) -> datetime.timedelta:
+    return datetime.timedelta(hours=h)
+
+
+def _should_display(app: FlightTrackerApp) -> bool:
+    return asyncio.run(app.should_display())
+
+
+def test_auto_hide_shows_before_first_fetch():
+    # Until the first fetch loads data the module stays in rotation so it can
+    # activate and poll (fetching is gated on activation).
+    app = _app({"flights": [{"number": "DL1"}]})
+    assert app._fetched_once is False
+    assert _should_display(app) is True
+
+
+def test_auto_hide_skips_when_no_active_flights():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    # Departs in 5 hours: outside the 2-hour pre-departure window.
+    app._tracked = {"DL1": {"found": True, "scheduled_off": _iso(_hours(5))}}
+    assert _should_display(app) is False
+
+
+def test_auto_hide_shows_flight_departing_within_2h():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    app._tracked = {"DL1": {"found": True, "scheduled_off": _iso(_hours(1))}}
+    assert _should_display(app) is True
+
+
+def test_auto_hide_prefers_estimated_departure():
+    # Scheduled 5h out but estimated pulled in to 1.5h -> active.
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    app._tracked = {
+        "DL1": {
+            "found": True,
+            "scheduled_off": _iso(_hours(5)),
+            "estimated_off": _iso(_hours(1.5)),
+        }
+    }
+    assert _should_display(app) is True
+
+
+def test_auto_hide_shows_airborne_flight():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    # Departed 3h ago, no landing yet -> still in the air, still active.
+    app._tracked = {
+        "DL1": {"found": True, "scheduled_off": _iso(_hours(-3)), "actual_off": _iso(_hours(-3))}
+    }
+    assert _should_display(app) is True
+
+
+def test_auto_hide_shows_recently_landed_flight():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    app._tracked = {"DL1": {"found": True, "actual_on": _iso(_hours(-1))}}
+    assert _should_display(app) is True
+
+
+def test_auto_hide_skips_long_landed_flight():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    app._tracked = {"DL1": {"found": True, "actual_on": _iso(_hours(-3))}}
+    assert _should_display(app) is False
+
+
+def test_auto_hide_shows_if_any_flight_active():
+    app = _app({"flights": [{"number": "DL1"}, {"number": "UA2"}]})
+    app._fetched_once = True
+    app._tracked = {
+        "DL1": {"found": True, "scheduled_off": _iso(_hours(5))},
+        "UA2": {"found": True, "actual_on": _iso(_hours(-1))},
+    }
+    assert _should_display(app) is True
+
+
+def test_auto_hide_skips_not_found_flight():
+    app = _app({"flights": [{"number": "DL1"}]})
+    app._fetched_once = True
+    app._tracked = {"DL1": {"found": False, "ident": "DL1"}}
+    assert _should_display(app) is False
