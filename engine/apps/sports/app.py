@@ -47,6 +47,12 @@ _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 # game to "in", and delayed kickoffs stay "pre" past start. Matches the 4h
 # approximate game length used for completed games.
 _PRE_START_GRACE_SECONDS = 4 * 3600
+
+# A game stuck reporting "in" for longer than any real match (extra time,
+# rain delays, etc. included) is a stale/glitched ESPN feed, not a live game.
+# Without this cap a live_game_mode spotlight (e.g. World Cup) can pin the
+# scene on screen forever if ESPN never flips the game's state.
+_MAX_LIVE_GAME_SECONDS = 8 * 3600
 _ANIM_FRAMES = 8             # sprite animation cycle length
 _ANIM_FPS = 8                # sprite frames per second
 
@@ -439,10 +445,6 @@ class SportsApp(DisplayApp):
         for game in games:
             state = game.get("state", "pre")
 
-            if state == "in":
-                result.append(game)
-                continue
-
             start_raw = game.get("start_time")
             start: datetime.datetime | None = None
             if start_raw:
@@ -452,6 +454,18 @@ class SportsApp(DisplayApp):
                     )
                 except Exception:
                     pass
+
+            if state == "in":
+                if start is not None and (
+                    now - start
+                ).total_seconds() > _MAX_LIVE_GAME_SECONDS:
+                    # ESPN never flipped this game out of "in" - treat as
+                    # stale/completed so it doesn't pin the screen forever.
+                    state = "post"
+                    game = {**game, "state": "post"}
+                else:
+                    result.append(game)
+                    continue
 
             if state == "post":
                 if completed_secs <= 0:
