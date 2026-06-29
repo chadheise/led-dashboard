@@ -89,7 +89,17 @@ def _soccer_score(game: dict[str, Any], side: str) -> str:
     instant a goal lands. Using ``max`` keeps it idempotent — when the score
     field finally catches up the value is unchanged, so the goal is counted
     exactly once.
+
+    During a penalty shootout the score field holds the regulation/ET score
+    (which is what the card must display).  The goals list adjustment is
+    skipped entirely so that any PK kicks that leak through can never inflate
+    the displayed score.
     """
+    if game.get("is_live_shootout") or game.get("ended_in_shootout"):
+        try:
+            return str(int(str(game.get(f"{side}_score", "-"))))
+        except (ValueError, TypeError):
+            return str(game.get(f"{side}_score", "-"))
     goals = len(game.get(f"{side}_goals") or [])
     try:
         parsed = int(str(game.get(f"{side}_score", "-")))
@@ -214,6 +224,28 @@ def _team_view(
     )
 
 
+def _resolve_pks(game: dict[str, Any], side: str) -> list[bool]:
+    """Return per-kick results for the penalty shootout.
+
+    Prefers the individual detail-level data when ESPN includes team
+    attribution in the details array.  Falls back to synthesising
+    ``[True] * shootoutScore`` — all scored, none yet-missed — when
+    ESPN only provides the aggregate count (team field is null in
+    details).  In a live shootout the empty circles that result
+    correctly read as "kicks not yet taken".
+    """
+    pks = [bool(v) for v in (game.get(f"{side}_pks") or [])]
+    if pks:
+        return pks
+    aggregate = game.get(f"{side}_shootout_score")
+    if aggregate is not None:
+        try:
+            return [True] * int(aggregate)
+        except (ValueError, TypeError):
+            pass
+    return []
+
+
 def build_game_view(
     game: dict[str, Any],
     logos: dict[str, Image.Image | None],
@@ -243,8 +275,8 @@ def build_game_view(
         situation=dict(game.get("situation") or {}),
         away_goals=list(game.get("away_goals") or []),
         home_goals=list(game.get("home_goals") or []),
-        away_pks=[bool(v) for v in (game.get("away_pks") or [])],
-        home_pks=[bool(v) for v in (game.get("home_pks") or [])],
+        away_pks=_resolve_pks(game, "away"),
+        home_pks=_resolve_pks(game, "home"),
         ended_in_shootout=bool(game.get("ended_in_shootout", False)),
         is_live_shootout=bool(game.get("is_live_shootout", False)),
         celebration=celebration,

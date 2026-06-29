@@ -495,7 +495,11 @@ class ESPNSportsLibrary(Library):
                 away = next(
                     (c for c in competitors if c.get("homeAway") == "away"), competitors[1]
                 )
-                status_type = (event.get("status") or {}).get("type") or {}
+                status_obj = event.get("status") or {}
+                status_type = status_obj.get("type") or {}
+                # ESPN stores the current period number on the status object
+                # (not inside the type sub-object).  Period >= 5 = shootout.
+                status_period = int(status_obj.get("period") or 0)
 
                 home_team = home.get("team", {})
                 away_team = away.get("team", {})
@@ -553,6 +557,23 @@ class ESPNSportsLibrary(Library):
                 # Shootout penalty kicks: True=scored, False=missed
                 home_pks: list[bool] = []
                 away_pks: list[bool] = []
+                # Aggregate shootout score per competitor (ESPN's shootoutScore
+                # field).  Populated even when the details array lacks team
+                # attribution, so we always have a summary count to display.
+                home_shootout_score: int | None = None
+                away_shootout_score: int | None = None
+                try:
+                    raw = home.get("shootoutScore")
+                    if raw is not None:
+                        home_shootout_score = int(raw)
+                except (ValueError, TypeError):
+                    pass
+                try:
+                    raw = away.get("shootoutScore")
+                    if raw is not None:
+                        away_shootout_score = int(raw)
+                except (ValueError, TypeError):
+                    pass
                 # Whether this game is in or ended by a penalty shootout
                 status_name = status_type.get("name", "")
                 short_detail = status_type.get("shortDetail", "").lower()
@@ -564,7 +585,15 @@ class ESPNSportsLibrary(Library):
                 )
                 is_live_shootout = (
                     status_type.get("state", "pre") == "in"
-                    and ("penalties" in short_detail or (not ended_in_shootout and "/pk" in short_detail))
+                    and not ended_in_shootout
+                    and (
+                        status_period >= 5
+                        or "STATUS_SHOOTOUT" in status_name
+                        or "penalt" in short_detail
+                        or short_detail in ("pk", "pks", "pen", "pens")
+                        or short_detail.startswith("pk ")
+                        or "/pk" in short_detail
+                    )
                 )
                 if sport == "soccer":
                     ht_id = home_team.get("id", "")
@@ -577,9 +606,22 @@ class ESPNSportsLibrary(Library):
                         clock_val = ((detail.get("clock") or {}).get("displayValue") or "")
                         scoring_id = ((detail.get("team") or {}).get("id") or "")
                         is_og = "own" in d_type
-                        # Period 5+ = penalty shootout phase; treat separately
-                        if period_num >= 5 and "penalty" in d_type and not is_og:
-                            scored = "miss" not in d_type and "saved" not in d_type
+                        is_miss_or_save = "miss" in d_type or "saved" in d_type or "save" in d_type
+                        # Identify penalty shootout kicks via multiple signals:
+                        # 1. Period 5+ in the detail (most reliable when present)
+                        # 2. "miss"/"saved" only appear during shootouts, never regular play
+                        # 3. Period unknown (0) while the game is in a live/ended shootout
+                        is_shootout_kick = (
+                            "penalty" in d_type
+                            and not is_og
+                            and (
+                                period_num >= 5
+                                or is_miss_or_save
+                                or (period_num == 0 and (is_live_shootout or ended_in_shootout))
+                            )
+                        )
+                        if is_shootout_kick:
+                            scored = not is_miss_or_save
                             if scoring_id == ht_id:
                                 home_pks.append(scored)
                             elif scoring_id == at_id:
@@ -656,6 +698,8 @@ class ESPNSportsLibrary(Library):
                         "away_points": away_points,
                         "home_pks": home_pks,
                         "away_pks": away_pks,
+                        "home_shootout_score": home_shootout_score,
+                        "away_shootout_score": away_shootout_score,
                         "ended_in_shootout": ended_in_shootout,
                         "is_live_shootout": is_live_shootout,
                     }

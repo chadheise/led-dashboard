@@ -120,6 +120,44 @@ def test_featured_live_games_no_live_games_returns_empty():
     assert app._featured_live_games() == []
 
 
+def test_filter_drops_implausibly_long_running_live_game_from_spotlight():
+    """A game ESPN never flips out of "in" (stuck feed, outage) must age out
+    of the live spotlight instead of pinning the scene forever, even though
+    it can still appear in the normal completed-game rotation."""
+    import datetime
+
+    soccer = _game_copy("soccer_long_note")
+    stale_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        hours=10
+    )
+    soccer["start_time"] = stale_start.isoformat().replace("+00:00", "Z")
+
+    app = _make_app({"live_game_mode": True, "live_game_source": "any"})
+
+    filtered = app._filter_by_time_window([soccer])
+
+    assert all(g.get("state") != "in" for g in filtered)
+
+    app._games = filtered
+    assert app._featured_live_games() == []
+
+
+def test_filter_keeps_live_game_within_plausible_duration():
+    import datetime
+
+    soccer = _game_copy("soccer_long_note")
+    recent_start = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        hours=1
+    )
+    soccer["start_time"] = recent_start.isoformat().replace("+00:00", "Z")
+
+    app = _make_app({"live_game_mode": True, "live_game_source": "any"})
+
+    filtered = app._filter_by_time_window([soccer])
+
+    assert filtered == [soccer]
+
+
 # ── Spotlight rotation ──────────────────────────────────────────────────────
 
 
