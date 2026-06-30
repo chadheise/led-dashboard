@@ -1,6 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 
+# Everything below is wrapped in main() and invoked as the very last line of
+# this file. This script does a `git pull` on itself partway through and
+# keeps running afterward — bash reads top-level (non-function) code from
+# disk line-by-line as it executes, so if we didn't do this, a pull that
+# changes the file size would leave bash reading from the wrong byte offset
+# for the rest of the script, causing garbled/corrupted execution (seen as
+# things like stray "echo: write error: Broken pipe" and inconsistent
+# boot behavior). Defining main() forces bash to read the whole function
+# body into memory up front, before git pull ever runs, so later on-disk
+# changes can't affect the copy already executing.
+main() {
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VENV_DIR="$REPO_DIR/.venv"
 HARDWARE_MODE=true
@@ -149,3 +161,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 wait "$ENGINE_PID" "$UI_PID"
+
+}
+
+main "$@"
