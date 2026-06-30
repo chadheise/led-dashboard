@@ -15,18 +15,9 @@ from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, can_fit_text, draw_status_message
 from libraries.location.library import LocationLibrary
-from libraries.timezones.library import (
-    city_name,
-    current_time,
-    list_timezone_options,
-    resolve_zone,
-)
+from libraries.timezones.library import city_name, current_time, resolve_zone
 
 logger = logging.getLogger(__name__)
-
-_TZ_OPTIONS: list[dict[str, str]] = list_timezone_options()
-_TZ_ENUM: list[str] = [c["timezone"] for c in _TZ_OPTIONS]
-_TZ_LABELS: dict[str, str] = {c["timezone"]: c["label"] for c in _TZ_OPTIONS}
 
 _DEFAULT_COLOR: str = "#C8C8C8"
 
@@ -54,22 +45,29 @@ def _dim(color: tuple[int, int, int], factor: float = 0.6) -> tuple[int, int, in
     return tuple(max(0, int(c * factor)) for c in color)  # type: ignore[return-value]
 
 
-def _parse_city_item(item: Any) -> tuple[str | None, str | None]:
-    """Normalize one configured city into (timezone, color hex or None).
+def _parse_city_item(item: Any) -> tuple[str | None, str | None, str | None]:
+    """Normalize one configured city into (timezone, display name, color hex).
 
-    Accepts the current per-city object form ``{"timezone", "color"}`` as well
-    as the legacy bare-timezone string, so instances saved before per-city
-    colors keep working.
+    Accepts the current per-city object form ``{"timezone", "name", "color"}``
+    — ``name`` is the chosen city, which can differ from the timezone's
+    representative city (e.g. "Boston" in ``America/New_York``) — as well as the
+    legacy ``{"timezone", "color"}`` object and the legacy bare-timezone string,
+    so older instances keep working. ``name``/``color`` may be None.
     """
     if isinstance(item, str):
-        return (item or None), None
+        return (item or None), None, None
     if isinstance(item, dict):
         tz_name = item.get("timezone")
         if not isinstance(tz_name, str) or not tz_name:
-            return None, None
+            return None, None, None
+        name = item.get("name")
         color = item.get("color")
-        return tz_name, (color if isinstance(color, str) and color else None)
-    return None, None
+        return (
+            tz_name,
+            name if isinstance(name, str) and name.strip() else None,
+            color if isinstance(color, str) and color else None,
+        )
+    return None, None, None
 
 
 def _format_time(dt: datetime, time_fmt: str) -> tuple[str, str]:
@@ -127,7 +125,8 @@ class WorldClockApp(DisplayApp):
                 "items": {
                     "type": "object",
                     "properties": {
-                        "timezone": {"type": "string", "enum": _TZ_ENUM},
+                        "name": {"type": "string", "default": ""},
+                        "timezone": {"type": "string", "default": ""},
                         "color": {
                             "type": "string",
                             "x-input-type": "color",
@@ -135,7 +134,6 @@ class WorldClockApp(DisplayApp):
                         },
                     },
                 },
-                "x-enum-labels": _TZ_LABELS,
                 "default": [],
             },
             "cycle_seconds": {
@@ -192,9 +190,11 @@ class WorldClockApp(DisplayApp):
             entries.append((local[0], local[1], None))
 
         for item in self.config.get("cities", []):
-            tz_name, color = _parse_city_item(item)
+            tz_name, name, color = _parse_city_item(item)
             if tz_name:
-                entries.append((tz_name, city_name(tz_name), color))
+                # The chosen city name wins over the timezone's representative
+                # city so "Boston" doesn't show up as "New York".
+                entries.append((tz_name, name or city_name(tz_name), color))
 
         self._entries = entries
         self._fetched_once = True

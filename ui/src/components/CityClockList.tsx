@@ -1,20 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import tzlookup from 'tz-lookup'
 import { C, F, fieldStyle, labelStyle } from '../theme'
 
 interface CityClock {
-  timezone: string
+  name?: string
+  timezone?: string
   color?: string
-}
-
-interface Option {
-  value: string   // IANA timezone
-  label: string   // "City, Country" or derived city name
 }
 
 interface Props {
   title: string
   description?: string
-  options: Option[]
   value: unknown
   onChange: (v: CityClock[]) => void
   /** Local-time row: rendered first when shown, with its own color picker. */
@@ -23,8 +19,20 @@ interface Props {
   onLocalColorChange?: (color: string) => void
 }
 
+interface CitySuggestion {
+  name: string       // "City, Country" for display + storage
+  timezone: string   // IANA zone resolved from the result's coordinates
+}
+
+interface NominatimResult {
+  lat: string
+  lon: string
+  display_name: string
+  address?: Record<string, string>
+}
+
 const DEFAULT_COLOR = '#C8C8C8'
-const MAX_RESULTS = 8
+const SEARCH_LIMIT = 6
 
 const colorSwatchStyle: React.CSSProperties = {
   width: 34, height: 34, padding: 2, cursor: 'pointer', flexShrink: 0,
@@ -90,40 +98,85 @@ const optionStyle: React.CSSProperties = {
   color: C.textSecondary,
 }
 
+/** Resolve an IANA timezone for a coordinate in the browser (no server dep). */
+function resolveTimezone(lat: number, lon: number): string {
+  try {
+    return tzlookup(lat, lon)
+  } catch {
+    return ''   // open ocean / poles — no timezone polygon
+  }
+}
+
+/** Turn one Nominatim hit into a city suggestion, or null if it has no zone. */
+function toSuggestion(r: NominatimResult): CitySuggestion | null {
+  const a = r.address ?? {}
+  const city =
+    a.city || a.town || a.village || a.municipality || a.hamlet ||
+    a.county || r.display_name.split(',')[0].trim()
+  const country = a.country ?? ''
+  const timezone = resolveTimezone(Number(r.lat), Number(r.lon))
+  if (!city || !timezone) return null
+  return { name: country ? `${city}, ${country}` : city, timezone }
+}
+
 /** A single city row: a typeahead over every world city plus its own color. */
 function CityRow({
   clock,
-  options,
-  labelFor,
   onChange,
   onRemove,
 }: {
   clock: CityClock
-  options: Option[]
-  labelFor: (tz: string) => string
   onChange: (patch: Partial<CityClock>) => void
   onRemove: () => void
 }) {
-  const [query, setQuery] = useState<string | null>(null)   // null => show selected label
-  const [open, setOpen] = useState(false)
-  const blurTimer = useRef<number | undefined>(undefined)
+  const [query, setQuery] = useState<string | null>(null)   // null => show selected name
+  const [suggestions, setSuggestions] = useState<CitySuggestion[]>([])
+  const [loading, setLoading] = useState(false)
+  const debounceRef = useRef<number | undefined>(undefined)
+  const blurRef = useRef<number | undefined>(undefined)
+  const reqRef = useRef(0)
 
-  const selectedLabel = clock.timezone ? labelFor(clock.timezone) : ''
-  const text = query ?? selectedLabel
+  const text = query ?? (clock.name ?? '')
 
-  const matches = useMemo(() => {
-    const q = (query ?? '').trim().toLowerCase()
-    if (!q) return options.slice(0, MAX_RESULTS)
-    return options
-      .filter(o => o.label.toLowerCase().includes(q) || o.value.toLowerCase().includes(q))
-      .slice(0, MAX_RESULTS)
-  }, [query, options])
-
-  const pick = (o: Option) => {
-    onChange({ timezone: o.value })
-    setQuery(null)
-    setOpen(false)
+  const search = async (q: string) => {
+    const id = ++reqRef.current
+    setLoading(true)
+    try {
+      const resp = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}` +
+          `&format=json&addressdetails=1&limit=${SEARCH_LIMIT}`,
+        { headers: { 'Accept-Language': 'en' } },
+      )
+      const results: NominatimResult[] = await resp.json()
+      if (id !== reqRef.current) return   // a newer query superseded this one
+      const seen = new Set<string>()
+      const hits: CitySuggestion[] = []
+      for (const r of results) {
+        const s = toSuggestion(r)
+        if (s && !seen.has(s.name)) { seen.add(s.name); hits.push(s) }
+      }
+      setSuggestions(hits)
+    } catch {
+      if (id === reqRef.current) setSuggestions([])
+    } finally {
+      if (id === reqRef.current) setLoading(false)
+    }
   }
+
+  const onType = (val: string) => {
+    setQuery(val)
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    if (val.trim().length < 2) { setSuggestions([]); return }
+    debounceRef.current = window.setTimeout(() => search(val.trim()), 300)
+  }
+
+  const pick = (s: CitySuggestion) => {
+    onChange({ name: s.name, timezone: s.timezone })
+    setQuery(null)
+    setSuggestions([])
+  }
+
+  const showMenu = query !== null && (loading || suggestions.length > 0)
 
   return (
     <div style={rowStyle}>
@@ -132,26 +185,29 @@ function CityRow({
           type="text"
           value={text}
           placeholder="Search any city..."
-          onChange={e => { setQuery(e.target.value); setOpen(true) }}
-          onFocus={() => { setQuery(''); setOpen(true) }}
+          onChange={e => onType(e.target.value)}
+          onFocus={() => setQuery('')}
           onBlur={() => {
             // Delay so an option's onMouseDown registers before we close.
-            blurTimer.current = window.setTimeout(() => { setOpen(false); setQuery(null) }, 120)
+            blurRef.current = window.setTimeout(() => { setQuery(null); setSuggestions([]) }, 150)
           }}
           style={fieldStyle}
         />
-        {open && matches.length > 0 && (
+        {showMenu && (
           <div style={menuStyle}>
-            {matches.map(o => (
+            {loading && suggestions.length === 0 && (
+              <div style={{ ...optionStyle, color: C.textDim, cursor: 'default' }}>Searching…</div>
+            )}
+            {suggestions.map((s, i) => (
               <div
-                key={o.value}
+                key={`${s.name}-${i}`}
                 style={optionStyle}
                 onMouseEnter={e => (e.currentTarget.style.background = C.surfaceHover)}
                 onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
                 // onMouseDown fires before the input's onBlur, so the pick lands.
-                onMouseDown={e => { e.preventDefault(); clearTimeout(blurTimer.current); pick(o) }}
+                onMouseDown={e => { e.preventDefault(); clearTimeout(blurRef.current); pick(s) }}
               >
-                {o.label}
+                {s.name}
               </div>
             ))}
           </div>
@@ -192,19 +248,15 @@ function LocalRow({ color, onColorChange }: { color: string; onColorChange: (c: 
 }
 
 export default function CityClockList({
-  title, description, options, value, onChange,
+  title, description, value, onChange,
   showLocal, localColor, onLocalColorChange,
 }: Props) {
   const clocks: CityClock[] = Array.isArray(value) ? (value as CityClock[]) : []
-  const labelFor = useMemo(() => {
-    const map = new Map(options.map(o => [o.value, o.label]))
-    return (tz: string) => map.get(tz) ?? tz
-  }, [options])
 
   const update = (idx: number, patch: Partial<CityClock>) =>
     onChange(clocks.map((c, i) => (i === idx ? { ...c, ...patch } : c)))
 
-  const add = () => onChange([...clocks, { timezone: '', color: DEFAULT_COLOR }])
+  const add = () => onChange([...clocks, { name: '', timezone: '', color: DEFAULT_COLOR }])
 
   const remove = (idx: number) => onChange(clocks.filter((_, i) => i !== idx))
 
@@ -223,8 +275,6 @@ export default function CityClockList({
         <CityRow
           key={idx}
           clock={clock}
-          options={options}
-          labelFor={labelFor}
           onChange={patch => update(idx, patch)}
           onRemove={() => remove(idx)}
         />
