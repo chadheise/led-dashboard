@@ -202,63 +202,13 @@ class SceneManager:
     async def _maybe_rotate(self) -> None:
         if self._paused or len(self._scenes) <= 1 or not self._entries:
             return
-
-        current_pinned = any(
-            [await app.should_pin() for app, _ in self._current_scene()]
-        )
-
-        if current_pinned:
-            # Stay for the full duration, then rotate only to other pinned scenes.
-            # This lets multiple spotlight-eligible scenes take turns while non-
-            # spotlight scenes stay out of the rotation during a live game.
-            entry = self._entries[self._current_idx]
-            if time.monotonic() - self._last_switch >= entry.duration:
-                await self._advance_to_next_pinned()
-            return
-
-        # Not currently pinned: jump immediately to the nearest pinned scene.
-        n = len(self._scenes)
-        for skip in range(1, n):
-            candidate_idx = (self._current_idx + skip) % n
-            scene = self._scenes[candidate_idx]
-            for app, _ in scene:
-                if await app.should_pin():
-                    for a, _ in self._current_scene():
-                        await a.on_deactivate()
-                    self._current_idx = candidate_idx
-                    for a, _ in self._current_scene():
-                        await a.on_activate()
-                    self._last_switch = time.monotonic()
-                    self._paused = False
-                    return
-
-        # No scene is pinned — normal duration-based rotation.
+        # Normal duration-based rotation. A scene with a live event (e.g. the
+        # sports app showing a live game) still renders that event whenever it
+        # is on screen, but it does not pin the playlist — other modules keep
+        # rotating in on their normal schedule.
         entry = self._entries[self._current_idx]
         if time.monotonic() - self._last_switch >= entry.duration:
             await self._advance_to_next_visible()
-
-    async def _advance_to_next_pinned(self) -> None:
-        """Rotate to the next scene that requests a pin, skipping all others.
-
-        If no other scene is pinned, resets the timer so the current pinned
-        scene keeps displaying rather than falling through to unpinned rotation.
-        """
-        n = len(self._scenes)
-        for skip in range(1, n):
-            candidate_idx = (self._current_idx + skip) % n
-            scene = self._scenes[candidate_idx]
-            for app, _ in scene:
-                if await app.should_pin():
-                    for a, _ in self._current_scene():
-                        await a.on_deactivate()
-                    self._current_idx = candidate_idx
-                    for a, _ in self._current_scene():
-                        await a.on_activate()
-                    self._last_switch = time.monotonic()
-                    self._paused = False
-                    return
-        # Only one pinned scene — reset timer to stay on it.
-        self._last_switch = time.monotonic()
 
     async def _advance_to_next_visible(self) -> None:
         n = len(self._scenes)

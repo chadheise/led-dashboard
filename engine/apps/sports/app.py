@@ -500,9 +500,6 @@ class SportsApp(DisplayApp):
     async def should_display(self) -> bool:
         return bool(self._games)
 
-    async def should_pin(self) -> bool:
-        return bool(self._featured_live_games())
-
     async def on_activate(self) -> None:
         self._page_idx = 0
         self._page_started_at = self._now()
