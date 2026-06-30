@@ -60,6 +60,92 @@ def _flag_url(abbr: str) -> str | None:
     return _FLAGCDN_BASE.format(code=code) if code else None
 
 
+def _shootout_decided(attempts: dict[str, int], made: dict[str, int]) -> bool:
+    """Standard penalty-shootout stoppage rule: 5 regulation rounds, then
+    sudden death pairs, stopping as soon as the result is mathematically set."""
+    def max_possible(side: str) -> int:
+        remaining = max(0, 5 - attempts[side])
+        return made[side] + remaining
+
+    if attempts["home"] >= 5 and attempts["away"] >= 5:
+        return attempts["home"] == attempts["away"] and made["home"] != made["away"]
+    return max_possible("home") < made["away"] or max_possible("away") < made["home"]
+
+
+def _simulate_shootout(
+    kicks: list[tuple[str, bool]], completed: bool
+) -> tuple[list[bool], list[bool]]:
+    """Reconstruct full home/away penalty-shootout sequences (scored + missed).
+
+    ESPN's play-by-play ``details`` array only ever records *successful*
+    shootout kicks ("Penalty - Scored") -- missed/saved kicks are never
+    reported. ``kicks`` is the chronological sequence of known scored kicks,
+    each already tagged with the team that scored it (taken verbatim from
+    ESPN's ``detail.team.id``, in ``("home"|"away", True)`` form -- team
+    attribution is never guessed here, only read off the feed).
+
+    What *is* inferred is the misses in between. Penalty shootouts have a
+    fixed structure: exactly one kick per team per round, strictly
+    alternating. So whenever the next known kick belongs to the *other*
+    side, the side whose turn was skipped must have missed in between --
+    that miss is inserted for the skipped side. Because the rule fixes which
+    side a gap belongs to, this can never reassign a *made* goal to the
+    wrong team; it only ever affects whether/where a miss is recorded.
+
+    Blind spot: a round where *both* sides miss leaves zero trace in ESPN's
+    feed (neither side produces a detail entry), which is indistinguishable
+    from "this round hasn't been played yet" -- there is no alternation
+    violation to detect it by, and no other signal (round number, distinct
+    clock value, etc.) exists in the feed to recover it. Such synchronized
+    misses are silently dropped; every other single-sided miss is recovered
+    correctly. This can shift which attempt-slot a team's *later* miss/make
+    lands in, but, per above, never which team a given made goal belongs to.
+
+    When ``completed`` is True the shootout is over but may end on an
+    unreported miss (e.g. the deciding kick), which has no following entry to
+    reveal it; simulation continues past the last known kick, applying the
+    standard stoppage rule, to recover that trailing miss too. While live, we
+    stop at the last known kick rather than guessing ahead.
+    """
+    sides = ["home", "away"]
+    if kicks and kicks[0][0] == "away":
+        sides = ["away", "home"]
+
+    results: dict[str, list[bool]] = {"home": [], "away": []}
+    made = {"home": 0, "away": 0}
+    attempts = {"home": 0, "away": 0}
+    ki = 0
+    n = len(kicks)
+    turn = 0
+    while turn < 40:
+        side = sides[turn % 2]
+        if ki < n and kicks[ki][0] == side:
+            scored = kicks[ki][1]
+            ki += 1
+        elif ki < n:
+            # kicks[ki] is a real, team-tagged scored kick for the *other*
+            # side -- so this side's turn was skipped, and per the fixed
+            # alternating-rounds rule that miss can only belong to this
+            # side. Doesn't touch kicks[ki]'s own team attribution at all.
+            scored = False
+        elif completed:
+            # No more known kicks, but the shootout is over: the missing
+            # trailing kick(s) were misses.
+            scored = False
+        else:
+            break  # Live and no more known kicks yet -- stop guessing.
+
+        results[side].append(scored)
+        attempts[side] += 1
+        if scored:
+            made[side] += 1
+        if completed and _shootout_decided(attempts, made):
+            break
+        turn += 1
+
+    return results["home"], results["away"]
+
+
 class ESPNSportsLibrary(Library):
     id: ClassVar[str] = "espn_sports"
     name: ClassVar[str] = "ESPN Sports"
@@ -554,9 +640,13 @@ class ESPNSportsLibrary(Library):
                 away_goals: list[str] = []
                 home_points: int | None = None
                 away_points: int | None = None
-                # Shootout penalty kicks: True=scored, False=missed
+                # Shootout penalty kicks: True=scored, False=missed. Built from
+                # the chronological order of *known* (always scored -- ESPN
+                # never reports misses) kicks, then reconstructed below via
+                # _simulate_shootout to recover the missed ones.
                 home_pks: list[bool] = []
                 away_pks: list[bool] = []
+                shootout_kicks: list[tuple[str, bool]] = []
                 # Aggregate shootout score per competitor (ESPN's shootoutScore
                 # field).  Populated even when the details array lacks team
                 # attribution, so we always have a summary count to display.
@@ -623,9 +713,9 @@ class ESPNSportsLibrary(Library):
                         if is_shootout_kick:
                             scored = not is_miss_or_save
                             if scoring_id == ht_id:
-                                home_pks.append(scored)
+                                shootout_kicks.append(("home", scored))
                             elif scoring_id == at_id:
-                                away_pks.append(scored)
+                                shootout_kicks.append(("away", scored))
                             continue
                         is_pk = "penalty" in d_type and not is_og
                         if is_og:
@@ -655,6 +745,10 @@ class ESPNSportsLibrary(Library):
                                 away_points = int(float(str(stat.get("value", stat.get("displayValue", "")))))
                             except (ValueError, TypeError):
                                 pass
+                    if shootout_kicks and (is_live_shootout or ended_in_shootout):
+                        home_pks, away_pks = _simulate_shootout(
+                            shootout_kicks, completed=ended_in_shootout
+                        )
 
                 games.append(
                     {
