@@ -126,10 +126,25 @@ UI_PID=$!
 
 log "Services started. Engine PID=$ENGINE_PID, UI PID=$UI_PID"
 
+# Periodically log temperature/throttle/voltage state so a hard lockup leaves
+# a trail in the journal. get_throttled bits: 0x1=undervoltage now,
+# 0x2=arm freq capped now, 0x4=throttled (thermal) now; the 0x1xxxx variants
+# mean "happened since boot" rather than "happening right now".
+HEALTH_PID=""
+if $HARDWARE_MODE && command -v vcgencmd >/dev/null 2>&1; then
+    (
+        while true; do
+            log "health: $(vcgencmd measure_temp) throttled=$(vcgencmd get_throttled)"
+            sleep 30
+        done
+    ) &
+    HEALTH_PID=$!
+fi
+
 cleanup() {
     log "Shutting down services..."
     stop_boot_display
-    kill "$ENGINE_PID" "$UI_PID" 2>/dev/null || true
+    kill "$ENGINE_PID" "$UI_PID" ${HEALTH_PID:+$HEALTH_PID} 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
