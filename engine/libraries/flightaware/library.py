@@ -1207,6 +1207,7 @@ def _extract_tracking_fields(flight: dict[str, Any]) -> dict[str, Any]:
 
     fields.update({
         "status": flight.get("status", ""),
+        "cancelled": bool(flight.get("cancelled")),
         "scheduled_off": flight.get("scheduled_off"),
         "estimated_off": flight.get("estimated_off"),
         "actual_off": flight.get("actual_off"),

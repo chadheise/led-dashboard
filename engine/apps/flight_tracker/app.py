@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -17,11 +17,28 @@ from app_base import DisplayApp
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
-from libraries.flightaware.library import FlightAwareLibrary
+from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
 from libraries.location.library import LocationLibrary
+from libraries.timezones.library import resolve_zone
+from apps.flights_overhead.icons import render_category_icon
 
 _UNIT_CYCLE_S: float = 4.0
 _GATED_PHASES = ("unknown", "not_found", "approaching", "active", "recently_landed")
+
+# How far ahead a configured flight date can be before FlightAware has schedule
+# data for it. Flights dated beyond this are neither polled nor displayed (they
+# would otherwise sit on a "not available" card), until they enter the window.
+_LOOKUP_WINDOW_DAYS: int = 2
+
+# Status-indicator colors: on time / ahead of schedule, delayed, cancelled.
+_STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
+_STATUS_YELLOW: tuple[int, int, int] = (230, 196, 0)
+_STATUS_RED: tuple[int, int, int] = (224, 52, 44)
+
+# Status-indicator colors: on time / ahead of schedule, delayed, cancelled.
+_STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
+_STATUS_YELLOW: tuple[int, int, int] = (230, 196, 0)
+_STATUS_RED: tuple[int, int, int] = (224, 52, 44)
 
 # Auto-hide window: a flight counts as "active" from 2h before its (estimated)
 # departure, while airborne, and until 2h after it lands.
@@ -56,10 +73,42 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _fmt_time(value: str | None) -> str:
-    if not value or "T" not in value:
+def _fmt_time(value: str | None, tz: tzinfo | None = None, time_format: str = "24h") -> str:
+    """Format a UTC ISO timestamp as a local time-of-day string.
+
+    Converts to ``tz`` (the user's configured timezone) when available, and
+    honours the location/time ``time_format`` setting ("12h" -> "2:30 PM",
+    "24h" -> "14:30"). Falls back to UTC when no timezone is configured.
+    """
+    dt = _parse_dt(value)
+    if dt is None:
         return "--:--"
-    return value.split("T")[1][:5]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if tz is not None:
+        dt = dt.astimezone(tz)
+    if time_format == "12h":
+        hour = dt.hour % 12 or 12
+        suffix = "AM" if dt.hour < 12 else "PM"
+        return f"{hour}:{dt.minute:02d} {suffix}"
+    return f"{dt.hour:02d}:{dt.minute:02d}"
+
+
+def _within_lookup_window(date_str: str | None, today: date) -> bool:
+    """Whether a flight's configured date is near enough to track/display.
+
+    FlightAware only has schedule data a couple of days out, so a flight dated
+    further ahead can't be resolved and should stay hidden (rather than showing
+    "not available") until it enters the window. Flights with no configured date
+    are always in-window since their next instance can't be known in advance.
+    """
+    if not date_str:
+        return True
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return True
+    return d <= today + timedelta(days=_LOOKUP_WINDOW_DAYS)
 
 
 def _fmt_delay(seconds: int | None) -> str:
@@ -333,6 +382,8 @@ class FlightTrackerApp(DisplayApp):
         self._location = LocationLibrary(self.library_configs.get("location", {}))
         self._tracked: dict[str, dict[str, Any]] = {}
         self._live_overrides: dict[str, dict[str, Any]] = {}
+        self._logos: dict[str, Image.Image | None] = {}
+        self._logos_fetched: set[str] = set()
         self._next_poll_due: dict[str, float] = {}
         self._last_flight_dates: dict[str, str | None] = {}
         self._fetched_once: bool = False
@@ -346,20 +397,37 @@ class FlightTrackerApp(DisplayApp):
     def refresh_interval(self) -> float:
         return float(self.global_config.get("refresh_interval", 60.0))
 
-    async def should_display(self) -> bool:
-        """Auto-hide gate: skip the module when no flight is active.
+    def _flights_in_range(self) -> list[str]:
+        """Flight numbers currently within FlightAware's schedule window.
 
-        Active flights are those departing within the next 2 hours, airborne,
-        or landed within the last 2 hours. Stay hidden until the first
-        (background) fetch resolves so a flight with no info available never
-        flashes its "not available" card before we know to skip it.
+        Single source of truth for "which flights can be shown right now",
+        shared by ``render_frame`` (its "No flights in range" fallback) and
+        ``should_display`` (the playlist auto-hide gate), so the two never
+        disagree. Flights dated beyond the lookup window are excluded.
+        """
+        today = datetime.now(timezone.utc).date()
+        return [
+            f["number"] for f in self._flights()
+            if _within_lookup_window(f["date"] or None, today)
+        ]
+
+    async def should_display(self) -> bool:
+        """Auto-hide gate: skip the module when nothing is worth showing.
+
+        Hidden unless at least one in-range flight (see ``_flights_in_range``)
+        is also active -- departing within the next 2 hours, airborne, or landed
+        within the last 2 hours. So a module whose only flights are out of range
+        (the "No flights in range" state) is not displayed at all in a playlist
+        that has the hide setting on. Stays hidden until the first (background)
+        fetch resolves so a flight with no info never flashes before we know to
+        skip it.
         """
         if not self._fetched_once:
             return False
         now = datetime.now(timezone.utc)
         return any(
             _is_active_flight(self._tracked.get(fn), now)
-            for fn in self._flight_numbers()
+            for fn in self._flights_in_range()
         )
 
     async def on_activate(self) -> None:
@@ -430,9 +498,16 @@ class FlightTrackerApp(DisplayApp):
         not-found) and stored it in ``_tracked``. Flights that never resolved
         (e.g. the budget was exhausted or the network was down when they were
         first polled) stay unresolved so the background fetch keeps retrying
-        them instead of leaving newly added flights permanently blank.
+        them instead of leaving newly added flights permanently blank. Flights
+        dated beyond the lookup window count as resolved -- there is nothing to
+        fetch for them yet -- so they don't hold background polling open.
         """
-        return all(self._tracked.get(fn) is not None for fn in self._flight_numbers())
+        today = datetime.now(timezone.utc).date()
+        return all(
+            self._tracked.get(f["number"]) is not None
+            or not _within_lookup_window(f["date"] or None, today)
+            for f in self._flights()
+        )
 
     async def fetch_data(self) -> None:
         if self.config.get("debug", False):
@@ -481,14 +556,18 @@ class FlightTrackerApp(DisplayApp):
         tz = self._location.get_timezone()
         tier = self._flightaware.budget_tier
         now_mono = time.monotonic()
+        today = datetime.now(timezone.utc).date()
         pi_far    = float(self.global_config.get("poll_interval_approaching_far", 600.0))
         pi_near   = float(self.global_config.get("poll_interval_approaching_near", 150.0))
         pi_active = float(self.global_config.get("poll_interval_active", 150.0))
         pi_landed = float(self.global_config.get("poll_interval_recently_landed", 300.0))
 
+        # Don't spend budget on flights dated beyond FlightAware's schedule
+        # horizon -- they'd only come back "not found" and get cached as such.
         to_poll = [
             fn for fn in flight_numbers
             if tier != "disabled"
+            and _within_lookup_window(flight_date_map.get(fn), today)
             and _phase(self._tracked.get(fn)) in _GATED_PHASES
             and now_mono >= self._next_poll_due.get(fn, 0.0)
         ]
@@ -523,6 +602,8 @@ class FlightTrackerApp(DisplayApp):
             if live is not None:
                 self._live_overrides.update(live)
 
+        await self._fetch_logos()
+
         min_card_s = float(self.config.get("min_card_seconds", 5.0))
         elapsed = now_mono - self._card_last_ts
         if elapsed >= min_card_s or not flight_numbers:
@@ -530,6 +611,33 @@ class FlightTrackerApp(DisplayApp):
             self._card_last_ts = now_mono
         else:
             self._card_idx = min(self._card_idx, max(0, len(flight_numbers) - 1))
+
+    def _operator_iata(self, fn: str, tracked: dict[str, Any] | None) -> str:
+        """Airline IATA code for a tracked flight, for logo lookup.
+
+        Prefers the operator code from FlightAware, falling back to the airline
+        prefix parsed from the flight number itself (e.g. ``DL699`` -> ``DL``).
+        """
+        if tracked and tracked.get("operator_iata"):
+            return str(tracked["operator_iata"]).upper()
+        return iata_from_callsign(fn) or ""
+
+    async def _fetch_logos(self) -> None:
+        needed = {
+            iata
+            for fn in self._flight_numbers()
+            if (t := self._tracked.get(fn)) and t.get("found")
+            and (iata := self._operator_iata(fn, t))
+        } - self._logos_fetched
+        if not needed:
+            return
+        results = await asyncio.gather(
+            *[self._flightaware.fetch_logo(code) for code in needed],
+            return_exceptions=True,
+        )
+        for iata, result in zip(needed, results):
+            self._logos_fetched.add(iata)
+            self._logos[iata] = result if isinstance(result, Image.Image) else None
 
     def _seed_debug(self) -> None:
         flight_numbers = self._flight_numbers() or ["DL699"]
@@ -557,16 +665,68 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Rendering ──────────────────────────────────────────────────────────────
 
+    def _tz_and_time_format(self) -> tuple[tzinfo | None, str]:
+        """Resolved user timezone + time-format ("12h"/"24h") from settings."""
+        tz_str = self._location.get_timezone()
+        tz = resolve_zone(tz_str) if tz_str else None
+        return tz, self._location.get_time_format()
+
     async def render_frame(self) -> None:
-        flight_numbers = self._flight_numbers()
-        if not flight_numbers:
+        if not self._flight_numbers():
             msg = "Loading..." if not self._fetched_once else "No flights configured"
             draw_status_message(self.canvas, msg)
             return
+
+        # Show only flights within FlightAware's schedule horizon. Flights dated
+        # further out can't be resolved yet, so rather than parking them on a
+        # "not available" card we drop them until they enter the lookup window.
+        # This is the same set the auto-hide gate keys off (see should_display),
+        # so a hidden module and this "No flights in range" state stay in sync.
+        visible = self._flights_in_range()
+        if not visible:
+            msg = "Loading..." if not self._fetched_once else "No flights in range"
+            draw_status_message(self.canvas, msg)
+            return
+
         if self.config.get("display_mode", "cards") == "table":
-            self._draw_table(flight_numbers)
+            self._draw_table(visible)
         else:
-            self._draw_card(flight_numbers)
+            self._draw_card(visible)
+
+    def _status_rows(
+        self,
+        tracked: dict[str, Any],
+        kind: str,
+        text_color: tuple[int, int, int],
+    ) -> list[tuple[str, tuple[int, int, int]]]:
+        """The two bottom card rows as (text, color) pairs.
+
+        Row 1 (schedule/progress) uses the card's base text color. Row 2 is the
+        on-time/delay/cancelled indicator, colored green when on time or ahead
+        of schedule, yellow when delayed, and red when cancelled.
+        """
+        tz, time_format = self._tz_and_time_format()
+
+        def delay_cell(delay_seconds: int | None) -> tuple[str, tuple[int, int, int]]:
+            text = _fmt_delay(delay_seconds)
+            return (text, _STATUS_YELLOW) if text else ("On time", _STATUS_GREEN)
+
+        if kind == "scheduled":
+            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'), tz, time_format)}"
+            delay_key = "departure_delay"
+        elif kind == "airborne":
+            pct = tracked.get("progress_percent")
+            schedule = f"En route {pct}%" if pct is not None else "En route"
+            delay_key = "arrival_delay"
+        elif kind == "landed":
+            schedule = f"Landed {_fmt_time(tracked.get('actual_on'), tz, time_format)}"
+            delay_key = "arrival_delay"
+        else:
+            return []
+
+        if tracked.get("cancelled"):
+            return [(schedule, text_color), ("Cancelled", _STATUS_RED)]
+        return [(schedule, text_color), delay_cell(tracked.get(delay_key))]
 
     def _draw_card(self, flight_numbers: list[str]) -> None:
         now = time.monotonic()
@@ -598,46 +758,135 @@ class FlightTrackerApp(DisplayApp):
             return
 
         assert tracked is not None
-        lines: list[str] = [label] if label else []
-        lines.append(fn)
-        if tracked.get("origin") and tracked.get("dest"):
-            lines.append(f"{tracked['origin']}->{tracked['dest']}")
+        self._render_flight_card(fn, tracked, kind, label, text_color)
 
-        if kind == "scheduled":
-            lines.append(f"Dep: {_fmt_time(tracked.get('scheduled_off'))}")
-            delay = _fmt_delay(tracked.get("departure_delay"))
-            lines.append(delay or "On time")
-        elif kind == "airborne":
-            pct = tracked.get("progress_percent")
-            if pct is not None:
-                lines.append(f"En route {pct}%")
-            lines.extend(self._stat_lines(tracked, self._show_imperial))
-        elif kind == "landed":
-            lines.append(f"Landed {_fmt_time(tracked.get('actual_on'))}")
-            delay = _fmt_delay(tracked.get("arrival_delay"))
-            lines.append(delay or "On time")
+    def _render_flight_card(
+        self,
+        fn: str,
+        tracked: dict[str, Any],
+        kind: str,
+        label: str,
+        text_color: tuple[int, int, int],
+    ) -> None:
+        """Render one flight card: airline logo, flight info, and live stats.
 
+        Mirrors the Flights Overhead card layout -- a square airline logo on the
+        left, a middle text column (airline/label, flight number, route), a
+        colon-aligned stats column on the right for airborne flights, and two
+        bottom rows for schedule/status -- so the two flight apps look consistent.
+        """
         w, h = self.canvas.width, self.canvas.height
         img = Image.new("RGB", (w, h))
 
-        n_rows = max(1, len(lines))
-        size_cap = max(7, (h - 4) // n_rows - 2)
+        pad = 2
+        inner_h = h - 2 * pad
+        inner_w = w - 2 * pad
+        logo_gap = 2
+        stats_gap = 2
+
+        # Largest font whose measured glyph height fits five rows; fall back to
+        # fewer rows on short panels rather than overlapping text.
+        n_rows = 5
         font_size = 7
+        size_cap = max(7, inner_h // 5 - 2)
         for size in (15, 12, 9, 8, 7):
             if size > size_cap:
                 continue
-            if n_rows * (render_text("Ag", text_color, size).height + 1) - 1 <= h - 4:
+            if 5 * (render_text("Ag", text_color, size).height + 1) - 1 <= inner_h:
                 font_size = size
                 break
+        else:
+            glyph_h = render_text("Ag", text_color, 7).height
+            n_rows = max(2, (inner_h + 1) // (glyph_h + 1))
+        slot_h = inner_h // n_rows
 
-        y = 2
-        for line in lines:
-            if not line:
-                continue
-            line_img = render_text(_clip_text(line, font_size, w - 4), text_color, font_size)
-            if y + line_img.height <= h:
-                img.paste(line_img, (2, y))
-            y += line_img.height + 1
+        def row_y(row: int, img_h: int) -> int:
+            return pad + row * slot_h + (slot_h - img_h) // 2
+
+        # Stats column (airborne only): colon-aligned alt/spd/track.
+        stat_strs = (
+            self._stat_lines(tracked, self._show_imperial)[:n_rows]
+            if kind == "airborne" else []
+        )
+        stat_parts: list[tuple[str, str]] = []
+        for s in stat_strs:
+            if ": " in s:
+                idx = s.index(": ")
+                stat_parts.append((s[: idx + 1], s[idx + 1:]))
+            else:
+                stat_parts.append((s, ""))
+
+        _worst_vals = [
+            " 45000 ft", " 700 mph", " 13700 m", " 1100 kph", " 359 deg", " ---",
+        ]
+        label_imgs = [render_text(lbl, text_color, font_size) for lbl, _ in stat_parts]
+        value_imgs = [render_text(val, text_color, font_size) if val else None
+                      for _, val in stat_parts]
+        label_col_w = max((li.width for li in label_imgs), default=0)
+        value_col_w = (
+            max(
+                max((render_text(v, text_color, font_size).width for v in _worst_vals), default=0),
+                max((vi.width for vi in value_imgs if vi is not None), default=0),
+            )
+            if stat_parts else 0
+        )
+        stats_w = label_col_w + value_col_w
+        if stats_w > inner_w // 2:
+            stat_parts, label_imgs, value_imgs = [], [], []
+            label_col_w = value_col_w = stats_w = 0
+
+        # Logo: square spanning the top rows, capped so text keeps room.
+        logo_dim = min(min(3, n_rows) * slot_h, w // 4)
+        operator_iata = self._operator_iata(fn, tracked)
+        raw_logo = self._logos.get(operator_iata) if operator_iata else None
+        if logo_dim >= 8:
+            if raw_logo is not None:
+                resized = raw_logo.resize((logo_dim, logo_dim), Image.LANCZOS)
+                bg = Image.new("RGB", resized.size, (0, 0, 0))
+                if resized.mode == "RGBA":
+                    bg.paste(resized.convert("RGB"), mask=resized.split()[3])
+                else:
+                    bg.paste(resized.convert("RGB"))
+                img.paste(bg, (pad, pad))
+            else:
+                fallback = render_category_icon(None, logo_dim)
+                bg = Image.new("RGB", (logo_dim, logo_dim), (0, 0, 0))
+                bg.paste(fallback.convert("RGB"), mask=fallback.split()[3])
+                img.paste(bg, (pad, pad))
+            mid_x = pad + logo_dim + logo_gap
+        else:
+            mid_x = pad
+
+        # Middle text: airline (or user label), flight number, route.
+        mid_w = max(0, (w - pad - stats_w - (stats_gap if stats_w else 0)) - mid_x)
+        airline = label or tracked.get("airline", "") or fn
+        origin = tracked.get("origin", "") or ""
+        dest = tracked.get("dest", "") or ""
+        route = f"{origin}->{dest}" if origin and dest else ""
+
+        for i, line in enumerate([airline, fn, route][: min(3, n_rows)]):
+            if line and mid_w > 0:
+                clipped = _clip_text(line, font_size, mid_w)
+                line_img = render_text(clipped, text_color, font_size)
+                img.paste(line_img, (mid_x, row_y(i, line_img.height)))
+
+        # Bottom rows (full-height cards only): schedule/status + delay, with
+        # the status indicator colored by on-time/delayed/cancelled state.
+        if n_rows == 5:
+            bottom_w = inner_w - stats_w - (stats_gap if stats_w else 0)
+            for i, (line, color) in enumerate(self._status_rows(tracked, kind, text_color)[:2]):
+                if line and bottom_w > 0:
+                    clipped = _clip_text(line, font_size, bottom_w)
+                    line_img = render_text(clipped, color, font_size)
+                    img.paste(line_img, (pad, row_y(3 + i, line_img.height)))
+
+        # Stats: labels right-aligned to the colon column, values to the edge.
+        if stat_parts:
+            colon_x = w - pad - value_col_w
+            for i, (li, vi) in enumerate(zip(label_imgs, value_imgs)):
+                img.paste(li, (colon_x - li.width, row_y(i, li.height)))
+                if vi is not None:
+                    img.paste(vi, (w - pad - vi.width, row_y(i, vi.height)))
 
         blit(self.canvas, img)
 

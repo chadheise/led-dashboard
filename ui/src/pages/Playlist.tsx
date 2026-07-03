@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { configSummary } from '../configSummary'
 
 interface PlaylistEntry {
   id: string
@@ -70,13 +71,6 @@ export default function Playlist() {
 
   const nextScene = async () => {
     await fetch('/api/playlist/next', { method: 'POST' })
-  }
-
-  const configSummary = (config: Record<string, unknown>) => {
-    const parts = Object.entries(config)
-      .slice(0, 3)
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(',') : String(v)}`)
-    return parts.join(' · ')
   }
 
   if (loading) {

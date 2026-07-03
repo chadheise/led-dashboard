@@ -40,10 +40,64 @@ export interface LocationValue {
   timezone?: string
 }
 
+interface NominatimAddress {
+  city?: string
+  town?: string
+  village?: string
+  municipality?: string
+  hamlet?: string
+  county?: string
+  state?: string
+  province?: string
+  country?: string
+}
+
 interface Suggestion {
   lat: string
   lon: string
   display_name: string
+  address?: NominatimAddress
+}
+
+// US states + DC/territories and Canadian provinces -> postal abbreviation.
+const STATE_ABBR: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", "district of columbia": "DC",
+  florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID", illinois: "IL",
+  indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY", louisiana: "LA",
+  maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI", minnesota: "MN",
+  mississippi: "MS", missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI",
+  wyoming: "WY", "puerto rico": "PR",
+  alberta: "AB", "british columbia": "BC", manitoba: "MB", "new brunswick": "NB",
+  "newfoundland and labrador": "NL", "nova scotia": "NS", ontario: "ON",
+  "prince edward island": "PE", quebec: "QC", québec: "QC", saskatchewan: "SK",
+  "northwest territories": "NT", nunavut: "NU", yukon: "YT",
+}
+
+/** Abbreviate a full state/province name where known, else return it as-is. */
+function abbreviateState(state: string): string {
+  return STATE_ABBR[state.trim().toLowerCase()] ?? state.trim()
+}
+
+/** Build a "City, ST, Country" label from a Nominatim result. */
+function locationLabel(s: Suggestion): string {
+  const a = s.address
+  if (a) {
+    const city = a.city || a.town || a.village || a.municipality || a.hamlet || a.county
+    const state = a.state || a.province
+    const parts = [city, state ? abbreviateState(state) : undefined, a.country].filter(
+      (p): p is string => !!p && p.trim() !== "",
+    )
+    if (parts.length) return parts.join(", ")
+  }
+  // Fallback: first two comma-parts of the raw display name.
+  const parts = s.display_name.split(",")
+  return parts.length > 1 ? `${parts[0].trim()}, ${parts[1].trim()}` : parts[0].trim()
 }
 
 interface Props {
@@ -255,7 +309,7 @@ export default function LocationMapInput({
     }
     try {
       const resp = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=5`,
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=5`,
         { headers: { 'Accept-Language': 'en' } }
       )
       const results: Suggestion[] = await resp.json()
@@ -284,11 +338,8 @@ export default function LocationMapInput({
     const newLat = Number(s.lat)
     const newLng = Number(s.lon)
     flyTo(newLat, newLng)
-    // Show first two comma-parts in the input so the field reflects the selection
-    const parts = s.display_name.split(',')
-    const short = parts.length > 1
-      ? `${parts[0].trim()}, ${parts[1].trim()}`
-      : parts[0].trim()
+    // Store "City, State, Country" so the module preview shows a real place name.
+    const short = locationLabel(s)
     setSearch(short)
     emit({ latitude: newLat, longitude: newLng, name: short })
     setSuggestions([])
@@ -317,10 +368,10 @@ export default function LocationMapInput({
     setSearchError('')
     try {
       const resp = await fetch(
-        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1`,
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=1`,
         { headers: { 'Accept-Language': 'en' } }
       )
-      const results: Array<{ lat: string; lon: string; display_name: string }> = await resp.json()
+      const results: Suggestion[] = await resp.json()
       if (!results.length) { setSearchError('Address not found'); return }
       selectSuggestion(results[0])
     } catch {
