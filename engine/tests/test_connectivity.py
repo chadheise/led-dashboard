@@ -91,6 +91,31 @@ def test_draw_offline_message_renders_non_blank_pixels() -> None:
     assert any(b != 0 for b in canvas._pixels)
 
 
+def test_draw_offline_message_caches_composed_image_per_size(monkeypatch) -> None:
+    """render_frame() calls this every frame while offline (up to config fps),
+    so it must not rebuild the icon/text from scratch each time — that CPU
+    cost competes with the timing-sensitive hardware matrix driver."""
+    connectivity_module._message_cache.clear()
+    calls = 0
+    orig_build = connectivity_module._build_offline_message_image
+
+    def _counting_build(w: int, h: int):
+        nonlocal calls
+        calls += 1
+        return orig_build(w, h)
+
+    monkeypatch.setattr(connectivity_module, "_build_offline_message_image", _counting_build)
+
+    canvas = SimulatorCanvas(320, 64, _noop_broadcast)
+    for _ in range(5):
+        draw_offline_message(canvas)
+    assert calls == 1
+
+    other_canvas = SimulatorCanvas(128, 32, _noop_broadcast)
+    draw_offline_message(other_canvas)
+    assert calls == 2
+
+
 @pytest.mark.asyncio
 async def test_scene_manager_shows_offline_message_instead_of_apps() -> None:
     _RecordingApp.render_calls = 0

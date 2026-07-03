@@ -10,8 +10,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+from io import BytesIO
+from pathlib import Path
 
-from PIL import Image, ImageDraw
+import cairosvg
+from PIL import Image
 
 from canvas.base import Canvas
 from libraries.canvas_utils.library import blit
@@ -88,34 +91,40 @@ class ConnectivityMonitor:
 
 # ── "No wifi connection" overlay ────────────────────────────────────────────
 
-_MESSAGE_COLOR: tuple[int, int, int] = (80, 80, 80)  # matches draw_status_message's dim gray
+_MESSAGE_COLOR: tuple[int, int, int] = (255, 255, 255)  # white, matches the icon's wifi glyph
 _MESSAGE_TEXT = "No wifi connection"
 _MESSAGE_FONT_MAX = 14
 
 
-def _wifi_off_icon(size: int, color: tuple[int, int, int]) -> Image.Image:
-    """A wifi glyph with a diagonal slash, drawn with primitives (no SVG asset)."""
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(img)
-    stroke = max(1, round(size * 0.08))
+# No-wifi badge icon (red circle, white wifi glyph, transparent background),
+# supplied by the user.
+_WIFI_OFF_SVG_PATH = Path(__file__).parent / "no_wifi.svg"
 
-    cx = size / 2
-    cy = size * 0.84
-    dot_r = max(1, round(size * 0.065))
-    draw.ellipse([cx - dot_r, cy - dot_r, cx + dot_r, cy + dot_r], fill=color)
+_icon_cache: dict[int, Image.Image] = {}
 
-    for frac in (0.34, 0.62, 0.92):
-        r = size * frac / 2
-        bbox = [cx - r, cy - r, cx + r, cy + r]
-        draw.arc(bbox, start=212, end=328, fill=color, width=stroke)
 
-    draw.line([(size * 0.08, size * 0.08), (size * 0.92, size * 0.92)], fill=color, width=stroke + 1)
+def _wifi_off_icon(size: int) -> Image.Image:
+    """Rasterize the no-wifi badge SVG at `size` px, cached (it never changes)."""
+    cached = _icon_cache.get(size)
+    if cached is not None:
+        return cached
+    png = cairosvg.svg2png(url=str(_WIFI_OFF_SVG_PATH), output_width=size, output_height=size)
+    img = Image.open(BytesIO(png)).convert("RGBA")
+    _icon_cache[size] = img
     return img
 
 
-def draw_offline_message(canvas: Canvas) -> None:
-    """Render a dim, centered "No wifi connection" message with a wifi-off icon to its left."""
-    w, h = canvas.width, canvas.height
+# The composed message is static for a given canvas size, but render_frame()
+# calls draw_offline_message() every rendered frame (up to config.yaml's fps)
+# for as long as the connection is down. Rebuilding the icon + text + composite
+# from scratch each call burned meaningful CPU on the Pi for no visual benefit,
+# competing with the timing-sensitive rpi-rgb-led-matrix GPIO driver and (per a
+# user report) destabilizing wifi/SSH — so the composed image is cached per
+# (width, height) and only rebuilt when a new size is seen.
+_message_cache: dict[tuple[int, int], Image.Image] = {}
+
+
+def _build_offline_message_image(w: int, h: int) -> Image.Image:
     pad = 2
     icon_size = max(10, min(h - 2 * pad, 28))
     gap = 4
@@ -129,7 +138,7 @@ def draw_offline_message(canvas: Canvas) -> None:
         text = text[:-1]
 
     text_img = render_text(text, _MESSAGE_COLOR, size) if text else Image.new("RGB", (1, 1))
-    icon = _wifi_off_icon(icon_size, _MESSAGE_COLOR)
+    icon = _wifi_off_icon(icon_size)
 
     text_w = text_img.width if text else 0
     group_gap = gap if text else 0
@@ -142,4 +151,19 @@ def draw_offline_message(canvas: Canvas) -> None:
     img.paste(icon, (x0, y0 + (group_h - icon_size) // 2), icon.split()[3])
     if text:
         img.paste(text_img, (x0 + icon_size + group_gap, y0 + (group_h - text_img.height) // 2))
+    return img
+
+
+def draw_offline_message(canvas: Canvas) -> None:
+    """Render a dim, centered "No wifi connection" message with a wifi-off icon to its left.
+
+    The composited image is cached per canvas size (see `_message_cache`) since
+    this is called every rendered frame while offline.
+    """
+    w, h = canvas.width, canvas.height
+    key = (w, h)
+    img = _message_cache.get(key)
+    if img is None:
+        img = _build_offline_message_image(w, h)
+        _message_cache[key] = img
     blit(canvas, img)
