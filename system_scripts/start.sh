@@ -69,6 +69,7 @@ log "Canvas mode: $( $HARDWARE_MODE && echo hardware || echo simulator )"
 log "Preview: $( $PREVIEW_ENABLED && echo enabled || echo disabled )"
 
 # Pull latest code (run as chadheise so their SSH key and known_hosts are used)
+show_boot_msg "Syncing git repo..."
 log "Pulling latest code from GitHub..."
 cd "$REPO_DIR"
 sudo -u chadheise git pull origin main
@@ -85,11 +86,12 @@ log "Installing engine dependencies..."
 pip install -r engine/requirements.txt
 
 # Build UI
-show_boot_msg "Building UI..."
+show_boot_msg "Installing UI packages..."
 log "Installing UI dependencies..."
 cd "$REPO_DIR/ui"
 npm install --unsafe-perm
 
+show_boot_msg "Building UI..."
 log "Building UI..."
 npm run build
 
