@@ -14,17 +14,23 @@ from typing import Any
 
 import asyncio
 
-from apps.flight_tracker.app import FlightTrackerApp
+from zoneinfo import ZoneInfo
+
+from apps.flight_tracker.app import (
+    FlightTrackerApp,
+    _fmt_time,
+    _within_lookup_window,
+)
 from canvas.simulator import SimulatorCanvas
 from libraries.flightaware.library import _select_flight_instance
 
 
-def _app(config: dict[str, Any]) -> FlightTrackerApp:
+def _app(config: dict[str, Any], library_configs: dict[str, Any] | None = None) -> FlightTrackerApp:
     async def _noop_broadcast(_frame: bytes) -> None:
         pass
 
     canvas = SimulatorCanvas(64, 32, _noop_broadcast)
-    return FlightTrackerApp(config, canvas, {}, {})
+    return FlightTrackerApp(config, canvas, {}, library_configs or {})
 
 
 # ── Flight-number parsing (req 2) ──────────────────────────────────────────────
@@ -301,3 +307,82 @@ def test_removed_flight_pruned_from_tracked():
     app.config["flights"] = [{"number": "DL1"}]
     asyncio.run(app.fetch_data())
     assert set(app._tracked) == {"DL1"}
+
+
+# ── Timezone + time-format aware times (req 1) ─────────────────────────────────
+
+_LOC_NY_12H = {
+    "location": {
+        "location": {"latitude": 40.0, "longitude": -74.0, "timezone": "America/New_York"},
+        "time_format": "12h",
+    }
+}
+_LOC_NY_24H = {
+    "location": {
+        "location": {"latitude": 40.0, "longitude": -74.0, "timezone": "America/New_York"},
+        "time_format": "24h",
+    }
+}
+
+
+def test_fmt_time_converts_to_timezone_12h():
+    ny = ZoneInfo("America/New_York")
+    # 14:00 UTC == 10:00 AM EDT (summer).
+    assert _fmt_time("2026-06-18T14:00:00Z", ny, "12h") == "10:00 AM"
+    # Midnight UTC == 8:00 PM EDT the previous evening.
+    assert _fmt_time("2026-06-18T00:00:00Z", ny, "12h") == "8:00 PM"
+
+
+def test_fmt_time_converts_to_timezone_24h():
+    ny = ZoneInfo("America/New_York")
+    assert _fmt_time("2026-06-18T14:00:00Z", ny, "24h") == "10:00"
+
+
+def test_fmt_time_defaults_to_utc_when_no_timezone():
+    assert _fmt_time("2026-06-18T14:00:00Z", None, "24h") == "14:00"
+    assert _fmt_time(None, None, "24h") == "--:--"
+
+
+def test_status_row_time_uses_location_settings():
+    app = _app({"flights": [{"number": "DL1"}]}, library_configs=_LOC_NY_12H)
+    tracked = {"found": True, "scheduled_off": "2026-06-18T14:00:00Z", "departure_delay": 0}
+    rows = app._status_rows(tracked, "scheduled", (200, 200, 200))
+    assert rows[0][0] == "Dep 10:00 AM"
+
+    app24 = _app({"flights": [{"number": "DL1"}]}, library_configs=_LOC_NY_24H)
+    rows24 = app24._status_rows(tracked, "scheduled", (200, 200, 200))
+    assert rows24[0][0] == "Dep 10:00"
+
+
+# ── Far-future flights are hidden, not shown as "not available" (req 2) ─────────
+
+def test_within_lookup_window():
+    today = datetime.date(2026, 6, 10)
+    assert _within_lookup_window(None, today) is True          # no date -> always
+    assert _within_lookup_window("2026-06-10", today) is True  # today
+    assert _within_lookup_window("2026-06-12", today) is True   # +2 days (edge)
+    assert _within_lookup_window("2026-06-13", today) is False  # +3 days -> hidden
+    assert _within_lookup_window("2026-08-01", today) is False  # well into the future
+    assert _within_lookup_window("garbage", today) is True      # unparseable -> keep
+
+
+def test_far_future_flight_not_polled():
+    far = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    app = _fake_app({"flights": [{"number": "DL1", "date": far}]}, results={})
+    asyncio.run(app.fetch_data())
+    # The far-future flight is never polled (no schedule data that far out)...
+    assert app._flightaware.calls == []
+    # ...and it doesn't hold background polling open.
+    assert app._all_flights_resolved() is True
+
+
+def test_near_and_far_flights_only_near_polled():
+    now = datetime.datetime.now(datetime.timezone.utc)
+    near = now.strftime("%Y-%m-%d")
+    far = (now + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    app = _fake_app(
+        {"flights": [{"number": "DL1", "date": near}, {"number": "UA2", "date": far}]},
+        results={"DL1": {"found": True, "scheduled_off": _iso(_hours(5))}},
+    )
+    asyncio.run(app.fetch_data())
+    assert app._flightaware.calls == ["DL1"]  # only the in-window flight

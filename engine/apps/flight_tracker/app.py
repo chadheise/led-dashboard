@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -19,10 +19,21 @@ from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
 from libraries.location.library import LocationLibrary
+from libraries.timezones.library import resolve_zone
 from apps.flights_overhead.icons import render_category_icon
 
 _UNIT_CYCLE_S: float = 4.0
 _GATED_PHASES = ("unknown", "not_found", "approaching", "active", "recently_landed")
+
+# How far ahead a configured flight date can be before FlightAware has schedule
+# data for it. Flights dated beyond this are neither polled nor displayed (they
+# would otherwise sit on a "not available" card), until they enter the window.
+_LOOKUP_WINDOW_DAYS: int = 2
+
+# Status-indicator colors: on time / ahead of schedule, delayed, cancelled.
+_STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
+_STATUS_YELLOW: tuple[int, int, int] = (230, 196, 0)
+_STATUS_RED: tuple[int, int, int] = (224, 52, 44)
 
 # Status-indicator colors: on time / ahead of schedule, delayed, cancelled.
 _STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
@@ -62,10 +73,42 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-def _fmt_time(value: str | None) -> str:
-    if not value or "T" not in value:
+def _fmt_time(value: str | None, tz: tzinfo | None = None, time_format: str = "24h") -> str:
+    """Format a UTC ISO timestamp as a local time-of-day string.
+
+    Converts to ``tz`` (the user's configured timezone) when available, and
+    honours the location/time ``time_format`` setting ("12h" -> "2:30 PM",
+    "24h" -> "14:30"). Falls back to UTC when no timezone is configured.
+    """
+    dt = _parse_dt(value)
+    if dt is None:
         return "--:--"
-    return value.split("T")[1][:5]
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if tz is not None:
+        dt = dt.astimezone(tz)
+    if time_format == "12h":
+        hour = dt.hour % 12 or 12
+        suffix = "AM" if dt.hour < 12 else "PM"
+        return f"{hour}:{dt.minute:02d} {suffix}"
+    return f"{dt.hour:02d}:{dt.minute:02d}"
+
+
+def _within_lookup_window(date_str: str | None, today: date) -> bool:
+    """Whether a flight's configured date is near enough to track/display.
+
+    FlightAware only has schedule data a couple of days out, so a flight dated
+    further ahead can't be resolved and should stay hidden (rather than showing
+    "not available") until it enters the window. Flights with no configured date
+    are always in-window since their next instance can't be known in advance.
+    """
+    if not date_str:
+        return True
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return True
+    return d <= today + timedelta(days=_LOOKUP_WINDOW_DAYS)
 
 
 def _fmt_delay(seconds: int | None) -> str:
@@ -438,9 +481,16 @@ class FlightTrackerApp(DisplayApp):
         not-found) and stored it in ``_tracked``. Flights that never resolved
         (e.g. the budget was exhausted or the network was down when they were
         first polled) stay unresolved so the background fetch keeps retrying
-        them instead of leaving newly added flights permanently blank.
+        them instead of leaving newly added flights permanently blank. Flights
+        dated beyond the lookup window count as resolved -- there is nothing to
+        fetch for them yet -- so they don't hold background polling open.
         """
-        return all(self._tracked.get(fn) is not None for fn in self._flight_numbers())
+        today = datetime.now(timezone.utc).date()
+        return all(
+            self._tracked.get(f["number"]) is not None
+            or not _within_lookup_window(f["date"] or None, today)
+            for f in self._flights()
+        )
 
     async def fetch_data(self) -> None:
         if self.config.get("debug", False):
@@ -489,14 +539,18 @@ class FlightTrackerApp(DisplayApp):
         tz = self._location.get_timezone()
         tier = self._flightaware.budget_tier
         now_mono = time.monotonic()
+        today = datetime.now(timezone.utc).date()
         pi_far    = float(self.global_config.get("poll_interval_approaching_far", 600.0))
         pi_near   = float(self.global_config.get("poll_interval_approaching_near", 150.0))
         pi_active = float(self.global_config.get("poll_interval_active", 150.0))
         pi_landed = float(self.global_config.get("poll_interval_recently_landed", 300.0))
 
+        # Don't spend budget on flights dated beyond FlightAware's schedule
+        # horizon -- they'd only come back "not found" and get cached as such.
         to_poll = [
             fn for fn in flight_numbers
             if tier != "disabled"
+            and _within_lookup_window(flight_date_map.get(fn), today)
             and _phase(self._tracked.get(fn)) in _GATED_PHASES
             and now_mono >= self._next_poll_due.get(fn, 0.0)
         ]
@@ -594,16 +648,33 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Rendering ──────────────────────────────────────────────────────────────
 
+    def _tz_and_time_format(self) -> tuple[tzinfo | None, str]:
+        """Resolved user timezone + time-format ("12h"/"24h") from settings."""
+        tz_str = self._location.get_timezone()
+        tz = resolve_zone(tz_str) if tz_str else None
+        return tz, self._location.get_time_format()
+
     async def render_frame(self) -> None:
-        flight_numbers = self._flight_numbers()
-        if not flight_numbers:
+        flights = self._flights()
+        if not flights:
             msg = "Loading..." if not self._fetched_once else "No flights configured"
             draw_status_message(self.canvas, msg)
             return
+
+        # Hide flights whose configured date is beyond FlightAware's schedule
+        # horizon: they can't be resolved yet, so rather than parking them on a
+        # "not available" card we drop them until they enter the lookup window.
+        today = datetime.now(timezone.utc).date()
+        visible = [f["number"] for f in flights if _within_lookup_window(f["date"] or None, today)]
+        if not visible:
+            msg = "Loading..." if not self._fetched_once else "No flights in range"
+            draw_status_message(self.canvas, msg)
+            return
+
         if self.config.get("display_mode", "cards") == "table":
-            self._draw_table(flight_numbers)
+            self._draw_table(visible)
         else:
-            self._draw_card(flight_numbers)
+            self._draw_card(visible)
 
     def _status_rows(
         self,
@@ -617,19 +688,21 @@ class FlightTrackerApp(DisplayApp):
         on-time/delay/cancelled indicator, colored green when on time or ahead
         of schedule, yellow when delayed, and red when cancelled.
         """
+        tz, time_format = self._tz_and_time_format()
+
         def delay_cell(delay_seconds: int | None) -> tuple[str, tuple[int, int, int]]:
             text = _fmt_delay(delay_seconds)
             return (text, _STATUS_YELLOW) if text else ("On time", _STATUS_GREEN)
 
         if kind == "scheduled":
-            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'))}"
+            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'), tz, time_format)}"
             delay_key = "departure_delay"
         elif kind == "airborne":
             pct = tracked.get("progress_percent")
             schedule = f"En route {pct}%" if pct is not None else "En route"
             delay_key = "arrival_delay"
         elif kind == "landed":
-            schedule = f"Landed {_fmt_time(tracked.get('actual_on'))}"
+            schedule = f"Landed {_fmt_time(tracked.get('actual_on'), tz, time_format)}"
             delay_key = "arrival_delay"
         else:
             return []
