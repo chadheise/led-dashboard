@@ -118,16 +118,20 @@ fi
 log "Setting CPU governor to performance..."
 echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
 
-# Hand off the display to the engine
-show_boot_msg "Starting..."
-stop_boot_display
+# Hand off the display to the engine. Keep the "Starting engine..." frame up and
+# let the engine drop it (via BOOT_DISPLAY_PID) at the instant it claims the
+# matrix, so the panel stays lit through the engine's startup instead of going
+# blank. In simulator mode there is no matrix to hand off, so stop it now.
+show_boot_msg "Starting engine..."
 
 # Start engine
 log "Starting engine on :8000..."
 cd "$REPO_DIR/engine"
 if $HARDWARE_MODE; then
-    CANVAS=hardware PREVIEW_ENABLED=$PREVIEW_ENABLED "$VENV_DIR/bin/python3" main.py &
+    CANVAS=hardware PREVIEW_ENABLED=$PREVIEW_ENABLED BOOT_DISPLAY_PID="$BOOT_DISPLAY_PID" \
+        "$VENV_DIR/bin/python3" main.py &
 else
+    stop_boot_display
     "$VENV_DIR/bin/python3" main.py &
 fi
 ENGINE_PID=$!

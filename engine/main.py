@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import signal
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -112,6 +114,34 @@ async def _render_loop(scene_manager: SceneManager, fps: int, vsync: bool = Fals
             await asyncio.sleep(interval)
 
 
+def _release_boot_display() -> None:
+    """Stop start.sh's boot-status display so the engine can take over the panel.
+
+    In hardware mode start.sh leaves a "Starting engine..." frame on the LED
+    matrix and passes that helper's PID via ``BOOT_DISPLAY_PID``. We terminate it
+    here, at the last moment before constructing the hardware canvas, so the panel
+    stays lit through this process's (slow) import/startup instead of going blank
+    -- then pause briefly so its refresh thread releases the GPIO before ours
+    starts, avoiding a flicker from both driving the panel at once. Safe to call
+    with no PID set (simulator, or a manual run): it no-ops.
+    """
+    pid_str = os.environ.get("BOOT_DISPLAY_PID")
+    if not pid_str:
+        return
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return  # already exited
+    except OSError as exc:
+        logger.warning("Could not stop boot display (pid %d): %s", pid, exc)
+        return
+    time.sleep(0.2)
+
+
 def main() -> None:
     cfg = _load_config()
     display_cfg = cfg["display"]
@@ -127,6 +157,9 @@ def main() -> None:
             pass
 
         broadcast = manager.broadcast if preview_enabled else _noop
+        # Release the boot-status display right before we claim the matrix, so the
+        # "Starting engine..." frame stays up through startup with no blank gap.
+        _release_boot_display()
         canvas = HardwareCanvas(
             display_cfg["width"], display_cfg["height"], cfg.get("hardware", {}), broadcast,
             brightness=brightness,
