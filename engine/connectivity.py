@@ -90,18 +90,21 @@ class ConnectivityMonitor:
 
 # ── "No wifi connection" overlay ────────────────────────────────────────────
 
-_MESSAGE_COLOR: tuple[int, int, int] = (80, 80, 80)  # matches draw_status_message's dim gray
+_MESSAGE_COLOR: tuple[int, int, int] = (255, 255, 255)  # white, matches the icon's wifi glyph
 _MESSAGE_TEXT = "No wifi connection"
 _MESSAGE_FONT_MAX = 14
 
 
-# No-wifi badge icon (red circle, white slash, black wifi glyph), supplied by the user.
+# No-wifi badge icon (red circle, white wifi glyph, transparent background),
+# supplied by the user. cls-1 (originally a white circle behind the slash) is
+# set to fill:none so it isn't rendered; the wifi-lines path (no class in the
+# source, originally black) gets an explicit white fill.
 _WIFI_OFF_SVG = """\
 <svg id="Layer_1" data-name="Layer 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 122.88 122.88">\
-<defs><style>.cls-1{fill:#fff;}.cls-2{fill:#d92d27;}</style></defs><title>no-wifi</title>\
+<defs><style>.cls-1{fill:none;}.cls-2{fill:#d92d27;}</style></defs><title>no-wifi</title>\
 <path class="cls-1" d="M101.68,32.93,32.92,101.68a49.29,49.29,0,0,0,77.83-40.24h0A49.34,49.34,0,0,0,108,45.15a48.85,\
 48.85,0,0,0-6.32-12.22ZM24,93.5,93.49,24A49.31,49.31,0,0,0,24,93.5Z"/>\
-<path d="M30.29,52A3,3,0,0,1,26,51.63v0a3,3,0,0,1,.34-4.24h0A59.27,59.27,0,0,1,43.27,37a48,48,0,0,1,36.4.31A61,61,0,\
+<path fill="#fff" d="M30.29,52A3,3,0,0,1,26,51.63v0a3,3,0,0,1,.34-4.24h0A59.27,59.27,0,0,1,43.27,37a48,48,0,0,1,36.4.31A61,61,0,\
 0,1,96.46,47.9a1.29,1.29,0,0,1,.17.16,3,3,0,0,1,.27,4.07,1.54,1.54,0,0,1-.17.19,3,3,0,0,1-4.16.19A55.23,55.23,0,0,0,\
 77.47,43a41.86,41.86,0,0,0-32.08-.27A53.38,53.38,0,0,0,30.29,52ZM61.44,76.09A6.59,6.59,0,1,1,56.77,78h0a6.62,6.62,0,\
 0,1,4.67-1.93ZM50.05,72.5a3,3,0,0,1-4.16-.35,1.37,1.37,0,0,1-.16-.18,3,3,0,0,1,.43-4.07l.17-.14a27.64,27.64,0,0,1,\
