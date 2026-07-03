@@ -353,14 +353,21 @@ def _render_card(game: dict[str, Any], w: int, h: int) -> harness.RenderResult:
 
     Calls build_game_view/render_card directly (what SportsApp._render_slot_image
     delegates to) so the layout boxes are available for assertion tests.
+
+    Passes a fixed `now` (matching the FIXED_NOW convention used elsewhere for
+    time-dependent apps) so a "pre" game's status text — which switches between
+    "7:00 PM" and "7/3 7:00 PM" depending on how far start_time is from "now" —
+    doesn't drift as real wall-clock time passes fixture start_times fixed in
+    debug_games.json.
     """
     from apps.sports.cards import render_card
     from apps.sports.model import CelebrationView, build_game_view
+    from tests.framework.clock import FIXED_NOW
 
     game = dict(game)
     celeb_raw = game.pop("_celebration", None)
     celebration = CelebrationView(**celeb_raw) if celeb_raw else None
-    view = build_game_view(game, fixture_logos(game), celebration=celebration)
+    view = build_game_view(game, fixture_logos(game), now=FIXED_NOW, celebration=celebration)
     result = render_card(view, w, h)
     return harness.RenderResult(image=result.image, boxes=result.boxes)
 

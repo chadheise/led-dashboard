@@ -16,6 +16,7 @@ from api.websocket import manager
 from canvas.hardware import HardwareCanvas
 from canvas.simulator import SimulatorCanvas
 from apps import APP_REGISTRY
+from connectivity import ConnectivityMonitor
 from scene_manager import PlaylistEntry, SceneManager
 from state import Module, Playlist, PlaylistItem, StateStore
 
@@ -135,7 +136,8 @@ def main() -> None:
             display_cfg["width"], display_cfg["height"], manager.broadcast,
             brightness=brightness,
         )
-    scene_manager = SceneManager(canvas, APP_REGISTRY)
+    connectivity_monitor = ConnectivityMonitor()
+    scene_manager = SceneManager(canvas, APP_REGISTRY, connectivity=connectivity_monitor)
     preview_manager = PreviewManager(
         display_cfg["width"], display_cfg["height"], display_cfg["fps"]
     )
@@ -153,6 +155,7 @@ def main() -> None:
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await scene_manager.set_playlist(_startup_entries(store))
         await scene_manager.start()
+        await connectivity_monitor.start()
         hardware_mode = os.environ.get("CANVAS", "").lower() == "hardware"
         render_task = asyncio.create_task(
             _render_loop(scene_manager, display_cfg["fps"], vsync=hardware_mode)
@@ -177,6 +180,7 @@ def main() -> None:
                     await hot_reload_task
                 except (asyncio.CancelledError, Exception):
                     pass
+            await connectivity_monitor.stop()
             await scene_manager.stop()
 
     app = create_app(

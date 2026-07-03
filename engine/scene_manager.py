@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from canvas.base import Canvas
 from app_base import DisplayApp
+from connectivity import ConnectivityMonitor, draw_offline_message
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +44,15 @@ class PlaylistEntry:
 
 
 class SceneManager:
-    def __init__(self, canvas: Canvas, registry: dict[str, type[DisplayApp]]) -> None:
+    def __init__(
+        self,
+        canvas: Canvas,
+        registry: dict[str, type[DisplayApp]],
+        connectivity: ConnectivityMonitor | None = None,
+    ) -> None:
         self._canvas = canvas
         self._registry = registry
+        self._connectivity = connectivity
         self._entries: list[PlaylistEntry] = []
         # Each scene is a list of (app, canvas) pairs. Single-app scenes have one pair.
         self._scenes: list[list[tuple[DisplayApp, Canvas]]] = []
@@ -236,6 +243,11 @@ class SceneManager:
         await self._maybe_rotate()
         if not self._display_on:
             self._canvas.clear()
+            await self._canvas.render()
+            return
+        if self._connectivity is not None and not self._connectivity.is_online:
+            self._canvas.clear()
+            draw_offline_message(self._canvas)
             await self._canvas.render()
             return
         if self._paused:
