@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from apps.flight_tracker.app import (
     FlightTrackerApp,
     _fmt_time,
+    _phase,
     _within_lookup_window,
 )
 from canvas.simulator import SimulatorCanvas
@@ -172,6 +173,19 @@ def test_auto_hide_shows_airborne_flight():
         "DL1": {"found": True, "scheduled_off": _iso(_hours(-3)), "actual_off": _iso(_hours(-3))}
     }
     assert _should_display(app) is True
+
+
+def test_phase_active_while_airborne_with_future_eta():
+    # A live ETA (estimated_on) should not be mistaken for an actual landing --
+    # otherwise an in-flight aircraft is misclassified as "recently_landed" and
+    # never gets its OpenSky live position polled (alt/spd/track stay blank).
+    tracked = {
+        "found": True,
+        "actual_off": _iso(_hours(-1)),
+        "estimated_on": _iso(_hours(2)),
+        "actual_on": None,
+    }
+    assert _phase(tracked) == "active"
 
 
 def test_auto_hide_shows_recently_landed_flight():
