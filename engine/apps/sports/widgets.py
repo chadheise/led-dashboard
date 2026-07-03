@@ -327,6 +327,7 @@ def goal_list_img(
 _PK_SCORED: RGB = (30, 200, 60)
 _PK_MISSED: RGB = (220, 40, 40)
 _PK_EMPTY: RGB = (80, 80, 80)
+_PK_FLASH_DIM = 4               # off-phase brightness divisor for a fresh kick
 _PK_MIN_CIRCLES = 5              # always show at least 5 circles per row
 _PK_LABEL_GAP = 2                # pixels between label and first circle
 
@@ -340,6 +341,9 @@ def pk_circles_img(
     home_abbr: str,
     max_h: int,
     max_w: int,
+    away_flash: frozenset[int] = frozenset(),
+    home_flash: frozenset[int] = frozenset(),
+    flash_on: bool = False,
 ) -> Image.Image | None:
     """Two labeled rows of circles showing penalty shootout kick results.
 
@@ -347,6 +351,11 @@ def pk_circles_img(
     Abbreviation is in the team's color. Filled green = scored, filled red =
     missed, open gray outline = not yet taken. Always shows at least 5 circles;
     expands for sudden-death kicks beyond 5.
+
+    ``away_flash``/``home_flash`` are indices of just-landed kicks that blink
+    to draw the eye by pulsing in their own result color -- full green/red on
+    the ``flash_on`` phase, dimmed on the off phase -- so the flash never loses
+    the scored/missed meaning.
 
     Returns None when there is not enough room to draw a legible widget.
     """
@@ -369,7 +378,7 @@ def pk_circles_img(
     out = Image.new("RGB", (total_w, 2 * row_h), (0, 0, 0))
     draw = ImageDraw.Draw(out)
 
-    def _draw_row(results: list[bool], y_row: int) -> None:
+    def _draw_row(results: list[bool], flash: frozenset[int], y_row: int) -> None:
         x0_base = label_w + _PK_LABEL_GAP
         y_circ = y_row + (row_h - diam) // 2
         for i in range(n):
@@ -378,17 +387,21 @@ def pk_circles_img(
             y1 = y_circ + diam - 1
             if i < len(results):
                 fill = _PK_SCORED if results[i] else _PK_MISSED
+                if i in flash and not flash_on:
+                    # Blink by dimming the dot's own color on the off phase,
+                    # keeping green=scored / red=missed rather than flashing white.
+                    fill = tuple(c // _PK_FLASH_DIM for c in fill)
                 draw.ellipse([x0, y_circ, x1, y1], fill=fill)
             else:
                 draw.ellipse([x0, y_circ, x1, y1], fill=None, outline=_PK_EMPTY)
 
     away_lbl = render_text(away_abbr, away_color, 7)
     out.paste(away_lbl, (label_w - away_lbl.width, (row_h - away_lbl.height) // 2))
-    _draw_row(away_pks, 0)
+    _draw_row(away_pks, away_flash, 0)
 
     home_lbl = render_text(home_abbr, home_color, 7)
     out.paste(home_lbl, (label_w - home_lbl.width, row_h + (row_h - home_lbl.height) // 2))
-    _draw_row(home_pks, row_h)
+    _draw_row(home_pks, home_flash, row_h)
 
     return out
 

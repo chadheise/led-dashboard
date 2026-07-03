@@ -464,11 +464,15 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
     elif view.is_baseball_live:
         widget = _diamond_widget(view, min(content.h - 2, 15))
     elif view.is_soccer and view.is_penalty_shootout:
+        flash = view.pk_flash
         widget = widgets.pk_circles_img(
             view.away_pks, view.home_pks,
             view.away.color, view.home.color,
             view.away.plain_abbr, view.home.plain_abbr,
             content.h - 2, usable_w // 3,
+            away_flash=flash.away if flash else frozenset(),
+            home_flash=flash.home if flash else frozenset(),
+            flash_on=bool(flash and flash.on),
         )
         widget_name = "widget.pk_circles"
     # Without a widget, keep a clear gutter so the two scores don't read as one.
@@ -719,11 +723,15 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
         widget = _diamond_widget(view, min(content.h - 4, 31))
         widget_name = "widget.diamond"
     elif view.is_soccer and view.is_penalty_shootout:
+        flash = view.pk_flash
         widget = widgets.pk_circles_img(
             view.away_pks, view.home_pks,
             view.away.color, view.home.color,
             view.away.plain_abbr, view.home.plain_abbr,
             content.h - 2, usable_w // 3,
+            away_flash=flash.away if flash else frozenset(),
+            home_flash=flash.home if flash else frozenset(),
+            flash_on=bool(flash and flash.on),
         )
         widget_name = "widget.pk_circles"
     elif view.is_soccer and view.state in ("in", "post"):

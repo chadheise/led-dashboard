@@ -43,6 +43,19 @@ class CelebrationView:
 
 
 @dataclass(frozen=True)
+class PkFlashView:
+    """Which shootout dots are freshly landed and blinking this frame.
+
+    ``away``/``home`` are the indices whose kick result was added within the
+    flash window; ``on`` is the current blink phase shared by both rows.
+    """
+
+    away: frozenset[int]
+    home: frozenset[int]
+    on: bool
+
+
+@dataclass(frozen=True)
 class GameView:
     away: TeamView
     home: TeamView
@@ -59,6 +72,7 @@ class GameView:
     is_live_shootout: bool     # live game currently in shootout phase
     league: str = ""           # ESPN league identifier, e.g. "fifa.world"
     celebration: CelebrationView | None = None
+    pk_flash: PkFlashView | None = None   # freshly landed shootout dots, blinking
 
     @property
     def is_baseball_live(self) -> bool:
@@ -254,6 +268,7 @@ def build_game_view(
     time_format: str = "12h",
     now: datetime.datetime | None = None,
     celebration: CelebrationView | None = None,
+    pk_flash: PkFlashView | None = None,
 ) -> GameView:
     state = game.get("state", "pre")
     sport = game.get("sport", "")
@@ -280,4 +295,5 @@ def build_game_view(
         ended_in_shootout=bool(game.get("ended_in_shootout", False)),
         is_live_shootout=bool(game.get("is_live_shootout", False)),
         celebration=celebration,
+        pk_flash=pk_flash,
     )

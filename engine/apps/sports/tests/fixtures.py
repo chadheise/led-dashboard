@@ -310,6 +310,25 @@ def _extra_fixtures() -> dict[str, dict[str, Any]]:
             is_live_shootout=True,
             ended_in_shootout=False,
         ),
+        # Live shootout with the just-landed kick blinking on its dim (off) phase:
+        # the newest dot pulses in its own result color (here a scored=green dot
+        # rendered dim), never white.
+        "soccer_live_shootout_flash": _game(
+            "fifa.world", "soccer",
+            ("BRA", "Brazil", "Brazil"), ("ARG", "Argentina", "Argentina"),
+            away_score="1", home_score="1",
+            away_color="009c3b", home_color="74acdf",
+            away_alt_color="ffdf00", home_alt_color="ffffff",
+            status="Penalties", state="in",
+            match_note="Quarter-Final",
+            away_goals=["35'"], home_goals=["78'"],
+            away_id="bra", home_id="arg",
+            away_pks=[True, False, True],
+            home_pks=[True, True],
+            is_live_shootout=True,
+            ended_in_shootout=False,
+            _pk_flash={"away": [2], "home": [], "on": False},
+        ),
         # Completed game decided by penalty shootout — full circles + Final/PK footer.
         "soccer_completed_shootout": _game(
             "fifa.world", "soccer",
@@ -361,13 +380,26 @@ def _render_card(game: dict[str, Any], w: int, h: int) -> harness.RenderResult:
     debug_games.json.
     """
     from apps.sports.cards import render_card
-    from apps.sports.model import CelebrationView, build_game_view
+    from apps.sports.model import CelebrationView, PkFlashView, build_game_view
     from tests.framework.clock import FIXED_NOW
 
     game = dict(game)
     celeb_raw = game.pop("_celebration", None)
     celebration = CelebrationView(**celeb_raw) if celeb_raw else None
-    view = build_game_view(game, fixture_logos(game), now=FIXED_NOW, celebration=celebration)
+    flash_raw = game.pop("_pk_flash", None)
+    pk_flash = (
+        PkFlashView(
+            away=frozenset(flash_raw.get("away", ())),
+            home=frozenset(flash_raw.get("home", ())),
+            on=bool(flash_raw.get("on", True)),
+        )
+        if flash_raw
+        else None
+    )
+    view = build_game_view(
+        game, fixture_logos(game), now=FIXED_NOW,
+        celebration=celebration, pk_flash=pk_flash,
+    )
     result = render_card(view, w, h)
     return harness.RenderResult(image=result.image, boxes=result.boxes)
 
