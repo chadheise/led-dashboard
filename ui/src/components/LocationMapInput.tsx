@@ -59,12 +59,38 @@ interface Suggestion {
   address?: NominatimAddress
 }
 
-/** Build a "City, State, Country" label from a Nominatim result. */
+// US states + DC/territories and Canadian provinces -> postal abbreviation.
+const STATE_ABBR: Record<string, string> = {
+  alabama: "AL", alaska: "AK", arizona: "AZ", arkansas: "AR", california: "CA",
+  colorado: "CO", connecticut: "CT", delaware: "DE", "district of columbia": "DC",
+  florida: "FL", georgia: "GA", hawaii: "HI", idaho: "ID", illinois: "IL",
+  indiana: "IN", iowa: "IA", kansas: "KS", kentucky: "KY", louisiana: "LA",
+  maine: "ME", maryland: "MD", massachusetts: "MA", michigan: "MI", minnesota: "MN",
+  mississippi: "MS", missouri: "MO", montana: "MT", nebraska: "NE", nevada: "NV",
+  "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+  "north carolina": "NC", "north dakota": "ND", ohio: "OH", oklahoma: "OK",
+  oregon: "OR", pennsylvania: "PA", "rhode island": "RI", "south carolina": "SC",
+  "south dakota": "SD", tennessee: "TN", texas: "TX", utah: "UT", vermont: "VT",
+  virginia: "VA", washington: "WA", "west virginia": "WV", wisconsin: "WI",
+  wyoming: "WY", "puerto rico": "PR",
+  alberta: "AB", "british columbia": "BC", manitoba: "MB", "new brunswick": "NB",
+  "newfoundland and labrador": "NL", "nova scotia": "NS", ontario: "ON",
+  "prince edward island": "PE", quebec: "QC", québec: "QC", saskatchewan: "SK",
+  "northwest territories": "NT", nunavut: "NU", yukon: "YT",
+}
+
+/** Abbreviate a full state/province name where known, else return it as-is. */
+function abbreviateState(state: string): string {
+  return STATE_ABBR[state.trim().toLowerCase()] ?? state.trim()
+}
+
+/** Build a "City, ST, Country" label from a Nominatim result. */
 function locationLabel(s: Suggestion): string {
   const a = s.address
   if (a) {
     const city = a.city || a.town || a.village || a.municipality || a.hamlet || a.county
-    const parts = [city, a.state || a.province, a.country].filter(
+    const state = a.state || a.province
+    const parts = [city, state ? abbreviateState(state) : undefined, a.country].filter(
       (p): p is string => !!p && p.trim() !== "",
     )
     if (parts.length) return parts.join(", ")

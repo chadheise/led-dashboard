@@ -24,6 +24,11 @@ from apps.flights_overhead.icons import render_category_icon
 _UNIT_CYCLE_S: float = 4.0
 _GATED_PHASES = ("unknown", "not_found", "approaching", "active", "recently_landed")
 
+# Status-indicator colors: on time / ahead of schedule, delayed, cancelled.
+_STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
+_STATUS_YELLOW: tuple[int, int, int] = (230, 196, 0)
+_STATUS_RED: tuple[int, int, int] = (224, 52, 44)
+
 # Auto-hide window: a flight counts as "active" from 2h before its (estimated)
 # departure, while airborne, and until 2h after it lands.
 _ACTIVE_WINDOW = timedelta(hours=2)
@@ -600,23 +605,38 @@ class FlightTrackerApp(DisplayApp):
         else:
             self._draw_card(flight_numbers)
 
-    def _status_lines(self, tracked: dict[str, Any], kind: str) -> list[str]:
-        """The two bottom rows for a card: schedule/status + on-time or delay."""
+    def _status_rows(
+        self,
+        tracked: dict[str, Any],
+        kind: str,
+        text_color: tuple[int, int, int],
+    ) -> list[tuple[str, tuple[int, int, int]]]:
+        """The two bottom card rows as (text, color) pairs.
+
+        Row 1 (schedule/progress) uses the card's base text color. Row 2 is the
+        on-time/delay/cancelled indicator, colored green when on time or ahead
+        of schedule, yellow when delayed, and red when cancelled.
+        """
+        def delay_cell(delay_seconds: int | None) -> tuple[str, tuple[int, int, int]]:
+            text = _fmt_delay(delay_seconds)
+            return (text, _STATUS_YELLOW) if text else ("On time", _STATUS_GREEN)
+
         if kind == "scheduled":
-            return [
-                f"Dep {_fmt_time(tracked.get('scheduled_off'))}",
-                _fmt_delay(tracked.get("departure_delay")) or "On time",
-            ]
-        if kind == "airborne":
+            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'))}"
+            delay_key = "departure_delay"
+        elif kind == "airborne":
             pct = tracked.get("progress_percent")
-            line1 = f"En route {pct}%" if pct is not None else "En route"
-            return [line1, _fmt_delay(tracked.get("arrival_delay")) or "On time"]
-        if kind == "landed":
-            return [
-                f"Landed {_fmt_time(tracked.get('actual_on'))}",
-                _fmt_delay(tracked.get("arrival_delay")) or "On time",
-            ]
-        return []
+            schedule = f"En route {pct}%" if pct is not None else "En route"
+            delay_key = "arrival_delay"
+        elif kind == "landed":
+            schedule = f"Landed {_fmt_time(tracked.get('actual_on'))}"
+            delay_key = "arrival_delay"
+        else:
+            return []
+
+        if tracked.get("cancelled"):
+            return [(schedule, text_color), ("Cancelled", _STATUS_RED)]
+        return [(schedule, text_color), delay_cell(tracked.get(delay_key))]
 
     def _draw_card(self, flight_numbers: list[str]) -> None:
         now = time.monotonic()
@@ -760,13 +780,14 @@ class FlightTrackerApp(DisplayApp):
                 line_img = render_text(clipped, text_color, font_size)
                 img.paste(line_img, (mid_x, row_y(i, line_img.height)))
 
-        # Bottom rows (full-height cards only): schedule/status + delay.
+        # Bottom rows (full-height cards only): schedule/status + delay, with
+        # the status indicator colored by on-time/delayed/cancelled state.
         if n_rows == 5:
             bottom_w = inner_w - stats_w - (stats_gap if stats_w else 0)
-            for i, line in enumerate(self._status_lines(tracked, kind)[:2]):
+            for i, (line, color) in enumerate(self._status_rows(tracked, kind, text_color)[:2]):
                 if line and bottom_w > 0:
                     clipped = _clip_text(line, font_size, bottom_w)
-                    line_img = render_text(clipped, text_color, font_size)
+                    line_img = render_text(clipped, color, font_size)
                     img.paste(line_img, (pad, row_y(3 + i, line_img.height)))
 
         # Stats: labels right-aligned to the colon column, values to the edge.

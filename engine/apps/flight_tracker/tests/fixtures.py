@@ -71,6 +71,19 @@ _TRACKED_LANDED_DELAYED: dict[str, Any] = {
     "live": None, "icao24": "",
 }
 
+_TRACKED_CANCELLED: dict[str, Any] = {
+    "found": True,
+    "ident": "WN2020",
+    "origin": "DEN", "dest": "MDW",
+    "origin_name": "Denver Intl", "dest_name": "Chicago Midway Intl",
+    "airline": "Southwest Airlines", "operator_iata": "WN", "aircraft_type": "Boeing 737-700",
+    "status": "Cancelled", "cancelled": True,
+    "scheduled_off": "2026-06-18T15:00:00Z", "estimated_off": None, "actual_off": None,
+    "scheduled_on": "2026-06-18T17:20:00Z", "estimated_on": None, "actual_on": None,
+    "departure_delay": None, "arrival_delay": None, "progress_percent": 0,
+    "live": None, "icao24": "",
+}
+
 _TRACKED_NOT_FOUND: dict[str, Any] = {"found": False, "ident": "ZZ000"}
 
 
@@ -144,6 +157,10 @@ def _fixtures() -> dict[str, dict[str, Any]]:
         "card_landed_delayed": {
             "config": {"display_mode": "cards", "flights": _flights_config(["BA286"]), "units": "imperial"},
             "seed": _seed({"BA286": _TRACKED_LANDED_DELAYED}, ["BA286"], logo_codes={"BA": "075aaa"}),
+        },
+        "card_cancelled": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["WN2020"]), "units": "imperial"},
+            "seed": _seed({"WN2020": _TRACKED_CANCELLED}, ["WN2020"], logo_codes={"WN": "f9b612"}),
         },
         "card_not_found": {
             "config": {"display_mode": "cards", "flights": _flights_config(["ZZ000"])},
