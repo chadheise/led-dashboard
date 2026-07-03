@@ -909,32 +909,47 @@ class FlightTrackerApp(DisplayApp):
         labels = self._labels()
         tz, time_format = self._tz_and_time_format()
 
-        def _rows() -> list[str]:
+        def _rows() -> list[tuple[str, str, tuple[int, int, int]]]:
+            """Per-flight (prefix, status, status_color) rows.
+
+            ``prefix`` (ident + schedule/ETA/landed info) uses the card's base
+            text color; ``status`` is colored like the card's status indicator
+            -- green on time/ahead, yellow delayed, red cancelled -- so the
+            table matches the cards' color coding.
+            """
             rows = []
             for fn in flight_numbers:
                 tracked = self._tracked.get(fn)
                 kind = _card_kind(tracked)
                 if kind == "not_found":
-                    status, delay = "not avail", ""
-                elif kind == "scheduled":
-                    status = "Scheduled"
-                    delay = _fmt_delay(tracked.get("departure_delay")) or "On time"
-                elif kind == "airborne":
-                    eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
-                    status = f"ETA {_fmt_time(eta, tz, time_format)}"
-                    delay = _fmt_delay(tracked.get("departure_delay")) or "On time"
+                    prefix, status, color = "not avail", "", text_color
                 else:
-                    status = "Landed"
-                    delay = _fmt_delay(tracked.get("arrival_delay")) or "On time"
+                    if kind == "scheduled":
+                        info = "Scheduled"
+                        delay_key = "departure_delay"
+                    elif kind == "airborne":
+                        eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
+                        info = f"ETA {_fmt_time(eta, tz, time_format)}"
+                        delay_key = "departure_delay"
+                    else:
+                        info = "Landed"
+                        delay_key = "arrival_delay"
+
+                    if tracked.get("cancelled"):
+                        status, color = "Cancelled", _STATUS_RED
+                    else:
+                        delay_text = _fmt_delay(tracked.get(delay_key))
+                        status, color = (delay_text, _STATUS_YELLOW) if delay_text else ("On time", _STATUS_GREEN)
+                    prefix = info
                 # Lead each row with the user's label when set, else the number.
                 ident = labels.get(fn) or fn
-                rows.append(f"{ident:<8}{status:<13} {delay}")
+                rows.append((f"{ident:<8}{prefix:<13} ", status, color))
             return rows
 
         rows = _rows()
         font_size = None
         for size in (12, 9, 8, 7):
-            widest = max((render_text(r, text_color, size).width for r in rows), default=0)
+            widest = max((render_text(prefix + status, text_color, size).width for prefix, status, _ in rows), default=0)
             if widest <= max_w:
                 font_size = size
                 break
@@ -945,10 +960,14 @@ class FlightTrackerApp(DisplayApp):
         row_h = glyph_h + 2
 
         img = Image.new("RGB", (self.canvas.width, self.canvas.height))
-        for i, row in enumerate(rows):
-            row_img = render_text(row, text_color, font_size)
+        for i, (prefix, status, color) in enumerate(rows):
+            prefix_img = render_text(prefix, text_color, font_size)
             y = i * row_h + 1
-            if y + row_img.height <= img.height:
-                img.paste(row_img, (2, y))
+            if y + prefix_img.height > img.height:
+                continue
+            img.paste(prefix_img, (2, y))
+            if status:
+                status_img = render_text(status, color, font_size)
+                img.paste(status_img, (2 + prefix_img.width, y))
 
         blit(self.canvas, img)
