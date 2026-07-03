@@ -22,7 +22,7 @@ from libraries.timezones.library import resolve_zone
 
 from .cards import render_card
 from .events import Celebration, GameSnapshot, detect_events, game_key, make_snapshot
-from .model import CelebrationView, build_game_view
+from .model import CelebrationView, PkFlashView, _resolve_pks, build_game_view
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ _PRE_START_GRACE_SECONDS = 4 * 3600
 _MAX_LIVE_GAME_SECONDS = 8 * 3600
 _ANIM_FRAMES = 8             # sprite animation cycle length
 _ANIM_FPS = 8                # sprite frames per second
+
+# A newly landed shootout kick blinks briefly to draw the eye, then settles
+# into its stationary result color like the rest of the dots.
+_PK_FLASH_SECONDS = 5.0      # how long a fresh shootout dot blinks
+_PK_FLASH_HZ = 3             # blink toggles per second while flashing
 
 _DEBUG_GAMES: list[dict[str, Any]] = json.loads(
     (Path(__file__).parent / "debug_games.json").read_text()
@@ -226,12 +231,18 @@ class SportsApp(DisplayApp):
         self._marquee = Marquee(direction="left", speed=1.5, loop=True)
         # Per-game-index celebration phase baked into the strip, so only the
         # cards whose pulse/anim phase changed get re-rendered and patched in.
-        self._marquee_celeb_state: dict[int, tuple[str, bool, int] | None] = {}
+        self._marquee_celeb_state: dict[int, tuple | None] = {}
 
         # Celebration state: previous fetch snapshots + active celebrations,
         # both keyed by events.game_key
         self._prev_snaps: dict[str, GameSnapshot] = {}
         self._celebrations: dict[str, Celebration] = {}
+
+        # Penalty-shootout flash state, keyed by (game_key, side): the count of
+        # kicks seen last fetch, and the (first_new_index, started_at) of the
+        # most recent batch of kicks so their dots can blink briefly.
+        self._pk_counts: dict[tuple[str, str], int] = {}
+        self._pk_flash: dict[tuple[str, str], tuple[int, float]] = {}
 
         # Staggered state
         self._stagger_slot_idx: list[int] = []
@@ -370,6 +381,7 @@ class SportsApp(DisplayApp):
         self._games = self._filter_by_time_window(self._dedupe_games(games))
 
         self._update_celebrations()
+        self._update_pk_flashes()
 
         # Store logos at full display height so any layout can downscale cleanly
         new_logos = await self._espn.fetch_logos(self._games, (64, 64))
@@ -410,6 +422,59 @@ class SportsApp(DisplayApp):
             pulse_on=int(elapsed) % 2 == 0,
             anim_frame=int(elapsed * _ANIM_FPS) % _ANIM_FRAMES,
         )
+
+    def _update_pk_flashes(self) -> None:
+        """Diff each shootout's kick counts against the previous fetch so newly
+        landed dots can blink. Like celebrations, nothing flashes on a game's
+        first observation (the existing kicks are pre-existing, not "new")."""
+        now = self._now()
+        live: set[str] = set()
+        for game in self._games:
+            if game.get("sport") != "soccer":
+                continue
+            if not (game.get("is_live_shootout") or game.get("ended_in_shootout")):
+                continue
+            key = game_key(game)
+            live.add(key)
+            for side in ("away", "home"):
+                count = len(_resolve_pks(game, side))
+                fkey = (key, side)
+                prev = self._pk_counts.get(fkey)
+                if prev is not None and count > prev:
+                    # One or more kicks landed since last fetch: blink every
+                    # index from the old count up (covers reconstructed misses).
+                    self._pk_flash[fkey] = (prev, now)
+                self._pk_counts[fkey] = count
+        # Drop state for games that are no longer live shootouts, and expire
+        # flashes past their window.
+        self._pk_counts = {k: v for k, v in self._pk_counts.items() if k[0] in live}
+        self._pk_flash = {
+            k: v
+            for k, v in self._pk_flash.items()
+            if k[0] in live and now - v[1] < _PK_FLASH_SECONDS
+        }
+
+    def _pk_flash_view(
+        self, key: str, away_len: int, home_len: int
+    ) -> PkFlashView | None:
+        """Resolve a shootout's active flashes to this frame's blink phase."""
+        now = self._now()
+
+        def _indices(side: str, length: int) -> frozenset[int]:
+            flash = self._pk_flash.get((key, side))
+            if flash is None:
+                return frozenset()
+            from_idx, started = flash
+            if now - started >= _PK_FLASH_SECONDS:
+                return frozenset()
+            return frozenset(i for i in range(length) if i >= from_idx)
+
+        away = _indices("away", away_len)
+        home = _indices("home", home_len)
+        if not away and not home:
+            return None
+        # Shared blink phase so both rows toggle together.
+        return PkFlashView(away=away, home=home, on=int(now * _PK_FLASH_HZ) % 2 == 0)
 
     def _dedupe_games(self, games: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Drop repeat entries for the same game.
@@ -566,11 +631,24 @@ class SportsApp(DisplayApp):
             self._marquee_celeb_state[i] = self._marquee_celeb_key(game)
         return strip
 
-    def _marquee_celeb_key(self, game: dict[str, Any]) -> tuple[str, bool, int] | None:
-        view = self._celebration_view(game_key(game))
-        if view is None:
+    def _marquee_celeb_key(self, game: dict[str, Any]) -> tuple | None:
+        """Per-card render key: changes whenever the celebration pulse/anim or
+        the shootout flash phase advances, so the strip patches only then."""
+        key = game_key(game)
+        celeb = self._celebration_view(key)
+        celeb_part: tuple | None = (
+            (celeb.kind, celeb.pulse_on, celeb.anim_frame) if celeb else None
+        )
+        flash_part: tuple | None = None
+        if game.get("is_live_shootout") or game.get("ended_in_shootout"):
+            flash = self._pk_flash_view(
+                key, len(_resolve_pks(game, "away")), len(_resolve_pks(game, "home"))
+            )
+            if flash is not None:
+                flash_part = (flash.away, flash.home, flash.on)
+        if celeb_part is None and flash_part is None:
             return None
-        return (view.kind, view.pulse_on, view.anim_frame)
+        return (celeb_part, flash_part)
 
     def _patch_marquee_celebrations(self) -> None:
         """Re-render only the cards whose celebration phase changed since the
@@ -782,13 +860,20 @@ class SportsApp(DisplayApp):
         text), then delegates to the tiered card layouts in cards.py.
         """
         loc_cfg = self.library_configs.get("location", {})
+        key = game_key(game)
+        pk_flash = None
+        if game.get("is_live_shootout") or game.get("ended_in_shootout"):
+            pk_flash = self._pk_flash_view(
+                key, len(_resolve_pks(game, "away")), len(_resolve_pks(game, "home"))
+            )
         try:
             view = build_game_view(
                 game,
                 self._logos,
                 tz=self._get_user_tz(),
                 time_format=str(loc_cfg.get("time_format", "12h")),
-                celebration=self._celebration_view(game_key(game)),
+                celebration=self._celebration_view(key),
+                pk_flash=pk_flash,
             )
             return render_card(view, w, h, wc_reveal=self._wc_reveal()).image
         except Exception:

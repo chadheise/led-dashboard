@@ -160,6 +160,11 @@ class ESPNSportsLibrary(Library):
         self._logo_cache: dict[str, Image.Image | None] = {}
         # league id → (fetched_at, games): fallback when a fetch fails
         self._scores_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+        # event id → team id → per-shot results from the summary endpoint's
+        # shootout array. Only *ended* games are cached (their shootout can't
+        # change), so finished games lingering on the scoreboard don't trigger
+        # a summary re-fetch every poll.
+        self._shootout_cache: dict[str, dict[str, list[bool]]] = {}
         # Reused across fetch cycles so the ~60s refresh loop doesn't pay a
         # fresh TCP/TLS handshake to ESPN every time.
         self._client: httpx.AsyncClient | None = None
@@ -495,6 +500,64 @@ class ESPNSportsLibrary(Library):
                     await asyncio.sleep(_FETCH_RETRY_DELAY_SECONDS)
         raise last_exc
 
+    async def _fetch_shootout_shots(
+        self,
+        client: httpx.AsyncClient,
+        sport: str,
+        league_path: str,
+        event_id: str,
+        *,
+        ended: bool,
+    ) -> dict[str, list[bool]] | None:
+        """Authoritative per-team shootout results from the summary endpoint.
+
+        The scoreboard's ``details`` array only ever lists *scored* shootout
+        kicks, so misses there must be inferred (imperfectly) from alternation
+        gaps. The per-event summary endpoint instead carries a top-level
+        ``shootout`` array with every shot -- team id, shot number, and
+        ``didScore`` -- including misses, updated live during the shootout.
+
+        Returns ``{team_id: [made, missed, ...]}`` ordered by shot number, or
+        None when the fetch fails or no shootout data exists yet (both handled
+        by falling back to the alternation reconstruction). Single attempt, no
+        retries: this rides the live 5s poll cadence, and a transient miss just
+        means one poll of fallback data.
+        """
+        if not event_id:
+            return None
+        cached = self._shootout_cache.get(event_id)
+        if cached is not None:
+            return cached
+        url = (
+            f"https://site.api.espn.com/apis/site/v2/sports"
+            f"/{sport}/{league_path}/summary"
+        )
+        try:
+            resp = await client.get(url, params={"event": event_id})
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception:
+            return None
+        result: dict[str, list[bool]] = {}
+        try:
+            for entry in data.get("shootout") or []:
+                team_id = str(entry.get("id") or "")
+                shots = sorted(
+                    entry.get("shots") or [],
+                    key=lambda s: int(s.get("shotNumber") or 0),
+                )
+                if team_id:
+                    result[team_id] = [bool(s.get("didScore")) for s in shots]
+        except (ValueError, TypeError, AttributeError):
+            return None
+        if not result:
+            return None
+        if ended:
+            if len(self._shootout_cache) > 64:
+                self._shootout_cache.clear()
+            self._shootout_cache[event_id] = result
+        return result
+
     @staticmethod
     async def _download_logo(url: str) -> Image.Image | None:
         try:
@@ -673,18 +736,55 @@ class ESPNSportsLibrary(Library):
                     or "final (pk)" in short_detail
                     or "final (pen)" in short_detail
                 )
+                # ``short_detail`` for a live shootout takes many forms across
+                # leagues -- "Penalties", "PKs", "AET-pens", "AET-PKs", "Pen." --
+                # so match "pen"/"pk" as substrings rather than whole strings.
+                # The only non-shootout status containing "pen" is
+                # "sus-pen-ded" (other soccer statuses are clock/half labels
+                # like "45'", "HT", "AET"), so exclude that one explicitly.
+                status_lower = status_name.lower()
+
+                def _mentions_pens(text: str) -> bool:
+                    return "pen" in text and "suspen" not in text
+
                 is_live_shootout = (
                     status_type.get("state", "pre") == "in"
                     and not ended_in_shootout
                     and (
                         status_period >= 5
                         or "STATUS_SHOOTOUT" in status_name
-                        or "penalt" in short_detail
-                        or short_detail in ("pk", "pks", "pen", "pens")
-                        or short_detail.startswith("pk ")
-                        or "/pk" in short_detail
+                        or _mentions_pens(short_detail)
+                        or "pk" in short_detail
+                        or _mentions_pens(status_lower)
                     )
                 )
+                # Data-driven fallback: even when the status text hasn't caught
+                # up, the presence of shootout kicks in the details array means
+                # penalties are underway. Real scoreboard details carry an
+                # explicit ``shootout: true`` boolean (and no period object, so
+                # period-based signals never fire on live data); the type-text
+                # checks are kept as belt-and-suspenders for older payloads.
+                # Promotes a live game into shootout mode so the circles render
+                # as soon as the first kick lands.
+                if (
+                    sport == "soccer"
+                    and status_type.get("state", "pre") == "in"
+                    and not ended_in_shootout
+                    and not is_live_shootout
+                ):
+                    for detail in comp.get("details") or []:
+                        d_type = ((detail.get("type") or {}).get("text") or "").lower()
+                        if "penalty" not in d_type or "own" in d_type:
+                            continue
+                        period_num = int((detail.get("period") or {}).get("number") or 0)
+                        if (
+                            detail.get("shootout") is True
+                            or period_num >= 5
+                            or "miss" in d_type
+                            or "save" in d_type
+                        ):
+                            is_live_shootout = True
+                            break
                 if sport == "soccer":
                     ht_id = home_team.get("id", "")
                     at_id = away_team.get("id", "")
@@ -698,14 +798,17 @@ class ESPNSportsLibrary(Library):
                         is_og = "own" in d_type
                         is_miss_or_save = "miss" in d_type or "saved" in d_type or "save" in d_type
                         # Identify penalty shootout kicks via multiple signals:
-                        # 1. Period 5+ in the detail (most reliable when present)
-                        # 2. "miss"/"saved" only appear during shootouts, never regular play
-                        # 3. Period unknown (0) while the game is in a live/ended shootout
+                        # 1. The explicit ``shootout: true`` boolean on the detail
+                        #    (present on real scoreboard payloads -- most reliable)
+                        # 2. Period 5+ in the detail (when a period object exists)
+                        # 3. "miss"/"saved" only appear during shootouts, never regular play
+                        # 4. Period unknown (0) while the game is in a live/ended shootout
                         is_shootout_kick = (
                             "penalty" in d_type
                             and not is_og
                             and (
-                                period_num >= 5
+                                detail.get("shootout") is True
+                                or period_num >= 5
                                 or is_miss_or_save
                                 or (period_num == 0 and (is_live_shootout or ended_in_shootout))
                             )
@@ -807,5 +910,24 @@ class ESPNSportsLibrary(Library):
                 if (g.get("home_rank") or 999) <= 25
                 or (g.get("away_rank") or 999) <= 25
             ]
+        # For shootout games, override the pks reconstructed from the (misses-
+        # blind) scoreboard details with the summary endpoint's authoritative
+        # per-shot record. Best effort: on any failure the reconstruction /
+        # shootoutScore fallbacks above still stand.
+        for game in games:
+            if game["sport"] == "soccer" and (
+                game["is_live_shootout"] or game["ended_in_shootout"]
+            ):
+                shots = await self._fetch_shootout_shots(
+                    client, sport, league_path, game["id"],
+                    ended=game["ended_in_shootout"],
+                )
+                if shots:
+                    home_shots = shots.get(str(game["home_id"]))
+                    away_shots = shots.get(str(game["away_id"]))
+                    if home_shots is not None:
+                        game["home_pks"] = home_shots
+                    if away_shots is not None:
+                        game["away_pks"] = away_shots
         self._scores_cache[league] = (time.time(), games)
         return games
