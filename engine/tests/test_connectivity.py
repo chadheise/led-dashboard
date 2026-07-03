@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import socket
 
 import pytest
@@ -80,6 +81,66 @@ async def test_connectivity_monitor_starts_optimistic_and_updates() -> None:
     finally:
         await monitor.stop()
         connectivity_module.check_internet = orig
+
+
+def test_hysteresis_stays_online_until_threshold_consecutive_failures() -> None:
+    monitor = ConnectivityMonitor(failure_threshold=3)
+
+    monitor._record(False)
+    assert monitor.is_online is True  # 1 failure
+    monitor._record(False)
+    assert monitor.is_online is True  # 2 failures
+    monitor._record(False)
+    assert monitor.is_online is False  # 3rd consecutive failure -> offline
+
+
+def test_single_success_recovers_from_offline() -> None:
+    monitor = ConnectivityMonitor(failure_threshold=2)
+    monitor._record(False)
+    monitor._record(False)
+    assert monitor.is_online is False
+
+    monitor._record(True)
+    assert monitor.is_online is True
+
+
+def test_transient_blip_resets_the_failure_count() -> None:
+    """A success between failures must reset the counter, so scattered blips
+    that never reach the threshold consecutively don't accumulate into offline."""
+    monitor = ConnectivityMonitor(failure_threshold=3)
+    monitor._record(False)   # 1
+    monitor._record(True)    # reset
+    monitor._record(False)   # 1 again
+    monitor._record(False)   # 2
+    assert monitor.is_online is True  # never 3 in a row
+
+
+def test_going_offline_and_recovering_are_logged(caplog) -> None:
+    monitor = ConnectivityMonitor(failure_threshold=2)
+    with caplog.at_level(logging.INFO, logger="connectivity"):
+        monitor._record(False)
+        monitor._record(False)  # -> offline (warning)
+        monitor._record(True)   # -> online (info)
+
+    messages = [r.message for r in caplog.records]
+    assert any("unreachable" in m for m in messages)
+    assert any("reachable again" in m for m in messages)
+
+
+def test_offline_heartbeat_logs_periodically(monkeypatch, caplog) -> None:
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(connectivity_module.time, "monotonic", lambda: clock["t"])
+
+    monitor = ConnectivityMonitor(failure_threshold=1, offline_log_interval=60.0)
+    with caplog.at_level(logging.WARNING, logger="connectivity"):
+        monitor._record(False)   # t=1000 -> offline
+        clock["t"] = 1030.0
+        monitor._record(False)   # +30s, under interval -> no heartbeat
+        clock["t"] = 1070.0
+        monitor._record(False)   # +70s since last log -> heartbeat
+
+    heartbeats = [r for r in caplog.records if "still offline" in r.message]
+    assert len(heartbeats) == 1
 
 
 def test_draw_offline_message_renders_non_blank_pixels() -> None:

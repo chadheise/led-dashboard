@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import socket
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -31,6 +32,13 @@ _PROBE_HOSTS: tuple[tuple[str, int], ...] = (
 )
 _DEFAULT_TIMEOUT = 3.0
 _DEFAULT_CHECK_INTERVAL = 15.0
+# Consecutive failed checks required before we declare the link down and show
+# the overlay. Hysteresis: a brief blip (one or two failed probes) no longer
+# flashes the banner, so the display only switches on a sustained outage.
+_DEFAULT_FAILURE_THRESHOLD = 3
+# While offline, re-log the state at most this often (seconds) so a long outage
+# stays visible on the journal timeline without spamming it every check.
+_DEFAULT_OFFLINE_LOG_INTERVAL = 60.0
 
 
 def check_internet(timeout: float = _DEFAULT_TIMEOUT) -> bool:
@@ -49,16 +57,32 @@ class ConnectivityMonitor:
 
     Starts optimistic (`is_online=True`) so a normal boot never flashes the
     offline overlay before the first check completes.
+
+    Applies hysteresis: `is_online` only flips to False after
+    `failure_threshold` *consecutive* failed probes, so a momentary blip
+    doesn't flash the overlay; it flips back to True on the first success so
+    apps return promptly. Every state transition is logged (and the offline
+    state re-logged periodically) so the journal shows a wifi timeline
+    alongside the vcgencmd temp/throttle health line from start.sh -- if the
+    Pi is dropping the link, the two lines together tell you whether it
+    coincides with undervoltage/thermal events.
     """
 
     def __init__(
         self,
         check_interval: float = _DEFAULT_CHECK_INTERVAL,
         timeout: float = _DEFAULT_TIMEOUT,
+        failure_threshold: int = _DEFAULT_FAILURE_THRESHOLD,
+        offline_log_interval: float = _DEFAULT_OFFLINE_LOG_INTERVAL,
     ) -> None:
         self._check_interval = check_interval
         self._timeout = timeout
+        self._failure_threshold = max(1, failure_threshold)
+        self._offline_log_interval = offline_log_interval
         self._is_online = True
+        self._consecutive_failures = 0
+        self._offline_since: float | None = None
+        self._last_offline_log = 0.0
         self._task: asyncio.Task[None] | None = None
 
     @property
@@ -82,11 +106,53 @@ class ConnectivityMonitor:
         loop = asyncio.get_running_loop()
         while True:
             try:
-                self._is_online = await loop.run_in_executor(None, check_internet, self._timeout)
+                reachable = await loop.run_in_executor(None, check_internet, self._timeout)
             except Exception as exc:
-                logger.warning("Connectivity check error: %s", exc)
-                self._is_online = False
+                logger.warning("probe raised %s", exc)
+                reachable = False
+            self._record(reachable)
             await asyncio.sleep(self._check_interval)
+
+    def _record(self, reachable: bool) -> None:
+        """Fold one probe result into the online/offline state with hysteresis."""
+        now = time.monotonic()
+
+        if reachable:
+            self._consecutive_failures = 0
+            if not self._is_online:
+                offline_for = now - self._offline_since if self._offline_since is not None else 0.0
+                logger.info("internet reachable again after %.0fs offline", offline_for)
+                self._is_online = True
+                self._offline_since = None
+            return
+
+        self._consecutive_failures += 1
+        if self._is_online:
+            if self._consecutive_failures >= self._failure_threshold:
+                self._is_online = False
+                self._offline_since = now
+                self._last_offline_log = now
+                logger.warning(
+                    "internet unreachable after %d consecutive failed checks; "
+                    "showing offline overlay",
+                    self._consecutive_failures,
+                )
+            else:
+                # Below threshold: a transient blip. Don't flip; note at debug only.
+                logger.debug(
+                    "probe failed (%d/%d) - still treating link as up",
+                    self._consecutive_failures,
+                    self._failure_threshold,
+                )
+        elif now - self._last_offline_log >= self._offline_log_interval:
+            # Already offline: heartbeat so a long outage stays on the timeline.
+            self._last_offline_log = now
+            offline_for = now - self._offline_since if self._offline_since is not None else 0.0
+            logger.warning(
+                "still offline after %.0fs (%d failed checks)",
+                offline_for,
+                self._consecutive_failures,
+            )
 
 
 # ── "No wifi connection" overlay ────────────────────────────────────────────
