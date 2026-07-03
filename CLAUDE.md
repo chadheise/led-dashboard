@@ -25,6 +25,8 @@ engine/              Python backend (FastAPI + async render loop)
   main.py              Entry point: loads config.yaml, builds canvas, serves API
   app_base.py          DisplayApp ABC: subclass with fetch_data() + render_frame()
   scene_manager.py     Playlist rotation + per-app fetch loops + render cadence
+  connectivity.py      Background internet-reachability check; scene_manager shows
+                       a "No wifi connection" overlay in place of apps while offline
   state.py             Persists modules/playlists/configs to data/state.json
   config.yaml          Display size, fps, server port, hardware/panel layout
   conftest.py          Pytest fixtures (snapshot_update flag) — visible to all tests
