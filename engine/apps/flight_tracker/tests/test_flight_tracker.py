@@ -386,3 +386,25 @@ def test_near_and_far_flights_only_near_polled():
     )
     asyncio.run(app.fetch_data())
     assert app._flightaware.calls == ["DL1"]  # only the in-window flight
+
+
+def test_should_display_false_when_only_far_future_flights():
+    # A module whose only flight is dated beyond the lookup window is in the
+    # "no flights in range" state -> the auto-hide gate hides it in a playlist.
+    far = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    app = _app({"flights": [{"number": "DL1", "date": far}]})
+    app._fetched_once = True
+    # Even if (stale) tracked data made it look active, an out-of-range flight
+    # is excluded from the shared visibility set.
+    app._tracked = {"DL1": {"found": True, "scheduled_off": _iso(_hours(1))}}
+    assert app._flights_in_range() == []
+    assert _should_display(app) is False
+
+
+def test_should_display_true_for_in_range_active_flight():
+    near = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    app = _app({"flights": [{"number": "DL1", "date": near}]})
+    app._fetched_once = True
+    app._tracked = {"DL1": {"found": True, "scheduled_off": _iso(_hours(1))}}
+    assert app._flights_in_range() == ["DL1"]
+    assert _should_display(app) is True

@@ -397,20 +397,37 @@ class FlightTrackerApp(DisplayApp):
     def refresh_interval(self) -> float:
         return float(self.global_config.get("refresh_interval", 60.0))
 
-    async def should_display(self) -> bool:
-        """Auto-hide gate: skip the module when no flight is active.
+    def _flights_in_range(self) -> list[str]:
+        """Flight numbers currently within FlightAware's schedule window.
 
-        Active flights are those departing within the next 2 hours, airborne,
-        or landed within the last 2 hours. Stay hidden until the first
-        (background) fetch resolves so a flight with no info available never
-        flashes its "not available" card before we know to skip it.
+        Single source of truth for "which flights can be shown right now",
+        shared by ``render_frame`` (its "No flights in range" fallback) and
+        ``should_display`` (the playlist auto-hide gate), so the two never
+        disagree. Flights dated beyond the lookup window are excluded.
+        """
+        today = datetime.now(timezone.utc).date()
+        return [
+            f["number"] for f in self._flights()
+            if _within_lookup_window(f["date"] or None, today)
+        ]
+
+    async def should_display(self) -> bool:
+        """Auto-hide gate: skip the module when nothing is worth showing.
+
+        Hidden unless at least one in-range flight (see ``_flights_in_range``)
+        is also active -- departing within the next 2 hours, airborne, or landed
+        within the last 2 hours. So a module whose only flights are out of range
+        (the "No flights in range" state) is not displayed at all in a playlist
+        that has the hide setting on. Stays hidden until the first (background)
+        fetch resolves so a flight with no info never flashes before we know to
+        skip it.
         """
         if not self._fetched_once:
             return False
         now = datetime.now(timezone.utc)
         return any(
             _is_active_flight(self._tracked.get(fn), now)
-            for fn in self._flight_numbers()
+            for fn in self._flights_in_range()
         )
 
     async def on_activate(self) -> None:
@@ -655,17 +672,17 @@ class FlightTrackerApp(DisplayApp):
         return tz, self._location.get_time_format()
 
     async def render_frame(self) -> None:
-        flights = self._flights()
-        if not flights:
+        if not self._flight_numbers():
             msg = "Loading..." if not self._fetched_once else "No flights configured"
             draw_status_message(self.canvas, msg)
             return
 
-        # Hide flights whose configured date is beyond FlightAware's schedule
-        # horizon: they can't be resolved yet, so rather than parking them on a
+        # Show only flights within FlightAware's schedule horizon. Flights dated
+        # further out can't be resolved yet, so rather than parking them on a
         # "not available" card we drop them until they enter the lookup window.
-        today = datetime.now(timezone.utc).date()
-        visible = [f["number"] for f in flights if _within_lookup_window(f["date"] or None, today)]
+        # This is the same set the auto-hide gate keys off (see should_display),
+        # so a hidden module and this "No flights in range" state stay in sync.
+        visible = self._flights_in_range()
         if not visible:
             msg = "Loading..." if not self._fetched_once else "No flights in range"
             draw_status_message(self.canvas, msg)
