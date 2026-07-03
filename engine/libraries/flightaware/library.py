@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import csv
 import datetime
 import json
@@ -34,6 +35,7 @@ _DEFAULT_LOGO_CACHE_TTL_DAYS: float = 30.0
 # Module-level defaults — also used as schema defaults
 _DEFAULT_CACHE_TTL_DAYS: int = 7
 _DEFAULT_MONTHLY_BUDGET: int = 800  # ~$4 at $0.005/call
+_DEFAULT_BUDGET_RESET_DAY: int = 1  # day of month the billing cycle resets
 _COST_PER_CALL: float = 0.005  # AeroAPI free-tier rate, ~$0.005 per query
 _ROUTES_CACHE_TTL_DAYS: float = 30.0  # Routes are very stable
 _DEFAULT_TRACKING_CACHE_TTL_MINUTES: float = 10.0  # Schedule/status changes faster than routes
@@ -354,6 +356,20 @@ class FlightAwareLibrary(Library):
                 "minimum": 100,
                 "maximum": 10000,
             },
+            "budget_reset_day": {
+                "type": "integer",
+                "title": "Budget reset day of month",
+                "description": (
+                    "Day of the month the FlightAware billing cycle resets (1-31). "
+                    "Set this to the day your AeroAPI usage resets (e.g. 7 for the 7th) "
+                    "so the monthly call budget zeroes out on the same day and flight "
+                    "data can be fetched again. Days past the end of a short month fall "
+                    "back to that month's last day."
+                ),
+                "default": _DEFAULT_BUDGET_RESET_DAY,
+                "minimum": 1,
+                "maximum": 31,
+            },
             "logo_cache_ttl_days": {
                 "type": "number",
                 "title": "Airline logo cache TTL (days)",
@@ -386,7 +402,9 @@ class FlightAwareLibrary(Library):
         super().__init__(config)
         # callsign → (fetched_at_wall_time, enrichment_dict)
         self._enrichment_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-        self._budget_month: str = ""
+        # Identifier for the current billing period (ISO date of the period's
+        # reset day). Usage rolls over to zero whenever this changes.
+        self._budget_period: str = ""
         self._budget_calls: int = 0
         # callsign → (fetched_at, route_dict) for OpenSky routes cache
         self._routes_cache: dict[str, tuple[float, dict[str, Any]]] = {}
@@ -414,6 +432,14 @@ class FlightAwareLibrary(Library):
     def _budget_limit(self) -> int:
         """Monthly call budget, read from config."""
         return int(self._config.get("monthly_budget", _DEFAULT_MONTHLY_BUDGET))
+
+    @property
+    def _budget_reset_day(self) -> int:
+        """Day of the month the billing cycle resets (clamped to 1-31)."""
+        try:
+            return max(1, min(31, int(self._config.get("budget_reset_day", _DEFAULT_BUDGET_RESET_DAY))))
+        except (TypeError, ValueError):
+            return _DEFAULT_BUDGET_RESET_DAY
 
     @property
     def _logo_cache_ttl(self) -> float:
@@ -578,21 +604,80 @@ class FlightAwareLibrary(Library):
 
     # ── Monthly budget ────────────────────────────────────────────────────────
 
+    def _budget_period_key(self, today: datetime.date | None = None) -> str:
+        """Identifier for the billing period containing ``today``.
+
+        A period starts on the configured reset day of the month and runs until
+        the day before the next month's reset day. The key is the ISO date of
+        the period's start, so every day within a period maps to the same key
+        and a new period (a new key) triggers a budget reset. A reset day past
+        the end of a short month falls back to that month's last day.
+        """
+        today = today or datetime.date.today()
+        reset_day = self._budget_reset_day
+
+        def start_of_month(year: int, month: int) -> datetime.date:
+            day = min(reset_day, calendar.monthrange(year, month)[1])
+            return datetime.date(year, month, day)
+
+        this_month_start = start_of_month(today.year, today.month)
+        if today >= this_month_start:
+            return this_month_start.isoformat()
+        # Before this month's reset day: the period started last month.
+        year, month = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+        return start_of_month(year, month).isoformat()
+
     def _load_budget(self) -> None:
-        current_month = datetime.date.today().strftime("%Y-%m")
-        self._budget_month = current_month
+        period = self._budget_period_key()
+        self._budget_period = period
         self._budget_calls = 0
         try:
             if _BUDGET_PATH.exists():
                 data = json.loads(_BUDGET_PATH.read_text())
-                if data.get("month") == current_month:
+                stored_period = data.get("period")
+                if stored_period is None and "month" in data:
+                    # Legacy budget file (written before configurable reset day).
+                    # Honour its count only if it names the current calendar
+                    # month, so usage isn't wrongly reset or double-counted on
+                    # upgrade.
+                    if data.get("month") == datetime.date.today().strftime("%Y-%m"):
+                        self._budget_calls = int(data.get("calls", 0))
+                elif stored_period == period:
                     self._budget_calls = int(data.get("calls", 0))
+                if self._budget_calls:
                     logger.info(
-                        "FlightAware: %d/%d API calls used this month",
-                        self._budget_calls, self._budget_limit,
+                        "FlightAware: %d/%d API calls used this period (since %s)",
+                        self._budget_calls, self._budget_limit, period,
                     )
         except Exception as exc:
             logger.warning("FlightAware: budget load failed: %s", exc)
+
+    def _ensure_current_period(self) -> None:
+        """Roll the budget over to zero when the billing period has changed.
+
+        Called before every budget read/charge so a long-running process resets
+        usage on the configured reset day without needing a restart.
+        """
+        period = self._budget_period_key()
+        if period != self._budget_period:
+            logger.info(
+                "FlightAware: billing period rolled over %s -> %s, resetting budget",
+                self._budget_period or "(none)", period,
+            )
+            self._budget_period = period
+            self._budget_calls = 0
+            self._persist_budget()
+
+    def _persist_budget(self) -> None:
+        try:
+            _BUDGET_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = _BUDGET_PATH.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps({"period": self._budget_period, "calls": self._budget_calls})
+            )
+            tmp.rename(_BUDGET_PATH)
+        except Exception as exc:
+            logger.warning("FlightAware: budget save failed: %s", exc)
 
     @property
     def has_api_key(self) -> bool:
@@ -600,6 +685,7 @@ class FlightAwareLibrary(Library):
 
     @property
     def budget_tier(self) -> str:
+        self._ensure_current_period()
         limit = self._budget_limit
         ratio = self._budget_calls / limit
         if ratio >= 1.0:
@@ -613,23 +699,16 @@ class FlightAwareLibrary(Library):
     def _charge_budget(self, count: int) -> None:
         if count <= 0:
             return
+        self._ensure_current_period()
         prev_tier = self.budget_tier
         self._budget_calls += count
         new_tier = self.budget_tier
         if new_tier != prev_tier:
             logger.warning(
-                "FlightAware: budget tier changed %s → %s (%d/%d calls this month)",
+                "FlightAware: budget tier changed %s → %s (%d/%d calls this period)",
                 prev_tier, new_tier, self._budget_calls, self._budget_limit,
             )
-        try:
-            _BUDGET_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = _BUDGET_PATH.with_suffix(".tmp")
-            tmp.write_text(
-                json.dumps({"month": self._budget_month, "calls": self._budget_calls})
-            )
-            tmp.rename(_BUDGET_PATH)
-        except Exception as exc:
-            logger.warning("FlightAware: budget save failed: %s", exc)
+        self._persist_budget()
 
     # ── Status (settings UI) ──────────────────────────────────────────────────
 
@@ -667,7 +746,8 @@ class FlightAwareLibrary(Library):
                             "value": f"${cost_used:.2f} / ${cost_limit:.2f}",
                         },
                         {"label": "Budget tier", "value": self.budget_tier},
-                        {"label": "Billing month", "value": self._budget_month},
+                        {"label": "Resets on day", "value": str(self._budget_reset_day)},
+                        {"label": "Period started", "value": self._budget_period},
                     ],
                 },
                 {
