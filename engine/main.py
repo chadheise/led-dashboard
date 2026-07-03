@@ -99,6 +99,71 @@ def _startup_entries(store: StateStore) -> list[PlaylistEntry]:
     return _sm_entries(store)
 
 
+def _flight_tracker_idents(store: StateStore) -> list[tuple[str, str | None]]:
+    """Unique (ident, date) pairs across every saved Flight Tracker module.
+
+    Reads each Flight Tracker module's ``flights`` config (with the legacy
+    ``flight_numbers`` fallback) and normalizes flight numbers the same way the
+    app does, so the startup prefetch warms exactly the cache keys the running
+    modules will later read.
+    """
+    from apps.flight_tracker.app import _normalize_ident
+
+    seen: dict[tuple[str, str | None], None] = {}
+    for module in store.state.modules.values():
+        if module.app_id != "flight_tracker":
+            continue
+        raw = module.config.get("flights")
+        if not isinstance(raw, list) or not raw:
+            raw = [{"number": n} for n in (module.config.get("flight_numbers") or [])]
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            ident = _normalize_ident(str(item.get("number", "") or ""))
+            if not ident:
+                continue
+            date = str(item.get("date", "") or "").strip() or None
+            if date and "T" in date:
+                date = date.split("T")[0]
+            seen[(ident, date)] = None
+    return list(seen)
+
+
+async def _prefetch_flight_tracker(store: StateStore) -> None:
+    """Warm the FlightAware tracking cache for Flight Tracker flights at startup.
+
+    Flight Tracker modules track only a handful of specific flights, whereas
+    Flights Overhead can enrich many aircraft and quickly drain the shared
+    monthly AeroAPI budget. Fetching the tracked flights first -- before the
+    render/fetch loops start spending budget on overhead flights -- makes sure
+    the flights the user explicitly asked to follow get their basic info even
+    when the budget is tight. Only the schedule/status is fetched here (cached
+    to disk); live position tracking still happens live when a module is active.
+    """
+    from libraries.flightaware.library import FlightAwareLibrary
+    from libraries.location.library import LocationLibrary
+
+    idents = _flight_tracker_idents(store)
+    if not idents:
+        return
+
+    lib_configs = dict(store.state.library_configs)
+    flightaware = FlightAwareLibrary(lib_configs.get("flightaware", {}))
+    if not flightaware.has_api_key:
+        return
+    tz = LocationLibrary(lib_configs.get("location", {})).get_timezone()
+
+    logger.info("FlightAware: prefetching %d tracked flight(s) at startup", len(idents))
+    for ident, date in idents:
+        if flightaware.budget_tier == "disabled":
+            logger.warning("FlightAware: budget exhausted, stopping startup prefetch")
+            break
+        try:
+            await flightaware.track_flight(ident, date, tz)
+        except Exception as exc:
+            logger.warning("FlightAware: startup prefetch failed for %s: %s", ident, exc)
+
+
 async def _render_loop(scene_manager: SceneManager, fps: int, vsync: bool = False) -> None:
     # On hardware, SwapOnVSync (run in a thread executor) blocks until the next
     # hardware vsync, naturally capping the rate at the panel refresh rate (~50 Hz).
@@ -187,6 +252,9 @@ def main() -> None:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await scene_manager.set_playlist(_startup_entries(store))
+        # Kick off the tracked-flight prefetch before the scene fetch loops so it
+        # gets first claim on the shared AeroAPI budget ahead of Flights Overhead.
+        prefetch_task = asyncio.create_task(_prefetch_flight_tracker(store))
         await scene_manager.start()
         await connectivity_monitor.start()
         hardware_mode = os.environ.get("CANVAS", "").lower() == "hardware"
@@ -206,6 +274,7 @@ def main() -> None:
         try:
             yield
         finally:
+            prefetch_task.cancel()
             render_task.cancel()
             if hot_reload_task is not None:
                 hot_reload_task.cancel()

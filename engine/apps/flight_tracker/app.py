@@ -423,27 +423,51 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Data fetching ──────────────────────────────────────────────────────────
 
+    def _all_flights_resolved(self) -> bool:
+        """Whether every configured flight has a resolved tracking result.
+
+        A flight is "resolved" once a lookup has returned something (found or
+        not-found) and stored it in ``_tracked``. Flights that never resolved
+        (e.g. the budget was exhausted or the network was down when they were
+        first polled) stay unresolved so the background fetch keeps retrying
+        them instead of leaving newly added flights permanently blank.
+        """
+        return all(self._tracked.get(fn) is not None for fn in self._flight_numbers())
+
     async def fetch_data(self) -> None:
         if self.config.get("debug", False):
             self._seed_debug()
             return
 
-        # Poll in the background only for the initial load, so the auto-hide
-        # gate (should_display) can evaluate real schedule data before the
-        # module is ever shown. Once data is loaded, restrict polling to when
-        # the module is active to conserve AeroAPI budget; the auto-hide gate
-        # then works off the cached timestamps and reactivates the module
-        # (resuming live polling) when a flight enters its active window.
-        if not self._is_active and self._fetched_once:
+        flights = self._flights()
+        flight_numbers = [f["number"] for f in flights]
+        flight_date_map = {f["number"]: f["date"] or None for f in flights}
+
+        # Drop tracked/scheduling state for flights that are no longer
+        # configured so a removed flight number can't linger in _tracked (and
+        # so should_display never keeps the module visible for a flight the user
+        # deleted). Done before the polling gate below so it applies even when
+        # the gate short-circuits.
+        configured = set(flight_numbers)
+        for fn in list(self._tracked):
+            if fn not in configured:
+                self._tracked.pop(fn, None)
+                self._next_poll_due.pop(fn, None)
+
+        # Poll in the background until every configured flight has resolved, so
+        # the auto-hide gate (should_display) can evaluate real schedule data
+        # before the module is ever shown -- and so a flight added or changed
+        # later still loads even while the module is off-screen. Once all
+        # flights are resolved, restrict polling to when the module is active to
+        # conserve AeroAPI budget; the auto-hide gate then works off the cached
+        # timestamps and reactivates the module (resuming live polling) when a
+        # flight enters its active window.
+        if not self._is_active and self._fetched_once and self._all_flights_resolved():
             return
 
         if not self._flightaware.has_api_key:
             self._fetched_once = True
             return
-
-        flights = self._flights()
-        flight_numbers = [f["number"] for f in flights]
-        flight_date_map = {f["number"]: f["date"] or None for f in flights}
 
         # Clear stale tracked state when a flight's date config changes so the
         # old phase (e.g. "far_past" from a previous day's instance) doesn't

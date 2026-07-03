@@ -208,7 +208,93 @@ def test_initial_fetch_runs_while_inactive_then_gates_on_active():
     # branch, but only because the initial-load gate let it run while inactive.
     asyncio.run(app.fetch_data())
     assert app._fetched_once is True
-    # Once loaded, subsequent inactive fetches return early (budget gate).
-    app._tracked = {"sentinel": {}}
+    # Once every flight is resolved, subsequent inactive fetches return early
+    # (no re-polling) and preserve the resolved data.
+    app._tracked = {"DL1": {"found": False, "ident": "DL1"}}
     asyncio.run(app.fetch_data())
-    assert app._tracked == {"sentinel": {}}
+    assert app._tracked == {"DL1": {"found": False, "ident": "DL1"}}
+
+
+# ── Resolve-or-keep-polling gate (req: new/changed flights must load) ────────────
+
+
+class _FakeFlightAware:
+    """Minimal stand-in for FlightAwareLibrary driving the fetch gate tests."""
+
+    def __init__(self, results: dict[str, dict[str, Any] | None]) -> None:
+        self.has_api_key = True
+        self.budget_tier = "normal"
+        self._results = results
+        self.calls: list[str] = []
+
+    async def track_flight(self, ident, date=None, tz=None):
+        self.calls.append(ident)
+        return self._results.get(ident)
+
+
+def _fake_app(config: dict[str, Any], results: dict[str, Any]) -> FlightTrackerApp:
+    app = _app(config)
+    app._flightaware = _FakeFlightAware(results)  # type: ignore[assignment]
+
+    class _Loc:
+        def get_timezone(self):
+            return None
+
+    app._location = _Loc()  # type: ignore[assignment]
+    return app
+
+
+def test_all_flights_resolved_reflects_tracked():
+    app = _app({"flights": [{"number": "DL1"}, {"number": "UA2"}]})
+    assert app._all_flights_resolved() is False
+    app._tracked = {"DL1": {"found": True}}
+    assert app._all_flights_resolved() is False  # UA2 still missing
+    app._tracked["UA2"] = {"found": False}
+    assert app._all_flights_resolved() is True
+
+
+def test_unresolved_flight_keeps_polling_while_inactive():
+    # Budget was exhausted on the first poll (no result), so the flight never
+    # resolved. A later inactive fetch must retry rather than give up, so the
+    # flight loads once the budget frees up.
+    app = _fake_app({"flights": [{"number": "DL1"}]}, results={})
+    app._flightaware.budget_tier = "disabled"  # nothing gets polled
+    asyncio.run(app.fetch_data())
+    assert app._fetched_once is True
+    assert app._all_flights_resolved() is False
+
+    # Budget frees up; the still-inactive module retries and now resolves.
+    app._flightaware.budget_tier = "normal"
+    app._flightaware._results["DL1"] = {"found": True, "scheduled_off": _iso(_hours(5))}
+    asyncio.run(app.fetch_data())
+    assert app._tracked.get("DL1") == {"found": True, "scheduled_off": _iso(_hours(5))}
+
+
+def test_resolved_flights_stop_background_polling_while_inactive():
+    app = _fake_app(
+        {"flights": [{"number": "DL1"}]},
+        results={"DL1": {"found": True, "scheduled_off": _iso(_hours(5))}},
+    )
+    asyncio.run(app.fetch_data())
+    assert app._all_flights_resolved() is True
+    first_calls = list(app._flightaware.calls)
+    # Now inactive + resolved -> no further polling until the module activates.
+    asyncio.run(app.fetch_data())
+    assert app._flightaware.calls == first_calls
+
+
+def test_removed_flight_pruned_from_tracked():
+    app = _fake_app(
+        {"flights": [{"number": "DL1"}, {"number": "UA2"}]},
+        results={
+            "DL1": {"found": True, "scheduled_off": _iso(_hours(5))},
+            "UA2": {"found": True, "scheduled_off": _iso(_hours(5))},
+        },
+    )
+    asyncio.run(app.fetch_data())
+    assert set(app._tracked) == {"DL1", "UA2"}
+
+    # User removes UA2 from the config; its stale tracked state must be dropped.
+    app.config["flights"] = [{"number": "DL1"}]
+    asyncio.run(app.fetch_data())
+    assert set(app._tracked) == {"DL1"}
