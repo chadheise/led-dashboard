@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from tests.framework import harness
+from tests.framework.logos import make_fixture_logo
 
 _TRACKED_SCHEDULED: dict[str, Any] = {
     "found": True,
@@ -85,12 +86,22 @@ def _seed(
     flight_numbers: list[str],
     *,
     labels: dict[str, str] | None = None,
+    logo_codes: dict[str, str] | None = None,
 ):
+    """Seed app state for a snapshot fixture.
+
+    logo_codes maps an airline IATA code -> color hex for generated placeholder
+    logos, mirroring the Flights Overhead suite so logo rendering is covered
+    offline.
+    """
     flights = _flights_config(flight_numbers, labels)
 
     def seed(app: Any) -> None:
         app._tracked = {k: dict(v) for k, v in tracked.items()}
         app._live_overrides = {}
+        codes = logo_codes or {}
+        app._logos = {iata: make_fixture_logo(iata, color) for iata, color in codes.items()}
+        app._logos_fetched = set(codes)
         app._fetched_once = True
         app._card_idx = 0
         app._card_last_ts = time.monotonic()
@@ -104,23 +115,35 @@ def _fixtures() -> dict[str, dict[str, Any]]:
     return {
         "card_scheduled": {
             "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
-            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"]),
+            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"], logo_codes={"DL": "c8102e"}),
         },
         "card_scheduled_labeled": {
             "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
-            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"], labels={"DL699": "Bob's flight"}),
+            "seed": _seed(
+                {"DL699": _TRACKED_SCHEDULED}, ["DL699"],
+                labels={"DL699": "Bob's flight"}, logo_codes={"DL": "c8102e"},
+            ),
+        },
+        # No logo available -> the generic plane icon fallback is drawn instead.
+        "card_scheduled_no_logo": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
+            "seed": _seed({"DL699": _TRACKED_SCHEDULED}, ["DL699"]),
         },
         "card_airborne": {
             "config": {"display_mode": "cards", "flights": _flights_config(["UA1542"]), "units": "imperial"},
-            "seed": _seed({"UA1542": _TRACKED_AIRBORNE}, ["UA1542"]),
+            "seed": _seed({"UA1542": _TRACKED_AIRBORNE}, ["UA1542"], logo_codes={"UA": "003087"}),
+        },
+        "card_airborne_metric": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["UA1542"]), "units": "metric"},
+            "seed": _seed({"UA1542": _TRACKED_AIRBORNE}, ["UA1542"], logo_codes={"UA": "003087"}),
         },
         "card_landed_ontime": {
             "config": {"display_mode": "cards", "flights": _flights_config(["AA100"]), "units": "imperial"},
-            "seed": _seed({"AA100": _TRACKED_LANDED_ONTIME}, ["AA100"]),
+            "seed": _seed({"AA100": _TRACKED_LANDED_ONTIME}, ["AA100"], logo_codes={"AA": "0078d2"}),
         },
         "card_landed_delayed": {
             "config": {"display_mode": "cards", "flights": _flights_config(["BA286"]), "units": "imperial"},
-            "seed": _seed({"BA286": _TRACKED_LANDED_DELAYED}, ["BA286"]),
+            "seed": _seed({"BA286": _TRACKED_LANDED_DELAYED}, ["BA286"], logo_codes={"BA": "075aaa"}),
         },
         "card_not_found": {
             "config": {"display_mode": "cards", "flights": _flights_config(["ZZ000"])},

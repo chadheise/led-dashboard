@@ -231,6 +231,9 @@ class _FakeFlightAware:
         self.calls.append(ident)
         return self._results.get(ident)
 
+    async def fetch_logo(self, iata):
+        return None
+
 
 def _fake_app(config: dict[str, Any], results: dict[str, Any]) -> FlightTrackerApp:
     app = _app(config)

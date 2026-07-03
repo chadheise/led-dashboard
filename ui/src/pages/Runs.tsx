@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import DisplayPreview from '../components/DisplayPreview'
 import PluginForm from '../components/PluginForm'
+import { configSummary } from '../configSummary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -96,13 +97,6 @@ function defaultsFromSchema(schema: Schema): Record<string, unknown> {
     if (prop.default !== undefined) out[k] = prop.default
   }
   return out
-}
-
-function configSummary(config: Record<string, unknown>): string {
-  const parts = Object.entries(config).slice(0, 3).map(([k, v]) =>
-    `${k}: ${Array.isArray(v) ? (v as unknown[]).join(', ') : String(v)}`
-  )
-  return parts.join(' · ') || '(no config)'
 }
 
 function stopPreview() {
