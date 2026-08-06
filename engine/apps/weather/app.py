@@ -14,11 +14,25 @@ from app_base import DisplayApp
 from grid import SizeConstraints
 from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, can_fit_text, draw_status_message
-from libraries.open_meteo.library import OpenMeteoLibrary, condition_for_code, condition_label, weather_icon_img
+from libraries.open_meteo.library import (
+    OpenMeteoLibrary,
+    aqi_color,
+    aqi_label,
+    condition_for_code,
+    condition_label,
+    weather_icon_img,
+)
 
 logger = logging.getLogger(__name__)
 
 _VIEWS: tuple[str, ...] = ("current", "daily_forecast", "weekly_forecast")
+
+# Height of the color-coded AQI bar drawn under each forecast column when the
+# panel is too short to print the number (plus 1px of breathing room above it).
+_AQI_BAR_H = 2
+# Below this panel height the forecast views fall back to the bar; above it the
+# numeric AQI fits under the temperatures without squeezing out the icon.
+_AQI_TEXT_MIN_H = 48
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -35,6 +49,42 @@ def _fit_size(sample: str, max_size: int, max_width: int, min_size: int = 6) -> 
     while size > min_size and not can_fit_text(max_width, size, sample):
         size -= 1
     return size
+
+
+_DETAIL_SEP = "  "
+
+
+def _join_details(items: list[str], idx: int | None) -> tuple[str, tuple[int, int] | None]:
+    """Join a detail row, reporting where item `idx` lands in the joined string.
+
+    The span is None when that item is not in `items` — the callers trim the row
+    to fit, so the highlighted item may have been dropped entirely.
+    """
+    joined = _DETAIL_SEP.join(items)
+    if idx is None or idx >= len(items):
+        return joined, None
+    start = len(_DETAIL_SEP.join(items[:idx])) + (len(_DETAIL_SEP) if idx else 0)
+    return joined, (start, start + len(items[idx]))
+
+
+def _tint_run(
+    img: Image.Image, text: str, start: int, end: int, color: tuple[int, int, int], size: int
+) -> None:
+    """Recolor `text[start:end]` in an already-rendered `text` image, in place.
+
+    Re-rendering the *whole* string in the new color and pasting back only that
+    horizontal slice keeps the glyph geometry identical to `img`, so the two
+    colors line up exactly — cheaper to reason about than laying out separately
+    rendered runs with a guessed inter-word gap. The slice bounds come from
+    prefix renders, which share the full string's left bearing; the separator
+    swept in at the left edge is blank in both renders.
+    """
+    tinted = render_text(text, color, size)
+    x0 = render_text(text[:start], color, size).width if start else 0
+    x1 = min(render_text(text[:end], color, size).width, tinted.width, img.width)
+    if x1 <= x0:
+        return
+    img.paste(tinted.crop((x0, 0, x1, tinted.height)), (x0, 0))
 
 
 def _dim(color: tuple[int, int, int], factor: float = 0.6) -> tuple[int, int, int]:
@@ -61,15 +111,19 @@ def _format_day_label(iso_date: str, *, short: bool) -> str:
 def _build_debug_weather() -> dict[str, Any]:
     now = datetime.now().replace(minute=0, second=0, microsecond=0)
     hourly_codes = [0, 0, 1, 1, 2, 2, 3, 61, 61, 80, 2, 1, 0, 0, 1, 2, 3, 3, 95, 61, 71, 71, 2, 1]
+    # Walks every AQI band so debug mode exercises the full color ramp.
+    hourly_aqi = [18, 34, 47, 62, 88, 105, 133, 158, 184, 215, 268, 320]
     hourly = [
         {
             "time": (now + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M"),
             "temperature": 58 + (i % 12),
             "weather_code": hourly_codes[i % len(hourly_codes)],
+            "aqi": hourly_aqi[i % len(hourly_aqi)],
         }
         for i in range(48)
     ]
     daily_codes = [0, 2, 61, 71, 95, 3, 1]
+    daily_aqi = [42, 78, 120, 165, 240, 310, 55]
     today = now.date()
     daily = [
         {
@@ -77,6 +131,7 @@ def _build_debug_weather() -> dict[str, Any]:
             "weather_code": daily_codes[d],
             "temp_max": 75 - d,
             "temp_min": 55 + d,
+            "aqi": daily_aqi[d],
         }
         for d in range(len(daily_codes))
     ]
@@ -89,6 +144,7 @@ def _build_debug_weather() -> dict[str, Any]:
             "wind_speed": 6.0,
             "weather_code": 2,
             "is_day": True,
+            "aqi": 42,
         },
         "hourly": hourly,
         "daily": daily,
@@ -139,6 +195,15 @@ class WeatherApp(DisplayApp):
                 "enum": ["fahrenheit", "celsius"],
                 "x-enum-labels": {"fahrenheit": "Fahrenheit (°F)", "celsius": "Celsius (°C)"},
                 "default": "fahrenheit",
+            },
+            "show_air_quality": {
+                "type": "boolean",
+                "title": "Show air quality (AQI)",
+                "description": (
+                    "Adds the US EPA air quality index to every view, color coded "
+                    "from green (good) to red and purple (unhealthy)"
+                ),
+                "default": False,
             },
             "cycle_seconds": {
                 "type": "number",
@@ -201,8 +266,13 @@ class WeatherApp(DisplayApp):
                 lon = float(lib_loc.get("longitude", 0.0))
 
         unit = self.config.get("units", "fahrenheit")
-        self._data = await self._open_meteo.fetch_weather(lat, lon, unit)
+        self._data = await self._open_meteo.fetch_weather(
+            lat, lon, unit, include_air_quality=self._show_air_quality()
+        )
         self._fetched_once = True
+
+    def _show_air_quality(self) -> bool:
+        return bool(self.config.get("show_air_quality", False))
 
     def _hourly_from_now(self) -> list[dict[str, Any]]:
         hourly = self._data.get("hourly", [])
@@ -296,12 +366,17 @@ class WeatherApp(DisplayApp):
         lines = [temp_img, label_img]
 
         details: list[str] = []
+        aqi = current.get("aqi") if self._show_air_quality() else None
+        aqi_idx: int | None = None
         feels = current.get("feels_like")
         if feels is not None:
             details.append(f"Feels {round(feels)}°")
         humidity = current.get("humidity")
         if humidity is not None:
             details.append(f"Hum {round(humidity)}%")
+        if aqi is not None:
+            aqi_idx = len(details)
+            details.append(f"AQI {round(aqi)}")
         wind = current.get("wind_speed")
         if wind is not None:
             details.append(f"Wind {round(wind)}")
@@ -311,10 +386,21 @@ class WeatherApp(DisplayApp):
             # Try the fullest combination that fits the available width; a
             # partial join (e.g. "Feels 70°  Hum") reads worse than a shorter
             # but complete one, so prefer dropping whole items over clipping.
-            candidates = ["  ".join(details[:n]) for n in range(len(details), 0, -1)]
-            chosen = next((c for c in candidates if can_fit_text(avail_w, detail_size, c)), "")
+            # Where there is room, the AQI item also spells out its category.
+            candidates: list[tuple[str, tuple[int, int] | None]] = []
+            for n in range(len(details), 0, -1):
+                if aqi_idx is not None and aqi_idx < n:
+                    named = details[:n]
+                    named[aqi_idx] = f"AQI {round(aqi)} {aqi_label(aqi)}"
+                    candidates.append(_join_details(named, aqi_idx))
+                candidates.append(_join_details(details[:n], aqi_idx))
+            chosen, aqi_span = next(
+                ((c, s) for c, s in candidates if can_fit_text(avail_w, detail_size, c)), ("", None)
+            )
             if chosen:
                 detail_img = render_text(chosen, text_color, detail_size)
+                if aqi_span is not None:
+                    _tint_run(detail_img, chosen, *aqi_span, aqi_color(aqi), detail_size)
                 used_h = sum(li.height for li in lines) + 2 * len(lines)
                 if used_h + detail_img.height <= h:
                     lines.append(detail_img)
@@ -326,6 +412,51 @@ class WeatherApp(DisplayApp):
             y += li.height + 2
 
         blit(self.canvas, img)
+
+    # ── Air-quality footer (forecast columns) ──────────────────────────────────
+
+    def _aqi_footer_plan(
+        self, entries: list[dict[str, Any]], h: int, col_max_w: int
+    ) -> tuple[str, int, int]:
+        """Decide how each forecast column shows its AQI: (mode, height, size).
+
+        ``mode`` is "text" (the number, color coded), "bar" (a color-coded bar,
+        for panels too short to spare a text line without evicting the weather
+        icon), or "none". ``height`` is the vertical space the caller must
+        reserve at the bottom of the column, gap included.
+        """
+        if not self._show_air_quality():
+            return ("none", 0, 0)
+        if not any(entry.get("aqi") is not None for entry in entries):
+            return ("none", 0, 0)
+        if h < _AQI_TEXT_MIN_H:
+            return ("bar", _AQI_BAR_H + 1, 0)
+        size = _fit_size("199", min(h // 8, 9), col_max_w)
+        return ("text", render_text("199", (255, 255, 255), size).height + 1, size)
+
+    def _draw_aqi_footer(
+        self,
+        img: Image.Image,
+        plan: tuple[str, int, int],
+        aqi: float | None,
+        cx: int,
+        col_w: int,
+    ) -> None:
+        """Draw one column's AQI indicator, bottom-anchored and centred on `cx`."""
+        mode, _, size = plan
+        if mode == "none" or aqi is None:
+            return
+
+        color = aqi_color(aqi)
+        if mode == "bar":
+            bar_w = max(4, min(col_w - 4, 16))
+            x0 = cx - bar_w // 2
+            y0 = img.height - _AQI_BAR_H - 1
+            img.paste(color, (x0, y0, x0 + bar_w, y0 + _AQI_BAR_H))
+            return
+
+        aqi_img = render_text(_clip_text(str(round(aqi)), size, max(6, col_w - 2)), color, size)
+        img.paste(aqi_img, (cx - aqi_img.width // 2, img.height - aqi_img.height - 1))
 
     def _draw_daily_forecast(self) -> None:
         w, h = self.canvas.width, self.canvas.height
@@ -348,10 +479,12 @@ class WeatherApp(DisplayApp):
         label_h = render_text("9AM", text_color, label_size).height
         temp_size = _fit_size("100°", min(h // 6, 14), col_max_w)
         temp_h = render_text("100°", text_color, temp_size).height
+        aqi_plan = self._aqi_footer_plan(picks, h, col_max_w)
 
-        # Label at top, temp anchored to the bottom; the icon gets exactly the
-        # measured space between them and is dropped when too small to read.
-        temp_y = h - temp_h - 1
+        # Label at top, temp anchored to the bottom (above the AQI footer, when
+        # shown); the icon gets exactly the measured space between them and is
+        # dropped when too small to read.
+        temp_y = h - temp_h - 1 - aqi_plan[1]
         icon_top = label_h + 3
         icon_size = min(temp_y - 2 - icon_top, slot_w - 4)
         show_icon = icon_size >= 8
@@ -378,6 +511,8 @@ class WeatherApp(DisplayApp):
             temp_img = render_text(_clip_text(temp_str, temp_size, max_w), text_color, temp_size)
             img.paste(temp_img, (cx - temp_img.width // 2, temp_y))
 
+            self._draw_aqi_footer(img, aqi_plan, entry.get("aqi"), cx, col_w)
+
         blit(self.canvas, img)
 
     def _draw_weekly_forecast(self) -> None:
@@ -403,14 +538,17 @@ class WeatherApp(DisplayApp):
         label_h = render_text(day_sample, text_color, label_size).height
         temp_size = _fit_size("100°", min(h // 8, 10), col_max_w)
         temp_h = render_text("100°", text_color, temp_size).height
+        aqi_plan = self._aqi_footer_plan(days, h, col_max_w)
+        aqi_h = aqi_plan[1]
 
         # Label at top, temps anchored to the bottom (hi over lo with a 1px
-        # gap), icon in the measured middle. Degrade explicitly: drop the lo
-        # temp before the icon, and the icon before the hi temp.
+        # gap) above the AQI footer, icon in the measured middle. Degrade
+        # explicitly: drop the lo temp before the icon, and the icon before the
+        # hi temp.
         icon_top = label_h + 3
-        show_lo = h - 1 - 2 * temp_h - 1 - 2 - icon_top >= 8
+        show_lo = h - 1 - aqi_h - 2 * temp_h - 1 - 2 - icon_top >= 8
         temps_h = (2 * temp_h + 1) if show_lo else temp_h
-        temp_y = h - temps_h - 1
+        temp_y = h - temps_h - 1 - aqi_h
         icon_size = min(temp_y - 2 - icon_top, slot_w - 4)
         show_icon = icon_size >= 8
         # Centre the icon in its band (it may be width-capped below band height)
@@ -441,6 +579,8 @@ class WeatherApp(DisplayApp):
             if show_lo and lo is not None:
                 lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), _dim(text_color), temp_size)
                 img.paste(lo_img, (cx - lo_img.width // 2, y))
+
+            self._draw_aqi_footer(img, aqi_plan, entry.get("aqi"), cx, col_w)
 
         blit(self.canvas, img)
 

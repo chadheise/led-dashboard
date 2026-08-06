@@ -14,6 +14,7 @@ from libraries.base import Library
 logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.open-meteo.com/v1/forecast"
+_AIR_QUALITY_API_URL = "https://air-quality-api.open-meteo.com/v1/air-quality"
 _CACHE_TTL_SECONDS: float = 15 * 60
 
 # WMO weather interpretation codes (https://open-meteo.com/en/docs) collapsed
@@ -54,6 +55,49 @@ def condition_for_code(code: int | None) -> str:
 
 def condition_label(condition: str) -> str:
     return _CONDITION_LABELS.get(condition, "Unknown")
+
+
+# ── Air quality (US EPA AQI) ────────────────────────────────────────────────
+#
+# (upper bound inclusive, short label, color). Colors follow the official EPA
+# palette, with the purple/maroon top bands brightened — the published swatches
+# (#8F3F97 / #7E0023) read as near-black on LED panels.
+
+_AQI_BANDS: tuple[tuple[int, str, tuple[int, int, int]], ...] = (
+    (50, "Good", (0, 220, 60)),
+    (100, "Moderate", (255, 220, 0)),
+    (150, "Poor", (255, 126, 0)),
+    (200, "Unhealthy", (255, 40, 40)),
+    (300, "Very Bad", (190, 90, 210)),
+    (10**6, "Hazardous", (220, 50, 90)),
+)
+
+_AQI_UNKNOWN_COLOR: tuple[int, int, int] = (140, 140, 140)
+
+
+def _aqi_band(aqi: float | int | None) -> tuple[str, tuple[int, int, int]] | None:
+    if aqi is None:
+        return None
+    try:
+        value = float(aqi)
+    except (TypeError, ValueError):
+        return None
+    for upper, label, color in _AQI_BANDS:
+        if value <= upper:
+            return label, color
+    return _AQI_BANDS[-1][1], _AQI_BANDS[-1][2]
+
+
+def aqi_label(aqi: float | int | None) -> str:
+    """Short EPA category name for an AQI value ("Good", "Moderate", ...)."""
+    band = _aqi_band(aqi)
+    return band[0] if band else "Unknown"
+
+
+def aqi_color(aqi: float | int | None) -> tuple[int, int, int]:
+    """Display color for an AQI value: green (good) through red/purple (bad)."""
+    band = _aqi_band(aqi)
+    return band[1] if band else _AQI_UNKNOWN_COLOR
 
 
 # ── Animated weather icons ──────────────────────────────────────────────────
@@ -143,20 +187,33 @@ class OpenMeteoLibrary(Library):
     condition_for_code = staticmethod(condition_for_code)
     condition_label = staticmethod(condition_label)
     weather_icon_img = staticmethod(weather_icon_img)
+    aqi_label = staticmethod(aqi_label)
+    aqi_color = staticmethod(aqi_color)
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._cache: dict[tuple[float, float, str], tuple[float, dict[str, Any]]] = {}
+        self._cache: dict[tuple[float, float, str, bool], tuple[float, dict[str, Any]]] = {}
 
-    async def fetch_weather(self, lat: float, lon: float, unit: str = "fahrenheit") -> dict[str, Any]:
+    async def fetch_weather(
+        self,
+        lat: float,
+        lon: float,
+        unit: str = "fahrenheit",
+        *,
+        include_air_quality: bool = False,
+    ) -> dict[str, Any]:
         """Fetch current conditions plus hourly/daily forecasts for (lat, lon).
 
         Returns a normalized dict: {"timezone", "current", "hourly", "daily"}.
+        With ``include_air_quality`` the current/hourly/daily entries also carry
+        an ``"aqi"`` key (US EPA AQI) from Open-Meteo's separate air-quality
+        endpoint; that request failing degrades to weather without AQI rather
+        than failing the whole fetch.
         Results are cached in-memory for a short TTL; on request failure the
         last good cached value is returned (or {} if nothing has ever loaded).
         """
         unit = unit if unit in ("fahrenheit", "celsius") else "fahrenheit"
-        key = (round(lat, 2), round(lon, 2), unit)
+        key = (round(lat, 2), round(lon, 2), unit, bool(include_air_quality))
         now = time.monotonic()
 
         cached = self._cache.get(key)
@@ -180,11 +237,33 @@ class OpenMeteoLibrary(Library):
                 resp.raise_for_status()
                 data = resp.json()
             parsed = self._parse(data)
-            self._cache[key] = (now, parsed)
-            return parsed
         except Exception as exc:
             logger.warning("Open-Meteo fetch failed for (%s, %s): %s", lat, lon, exc)
             return cached[1] if cached is not None else {}
+
+        if include_air_quality:
+            self._merge_air_quality(parsed, await self._fetch_air_quality(lat, lon))
+        self._cache[key] = (now, parsed)
+        return parsed
+
+    async def _fetch_air_quality(self, lat: float, lon: float) -> dict[str, Any]:
+        """Raw current + hourly US AQI for (lat, lon); {} when unavailable."""
+        try:
+            params = {
+                "latitude": lat,
+                "longitude": lon,
+                "current": "us_aqi",
+                "hourly": "us_aqi",
+                "timezone": "auto",
+                "forecast_days": 7,
+            }
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(_AIR_QUALITY_API_URL, params=params)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            logger.warning("Open-Meteo air-quality fetch failed for (%s, %s): %s", lat, lon, exc)
+            return {}
 
     @staticmethod
     def _parse(data: dict[str, Any]) -> dict[str, Any]:
@@ -225,3 +304,46 @@ class OpenMeteoLibrary(Library):
             "hourly": hourly,
             "daily": daily,
         }
+
+    @staticmethod
+    def _merge_air_quality(parsed: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+        """Fold an air-quality response into a parsed weather payload, in place.
+
+        Hourly AQI is matched to the weather hours by timestamp (both endpoints
+        are requested with ``timezone=auto``, so the strings line up). The
+        air-quality API has no daily aggregate, so each day's AQI is the worst
+        hourly reading on that date — the same "how bad does it get today"
+        summary the daily hi/lo temperatures give.
+        """
+        if not data:
+            return parsed
+
+        current_aqi = (data.get("current") or {}).get("us_aqi")
+        if current_aqi is not None and isinstance(parsed.get("current"), dict):
+            parsed["current"]["aqi"] = current_aqi
+
+        hourly_raw = data.get("hourly") or {}
+        by_time = {
+            t: aqi
+            for t, aqi in zip(hourly_raw.get("time", []), hourly_raw.get("us_aqi", []))
+            if aqi is not None
+        }
+        if not by_time:
+            return parsed
+
+        for entry in parsed.get("hourly", []):
+            aqi = by_time.get(entry.get("time"))
+            if aqi is not None:
+                entry["aqi"] = aqi
+
+        worst_by_date: dict[str, float] = {}
+        for t, aqi in by_time.items():
+            date = str(t)[:10]
+            worst = worst_by_date.get(date)
+            worst_by_date[date] = aqi if worst is None else max(worst, aqi)
+        for entry in parsed.get("daily", []):
+            aqi = worst_by_date.get(entry.get("date"))
+            if aqi is not None:
+                entry["aqi"] = aqi
+
+        return parsed
