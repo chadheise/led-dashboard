@@ -33,6 +33,9 @@ _AQI_BAR_H = 2
 # Below this panel height the forecast views fall back to the bar; above it the
 # numeric AQI fits under the temperatures without squeezing out the icon.
 _AQI_TEXT_MIN_H = 48
+# Prefixed to the numeric footer on columns wide enough to carry it, matching how
+# the current view spells out the reading in its detail row.
+_AQI_PREFIX = "AQI "
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -417,33 +420,41 @@ class WeatherApp(DisplayApp):
 
     def _aqi_footer_plan(
         self, entries: list[dict[str, Any]], h: int, col_max_w: int
-    ) -> tuple[str, int, int]:
-        """Decide how each forecast column shows its AQI: (mode, height, size).
+    ) -> tuple[str, int, int, str]:
+        """Decide how each column shows its AQI: (mode, height, size, prefix).
 
         ``mode`` is "text" (the number, color coded), "bar" (a color-coded bar,
         for panels too short to spare a text line without evicting the weather
         icon), or "none". ``height`` is the vertical space the caller must
-        reserve at the bottom of the column, gap included.
+        reserve at the bottom of the column, gap included. ``prefix`` labels the
+        number where the widest reading still fits the column with it.
         """
         if not self._show_air_quality():
-            return ("none", 0, 0)
+            return ("none", 0, 0, "")
         if not any(entry.get("aqi") is not None for entry in entries):
-            return ("none", 0, 0)
+            return ("none", 0, 0, "")
         if h < _AQI_TEXT_MIN_H:
-            return ("bar", _AQI_BAR_H + 1, 0)
+            return ("bar", _AQI_BAR_H + 1, 0, "")
         size = _fit_size("199", min(h // 8, 9), col_max_w)
-        return ("text", render_text("199", (255, 255, 255), size).height + 1, size)
+        # One decision for every column, so the label never comes and goes
+        # between neighbours with different digit counts.
+        widest = max(
+            (str(round(e["aqi"])) for e in entries if e.get("aqi") is not None),
+            key=lambda s: render_text(s, (255, 255, 255), size).width,
+        )
+        prefix = _AQI_PREFIX if can_fit_text(col_max_w, size, _AQI_PREFIX + widest) else ""
+        return ("text", render_text("199", (255, 255, 255), size).height + 1, size, prefix)
 
     def _draw_aqi_footer(
         self,
         img: Image.Image,
-        plan: tuple[str, int, int],
+        plan: tuple[str, int, int, str],
         aqi: float | None,
         cx: int,
         col_w: int,
     ) -> None:
         """Draw one column's AQI indicator, bottom-anchored and centred on `cx`."""
-        mode, _, size = plan
+        mode, _, size, prefix = plan
         if mode == "none" or aqi is None:
             return
 
@@ -455,7 +466,8 @@ class WeatherApp(DisplayApp):
             img.paste(color, (x0, y0, x0 + bar_w, y0 + _AQI_BAR_H))
             return
 
-        aqi_img = render_text(_clip_text(str(round(aqi)), size, max(6, col_w - 2)), color, size)
+        text = _clip_text(f"{prefix}{round(aqi)}", size, max(6, col_w - 2))
+        aqi_img = render_text(text, color, size)
         img.paste(aqi_img, (cx - aqi_img.width // 2, img.height - aqi_img.height - 1))
 
     def _draw_daily_forecast(self) -> None:
