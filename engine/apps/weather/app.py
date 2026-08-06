@@ -51,19 +51,40 @@ def _fit_size(sample: str, max_size: int, max_width: int, min_size: int = 6) -> 
     return size
 
 
-def _tint_prefix(
-    img: Image.Image, text: str, prefix: str, color: tuple[int, int, int], size: int
-) -> None:
-    """Recolor the leading `prefix` of an already-rendered `text` image, in place.
+_DETAIL_SEP = "  "
 
-    Re-rendering the *whole* string in the new color and pasting back only the
-    prefix-wide slice keeps the glyph geometry identical to `img`, so the two
+
+def _join_details(items: list[str], idx: int | None) -> tuple[str, tuple[int, int] | None]:
+    """Join a detail row, reporting where item `idx` lands in the joined string.
+
+    The span is None when that item is not in `items` — the callers trim the row
+    to fit, so the highlighted item may have been dropped entirely.
+    """
+    joined = _DETAIL_SEP.join(items)
+    if idx is None or idx >= len(items):
+        return joined, None
+    start = len(_DETAIL_SEP.join(items[:idx])) + (len(_DETAIL_SEP) if idx else 0)
+    return joined, (start, start + len(items[idx]))
+
+
+def _tint_run(
+    img: Image.Image, text: str, start: int, end: int, color: tuple[int, int, int], size: int
+) -> None:
+    """Recolor `text[start:end]` in an already-rendered `text` image, in place.
+
+    Re-rendering the *whole* string in the new color and pasting back only that
+    horizontal slice keeps the glyph geometry identical to `img`, so the two
     colors line up exactly — cheaper to reason about than laying out separately
-    rendered runs with a guessed inter-word gap.
+    rendered runs with a guessed inter-word gap. The slice bounds come from
+    prefix renders, which share the full string's left bearing; the separator
+    swept in at the left edge is blank in both renders.
     """
     tinted = render_text(text, color, size)
-    width = min(render_text(prefix, color, size).width, tinted.width, img.width)
-    img.paste(tinted.crop((0, 0, width, tinted.height)), (0, 0))
+    x0 = render_text(text[:start], color, size).width if start else 0
+    x1 = min(render_text(text[:end], color, size).width, tinted.width, img.width)
+    if x1 <= x0:
+        return
+    img.paste(tinted.crop((x0, 0, x1, tinted.height)), (x0, 0))
 
 
 def _dim(color: tuple[int, int, int], factor: float = 0.6) -> tuple[int, int, int]:
@@ -345,17 +366,17 @@ class WeatherApp(DisplayApp):
         lines = [temp_img, label_img]
 
         details: list[str] = []
-        # AQI leads the detail row: it is opt-in, so when the row has to shed
-        # items it should be the last thing standing, not the first to go.
         aqi = current.get("aqi") if self._show_air_quality() else None
-        if aqi is not None:
-            details.append(f"AQI {round(aqi)}")
+        aqi_idx: int | None = None
         feels = current.get("feels_like")
         if feels is not None:
             details.append(f"Feels {round(feels)}°")
         humidity = current.get("humidity")
         if humidity is not None:
             details.append(f"Hum {round(humidity)}%")
+        if aqi is not None:
+            aqi_idx = len(details)
+            details.append(f"AQI {round(aqi)}")
         wind = current.get("wind_speed")
         if wind is not None:
             details.append(f"Wind {round(wind)}")
@@ -366,19 +387,20 @@ class WeatherApp(DisplayApp):
             # partial join (e.g. "Feels 70°  Hum") reads worse than a shorter
             # but complete one, so prefer dropping whole items over clipping.
             # Where there is room, the AQI item also spells out its category.
-            candidates: list[tuple[str, str]] = []
+            candidates: list[tuple[str, tuple[int, int] | None]] = []
             for n in range(len(details), 0, -1):
-                if aqi is not None:
-                    named = [f"AQI {round(aqi)} {aqi_label(aqi)}", *details[1:n]]
-                    candidates.append(("  ".join(named), named[0]))
-                candidates.append(("  ".join(details[:n]), details[0] if aqi is not None else ""))
-            chosen, aqi_part = next(
-                ((c, p) for c, p in candidates if can_fit_text(avail_w, detail_size, c)), ("", "")
+                if aqi_idx is not None and aqi_idx < n:
+                    named = details[:n]
+                    named[aqi_idx] = f"AQI {round(aqi)} {aqi_label(aqi)}"
+                    candidates.append(_join_details(named, aqi_idx))
+                candidates.append(_join_details(details[:n], aqi_idx))
+            chosen, aqi_span = next(
+                ((c, s) for c, s in candidates if can_fit_text(avail_w, detail_size, c)), ("", None)
             )
             if chosen:
                 detail_img = render_text(chosen, text_color, detail_size)
-                if aqi_part:
-                    _tint_prefix(detail_img, chosen, aqi_part, aqi_color(aqi), detail_size)
+                if aqi_span is not None:
+                    _tint_run(detail_img, chosen, *aqi_span, aqi_color(aqi), detail_size)
                 used_h = sum(li.height for li in lines) + 2 * len(lines)
                 if used_h + detail_img.height <= h:
                     lines.append(detail_img)

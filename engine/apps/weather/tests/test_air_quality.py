@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from apps.weather.app import WeatherApp
+from apps.weather.app import WeatherApp, _join_details
 from apps.weather.tests.fixtures import _weather_data
 from canvas.simulator import SimulatorCanvas
 from tests.framework.clock import frozen_time
@@ -71,6 +71,28 @@ def test_footer_plan_prints_the_number_only_on_tall_panels() -> None:
     assert tall_size >= 6
     # Either way the footer has to be cheap enough to leave the icon room.
     assert 0 < short_h < tall_h <= 12
+
+
+def test_detail_row_span_locates_the_aqi_item() -> None:
+    """The tint span drives which glyphs get the AQI color — off by one shows."""
+    items = ["Feels 70°", "Hum 48%", "AQI 88", "Wind 6"]
+    joined, span = _join_details(items, 2)
+
+    assert joined == "Feels 70°  Hum 48%  AQI 88  Wind 6"
+    assert span is not None
+    assert joined[span[0] : span[1]] == "AQI 88"
+
+
+def test_detail_row_span_handles_a_leading_aqi_item() -> None:
+    """With no feels-like or humidity reading the AQI item starts the row."""
+    joined, span = _join_details(["AQI 88", "Wind 6"], 0)
+
+    assert span == (0, 6)
+    assert joined[span[0] : span[1]] == "AQI 88"
+
+
+def test_detail_row_span_is_none_once_the_aqi_item_is_trimmed() -> None:
+    assert _join_details(["Feels 70°", "Hum 48%"], 2)[1] is None
 
 
 def _render(config: dict[str, Any], *, air_quality_data: bool, w: int, h: int) -> bytes:
