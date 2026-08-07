@@ -56,6 +56,33 @@ def _fit_size(sample: str, max_size: int, max_width: int, min_size: int = 6) -> 
 
 _DETAIL_SEP = "  "
 
+# Separators for the weekly view's "lo - hi" range, widest first. Columns too
+# narrow for even the tightest one stack the temps instead.
+_TEMP_RANGE_SEPS = (" - ", "-")
+
+
+def _temp_range_text(lo: float, hi: float, sep: str) -> str:
+    return f"{round(lo)}{sep}{round(hi)}"
+
+
+def _temp_range_sep(days: list[dict[str, Any]], size: int, max_w: int) -> str | None:
+    """Widest separator that spells every day's range inside `max_w`, else None.
+
+    Decided once for the whole row so neighbouring columns space their ranges
+    alike, and None whenever a day is missing either end of its range.
+    """
+    pairs = [(d.get("temp_min"), d.get("temp_max")) for d in days]
+    if any(lo is None or hi is None for lo, hi in pairs):
+        return None
+    return next(
+        (
+            sep
+            for sep in _TEMP_RANGE_SEPS
+            if all(can_fit_text(max_w, size, _temp_range_text(lo, hi, sep)) for lo, hi in pairs)
+        ),
+        None,
+    )
+
 
 def _join_details(items: list[str], idx: int | None) -> tuple[str, tuple[int, int] | None]:
     """Join a detail row, reporting where item `idx` lands in the joined string.
@@ -470,6 +497,30 @@ class WeatherApp(DisplayApp):
         aqi_img = render_text(text, color, size)
         img.paste(aqi_img, (cx - aqi_img.width // 2, img.height - aqi_img.height - 1))
 
+    def _draw_temp_range(
+        self,
+        img: Image.Image,
+        lo: float,
+        hi: float,
+        sep: str,
+        size: int,
+        color: tuple[int, int, int],
+        cx: int,
+        y: int,
+    ) -> None:
+        """Draw "lo - hi" on one line centred on `cx`, the low dimmed like the
+        stacked layout dims it. The caller has already checked it fits.
+
+        Rendered as one string and tinted, not as three pasted runs: the
+        renderer crops each image to its ink, so a separately drawn separator
+        would ride up to the top of the line instead of sitting on the digits'
+        centre line.
+        """
+        text = _temp_range_text(lo, hi, sep)
+        range_img = render_text(text, color, size)
+        _tint_run(range_img, text, 0, len(f"{round(lo)}"), _dim(color), size)
+        img.paste(range_img, (cx - range_img.width // 2, y))
+
     def _draw_daily_forecast(self) -> None:
         w, h = self.canvas.width, self.canvas.height
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
@@ -552,14 +603,16 @@ class WeatherApp(DisplayApp):
         temp_h = render_text("100°", text_color, temp_size).height
         aqi_plan = self._aqi_footer_plan(days, h, col_max_w)
         aqi_h = aqi_plan[1]
+        range_sep = _temp_range_sep(days, temp_size, col_max_w)
 
-        # Label at top, temps anchored to the bottom (hi over lo with a 1px
-        # gap) above the AQI footer, icon in the measured middle. Degrade
-        # explicitly: drop the lo temp before the icon, and the icon before the
-        # hi temp.
+        # Label at top, temps anchored to the bottom above the AQI footer, icon
+        # in the measured middle. The temps share one line as a "lo - hi" range;
+        # columns too narrow to spell that stack hi over lo with a 1px gap, and
+        # degrade explicitly from there: drop the lo before the icon, and the
+        # icon before the hi.
         icon_top = label_h + 3
-        show_lo = h - 1 - aqi_h - 2 * temp_h - 1 - 2 - icon_top >= 8
-        temps_h = (2 * temp_h + 1) if show_lo else temp_h
+        stacked = range_sep is None and h - 1 - aqi_h - 2 * temp_h - 1 - 2 - icon_top >= 8
+        temps_h = (2 * temp_h + 1) if stacked else temp_h
         temp_y = h - temps_h - 1 - aqi_h
         icon_size = min(temp_y - 2 - icon_top, slot_w - 4)
         show_icon = icon_size >= 8
@@ -584,13 +637,16 @@ class WeatherApp(DisplayApp):
             hi = entry.get("temp_max")
             lo = entry.get("temp_min")
             y = temp_y
-            if hi is not None:
-                hi_img = render_text(_clip_text(f"{round(hi)}°", temp_size, max_w), text_color, temp_size)
-                img.paste(hi_img, (cx - hi_img.width // 2, y))
-                y += temp_h + 1
-            if show_lo and lo is not None:
-                lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), _dim(text_color), temp_size)
-                img.paste(lo_img, (cx - lo_img.width // 2, y))
+            if range_sep is not None:
+                self._draw_temp_range(img, lo, hi, range_sep, temp_size, text_color, cx, y)
+            else:
+                if hi is not None:
+                    hi_img = render_text(_clip_text(f"{round(hi)}°", temp_size, max_w), text_color, temp_size)
+                    img.paste(hi_img, (cx - hi_img.width // 2, y))
+                    y += temp_h + 1
+                if stacked and lo is not None:
+                    lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), _dim(text_color), temp_size)
+                    img.paste(lo_img, (cx - lo_img.width // 2, y))
 
             self._draw_aqi_footer(img, aqi_plan, entry.get("aqi"), cx, col_w)
 
