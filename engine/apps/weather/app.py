@@ -36,6 +36,9 @@ _AQI_TEXT_MIN_H = 48
 # Prefixed to the numeric footer on columns wide enough to carry it, matching how
 # the current view spells out the reading in its detail row.
 _AQI_PREFIX = "AQI "
+# Breathing room between the temps and the AQI line below them, so the two rows
+# of numbers read as separate readings rather than one block.
+_AQI_TEXT_GAP = 4
 
 
 def _clip_text(text: str, size: int, max_w: int) -> str:
@@ -61,8 +64,33 @@ _DETAIL_SEP = "  "
 _TEMP_RANGE_SEPS = (" - ", "-")
 
 
+def _temp_str(value: float) -> str:
+    return f"{round(value)}°"
+
+
 def _temp_range_text(lo: float, hi: float, sep: str) -> str:
-    return f"{round(lo)}{sep}{round(hi)}"
+    return f"{_temp_str(lo)}{sep}{_temp_str(hi)}"
+
+
+def _sep_ink_cx(sep: str, size: int) -> float:
+    """Centre of the separator's *ink*, in its own render.
+
+    Not the middle of the render: the glyph's advance carries a blank trailing
+    column, so centring by width would leave the dash a pixel off.
+    """
+    img = render_text(sep, (255, 255, 255), size)
+    box = img.getbbox()
+    return (box[0] + box[2] - 1) / 2 if box else (img.width - 1) / 2
+
+
+def _temp_range_width(lo: float, hi: float, sep: str, size: int) -> int:
+    """Column width a dash-centred range needs: the wider end counted twice.
+
+    The separator is pinned to the column centre, so whichever end is wider sets
+    the reach on both sides of it.
+    """
+    ends = max(render_text(_temp_str(v), (255, 255, 255), size).width for v in (lo, hi))
+    return 2 * ends + render_text(sep, (255, 255, 255), size).width
 
 
 def _temp_range_sep(days: list[dict[str, Any]], size: int, max_w: int) -> str | None:
@@ -78,7 +106,7 @@ def _temp_range_sep(days: list[dict[str, Any]], size: int, max_w: int) -> str | 
         (
             sep
             for sep in _TEMP_RANGE_SEPS
-            if all(can_fit_text(max_w, size, _temp_range_text(lo, hi, sep)) for lo, hi in pairs)
+            if all(_temp_range_width(lo, hi, sep, size) <= max_w for lo, hi in pairs)
         ),
         None,
     )
@@ -470,7 +498,8 @@ class WeatherApp(DisplayApp):
             key=lambda s: render_text(s, (255, 255, 255), size).width,
         )
         prefix = _AQI_PREFIX if can_fit_text(col_max_w, size, _AQI_PREFIX + widest) else ""
-        return ("text", render_text("199", (255, 255, 255), size).height + 1, size, prefix)
+        height = render_text("199", (255, 255, 255), size).height + _AQI_TEXT_GAP
+        return ("text", height, size, prefix)
 
     def _draw_aqi_footer(
         self,
@@ -508,18 +537,22 @@ class WeatherApp(DisplayApp):
         cx: int,
         y: int,
     ) -> None:
-        """Draw "lo - hi" on one line centred on `cx`, the low dimmed like the
-        stacked layout dims it. The caller has already checked it fits.
+        """Draw "lo° - hi°" on one line, the low dimmed like the stacked layout
+        dims it. The caller has already checked it fits.
 
-        Rendered as one string and tinted, not as three pasted runs: the
-        renderer crops each image to its ink, so a separately drawn separator
-        would ride up to the top of the line instead of sitting on the digits'
-        centre line.
+        `cx` pins the separator, not the string: the dash lands on the column
+        centre and stays lined up with its neighbours' whatever the two ends
+        measure. Rendered as one string and tinted, not as three pasted runs —
+        the renderer crops each image to its ink, so a separately drawn
+        separator would ride up to the top of the line instead of sitting on
+        the digits' centre line.
         """
+        low_str = _temp_str(lo)
         text = _temp_range_text(lo, hi, sep)
         range_img = render_text(text, color, size)
-        _tint_run(range_img, text, 0, len(f"{round(lo)}"), _dim(color), size)
-        img.paste(range_img, (cx - range_img.width // 2, y))
+        _tint_run(range_img, text, 0, len(low_str), _dim(color), size)
+        low_w = render_text(low_str, color, size).width
+        img.paste(range_img, (round(cx - low_w - _sep_ink_cx(sep, size)), y))
 
     def _draw_daily_forecast(self) -> None:
         w, h = self.canvas.width, self.canvas.height
