@@ -63,14 +63,22 @@ def test_footer_plan_prints_the_number_only_on_tall_panels() -> None:
     app = _app({"show_air_quality": True})
     entries = _weather_data(air_quality=True)["daily"]
 
-    short_mode, short_h, _ = app._aqi_footer_plan(entries, 32, 20)
-    tall_mode, tall_h, tall_size = app._aqi_footer_plan(entries, 64, 20)
+    short_mode, short_h, _, _ = app._aqi_footer_plan(entries, 32, 20)
+    tall_mode, tall_h, tall_size, _ = app._aqi_footer_plan(entries, 64, 20)
 
     assert short_mode == "bar"
     assert tall_mode == "text"
     assert tall_size >= 6
     # Either way the footer has to be cheap enough to leave the icon room.
     assert 0 < short_h < tall_h <= 12
+
+
+def test_footer_labels_the_number_when_the_column_has_room() -> None:
+    app = _app({"show_air_quality": True})
+    entries = _weather_data(air_quality=True)["daily"]
+
+    assert app._aqi_footer_plan(entries, 64, 48)[3] == "AQI "
+    assert app._aqi_footer_plan(entries, 64, 16)[3] == ""
 
 
 def test_detail_row_span_locates_the_aqi_item() -> None:
