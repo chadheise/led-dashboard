@@ -34,13 +34,49 @@ interface NominatimResult {
 const DEFAULT_COLOR = '#C8C8C8'
 const SEARCH_LIMIT = 6
 
-const colorSwatchStyle: React.CSSProperties = {
-  width: 34, height: 34, padding: 2, cursor: 'pointer', flexShrink: 0,
-  border: `1px solid ${C.border}`, borderRadius: 3, background: 'none',
-}
-
 const safeColor = (c: string | undefined): string =>
   /^#[0-9a-fA-F]{6}$/.test(c ?? '') ? (c as string) : DEFAULT_COLOR
+
+// Native picker (eyedropper, gradient, OS RGB UI) + hex field, merged into one control.
+const colorGroupStyle: React.CSSProperties = {
+  display: 'flex', alignItems: 'stretch', flexShrink: 0,
+  border: `1px solid ${C.border}`, borderRadius: 3, overflow: 'hidden',
+}
+
+const colorSwatchStyle: React.CSSProperties = {
+  width: 34, height: 34, padding: 2, cursor: 'pointer',
+  border: 'none', background: 'none', display: 'block',
+}
+
+const colorHexStyle: React.CSSProperties = {
+  width: 72, border: 'none', borderLeft: `1px solid ${C.border}`,
+  background: C.surface, color: C.textPrimary, padding: '0 6px',
+  fontSize: F.size.sm, fontFamily: F.family, boxSizing: 'border-box',
+}
+
+/** Native color swatch (eyedropper + OS picker) paired with a hex field, as one control. */
+function ColorField({
+  color, onChange, title,
+}: { color: string | undefined; onChange: (c: string) => void; title: string }) {
+  return (
+    <div style={colorGroupStyle}>
+      <input
+        type="color"
+        value={safeColor(color)}
+        onChange={e => onChange(e.target.value)}
+        title={title}
+        style={colorSwatchStyle}
+      />
+      <input
+        type="text"
+        value={color ?? DEFAULT_COLOR}
+        onChange={e => onChange(e.target.value)}
+        placeholder={DEFAULT_COLOR}
+        style={colorHexStyle}
+      />
+    </div>
+  )
+}
 
 const rowStyle: React.CSSProperties = {
   display: 'flex',
@@ -214,12 +250,10 @@ function CityRow({
         )}
       </div>
 
-      <input
-        type="color"
-        value={safeColor(clock.color)}
-        onChange={e => onChange({ color: e.target.value })}
+      <ColorField
+        color={clock.color}
+        onChange={color => onChange({ color })}
         title="Text color"
-        style={colorSwatchStyle}
       />
 
       <button type="button" onClick={onRemove} style={removeBtnStyle} title="Remove">×</button>
@@ -234,12 +268,10 @@ function LocalRow({ color, onColorChange }: { color: string; onColorChange: (c: 
       <span style={{ flex: 1, color: C.textSecondary, fontFamily: F.family, fontSize: F.size.sm }}>
         Local time
       </span>
-      <input
-        type="color"
-        value={safeColor(color)}
-        onChange={e => onColorChange(e.target.value)}
+      <ColorField
+        color={color}
+        onChange={onColorChange}
         title="Text color"
-        style={colorSwatchStyle}
       />
       {/* Spacer matching the city rows' remove button so swatches align. */}
       <span style={{ width: 18, flexShrink: 0 }} aria-hidden />

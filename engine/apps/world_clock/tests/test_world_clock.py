@@ -67,14 +67,15 @@ def test_fetch_data_carries_per_city_color():
 
 def test_fetch_data_uses_stored_name_over_timezone_city():
     # "Boston" shares America/New_York with New York, but the configured name
-    # must be shown on screen, not the timezone's representative city.
+    # must be shown on screen, not the timezone's representative city. The
+    # UI-only ", Country" suffix is stripped for the on-screen label.
     app = _make_app({
         "show_local": False,
         "cities": [{"name": "Boston, United States", "timezone": "America/New_York"}],
     })
     asyncio.run(app.fetch_data())
 
-    assert app._entries == [("America/New_York", "Boston, United States", None)]
+    assert app._entries == [("America/New_York", "Boston", None)]
 
 
 def test_fetch_data_accepts_legacy_string_cities():

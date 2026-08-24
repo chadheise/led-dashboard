@@ -70,6 +70,16 @@ def _parse_city_item(item: Any) -> tuple[str | None, str | None, str | None]:
     return None, None, None
 
 
+def _city_only(name: str) -> str:
+    """Strip a trailing ", Country" from a UI-picked "City, Country" name.
+
+    The city typeahead stores the full "City, Country" string so the input
+    selector can disambiguate same-named cities, but the LED display only has
+    room for (and only wants) the city.
+    """
+    return name.split(",", 1)[0].strip()
+
+
 def _format_time(dt: datetime, time_fmt: str) -> tuple[str, str]:
     """Returns (display string, representative sample for sizing)."""
     if time_fmt == "24h":
@@ -193,8 +203,9 @@ class WorldClockApp(DisplayApp):
             tz_name, name, color = _parse_city_item(item)
             if tz_name:
                 # The chosen city name wins over the timezone's representative
-                # city so "Boston" doesn't show up as "New York".
-                entries.append((tz_name, name or city_name(tz_name), color))
+                # city so "Boston" doesn't show up as "New York". Strip any
+                # ", Country" suffix — that's kept only for the UI selector.
+                entries.append((tz_name, _city_only(name) if name else city_name(tz_name), color))
 
         self._entries = entries
         self._fetched_once = True

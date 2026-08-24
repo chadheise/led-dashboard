@@ -1,16 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(.venv/bin/python -m pytest *)",
-      "Bash(cd *)",
       "Bash(git *)",
-      "Bash(gh api *)",
-      "Bash(gh repo *)",
-      "Bash(.venv/bin/python -c ' *)",
+      "Bash(gh *)",
+      "Bash(cd *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(PYTHONPATH=. .venv/bin/python *)",
+      "Bash(lsof *)",
+      "Bash(node -e *)",
       "Skill(update-config)",
-      "Skill(update-config:*)",
-      "Bash(PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --fixture fifa_wc_group_in_progress --scale 4)",
-      "Bash(PYTHONPATH=. .venv/bin/python -m tests.framework.contact_sheet --app sports --scale 4 --heights 64)"
+      "Skill(update-config:*)"
     ]
   },
   "hooks": {

@@ -48,6 +48,11 @@ _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 # approximate game length used for completed games.
 _PRE_START_GRACE_SECONDS = 4 * 3600
 
+# "Next game per team" mode doesn't have a user-configured window, so the ESPN
+# fetch itself needs to look far enough ahead to find each team's next game
+# even across a bye week or short break between fixtures.
+_NEXT_GAME_FETCH_DAYS = 30
+
 # A game stuck reporting "in" for longer than any real match (extra time,
 # rain delays, etc. included) is a stale/glitched ESPN feed, not a live game.
 # Without this cap a live_game_mode spotlight (e.g. World Cup) can pin the
@@ -152,11 +157,25 @@ class SportsApp(DisplayApp):
                 "title": "Show upcoming games",
                 "default": True,
             },
+            "upcoming_game_mode": {
+                "type": "string",
+                "title": "Upcoming games mode",
+                "description": (
+                    "\"Next game per team\" shows only each team's single next "
+                    "game — one per favorite team, or one per team in the "
+                    "selected leagues if no favorites are set. \"Time window\" "
+                    "shows every upcoming game within the window below."
+                ),
+                "enum": ["next_game", "window"],
+                "x-enum-labels": {"next_game": "Next game per team", "window": "Time window"},
+                "default": "next_game",
+            },
             "upcoming_game_window": {
                 "type": "object",
                 "title": "Upcoming game window",
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
+                "x-show-if": {"field": "upcoming_game_mode", "equals": "window"},
                 "default": {"days": 1},
             },
             "completed_game_window": {
@@ -305,9 +324,15 @@ class SportsApp(DisplayApp):
 
     def _get_leagues(self) -> list[str]:
         raw = self.config.get("leagues", self.config.get("league", []))
-        if isinstance(raw, str):
-            return [raw]
-        return list(raw)
+        leagues = [raw] if isinstance(raw, str) else list(raw)
+        # Favoriting a team implicitly opts into fetching its league, even if
+        # that league isn't separately selected in `leagues` — otherwise the
+        # favorite is configured but its games are never fetched at all.
+        for fav in self.config.get("favorite_teams") or []:
+            fav_league = fav.split(":", 1)[0]
+            if fav_league not in leagues:
+                leagues.append(fav_league)
+        return leagues
 
     def _scores_per_screen(self) -> int:
         return max(1, min(4, int(self.config.get("scores_per_screen", 1))))
@@ -361,10 +386,13 @@ class SportsApp(DisplayApp):
 
         days_ahead = 0
         if self.config.get("show_upcoming_games", True):
-            upcoming_secs = _duration_to_seconds(
-                self.config.get("upcoming_game_window", {"days": 1})
-            )
-            days_ahead = max(1, math.ceil(upcoming_secs / 86400))
+            if self.config.get("upcoming_game_mode", "next_game") == "next_game":
+                days_ahead = _NEXT_GAME_FETCH_DAYS
+            else:
+                upcoming_secs = _duration_to_seconds(
+                    self.config.get("upcoming_game_window", {"days": 1})
+                )
+                days_ahead = max(1, math.ceil(upcoming_secs / 86400))
 
         completed_secs = _duration_to_seconds(
             self.config.get("completed_game_window", {"days": 1})
@@ -494,31 +522,79 @@ class SportsApp(DisplayApp):
             result.append(game)
         return result
 
+    @staticmethod
+    def _parse_start(game: dict[str, Any]) -> datetime.datetime | None:
+        start_raw = game.get("start_time")
+        if not start_raw:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(start_raw.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _next_game_per_team_keys(
+        self, games: list[dict[str, Any]], now: datetime.datetime
+    ) -> set[str]:
+        """Game keys of each qualifying team's single soonest "pre" game.
+
+        Qualifying teams are ``favorite_teams`` if any are configured,
+        otherwise every team appearing among the fetched games (i.e. every
+        team in the selected leagues). A game shared by two qualifying teams
+        (e.g. two favorites playing each other) is naturally included once.
+        """
+        favorite_teams = list(self.config.get("favorite_teams") or [])
+        qualifying: set[tuple[str, str]] | None = None
+        if favorite_teams:
+            qualifying = set()
+            for fav in favorite_teams:
+                parts = fav.split(":", 1)
+                if len(parts) == 2:
+                    qualifying.add((parts[0], parts[1]))
+
+        best: dict[tuple[str, str], tuple[datetime.datetime, dict[str, Any]]] = {}
+        for game in games:
+            if game.get("state", "pre") != "pre":
+                continue
+            start = self._parse_start(game)
+            if start is None:
+                continue
+            secs_until = (start - now).total_seconds()
+            if secs_until < -_PRE_START_GRACE_SECONDS:
+                continue
+            league = game.get("league", "")
+            for abbr in (game.get("home_abbr", ""), game.get("away_abbr", "")):
+                team_key = (league, abbr)
+                if qualifying is not None and team_key not in qualifying:
+                    continue
+                current = best.get(team_key)
+                if current is None or start < current[0]:
+                    best[team_key] = (start, game)
+
+        return {game_key(g) for _, g in best.values()}
+
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         now = datetime.datetime.now(datetime.timezone.utc)
         show_upcoming = bool(self.config.get("show_upcoming_games", True))
+        next_game_mode = (
+            show_upcoming
+            and self.config.get("upcoming_game_mode", "next_game") == "next_game"
+        )
         upcoming_secs = _duration_to_seconds(
             self.config.get("upcoming_game_window", {"days": 1})
         )
         completed_secs = _duration_to_seconds(
             self.config.get("completed_game_window", {"days": 1})
         )
+        next_game_keys = (
+            self._next_game_per_team_keys(games, now) if next_game_mode else None
+        )
 
         result: list[dict[str, Any]] = []
         for game in games:
             state = game.get("state", "pre")
-
-            start_raw = game.get("start_time")
-            start: datetime.datetime | None = None
-            if start_raw:
-                try:
-                    start = datetime.datetime.fromisoformat(
-                        start_raw.replace("Z", "+00:00")
-                    )
-                except Exception:
-                    pass
+            start = self._parse_start(game)
 
             if state == "in":
                 if start is not None and (
@@ -544,6 +620,10 @@ class SportsApp(DisplayApp):
                     result.append(game)
 
             elif state == "pre" and show_upcoming:
+                if next_game_keys is not None:
+                    if game_key(game) in next_game_keys:
+                        result.append(game)
+                    continue
                 if start is None:
                     result.append(game)
                     continue
