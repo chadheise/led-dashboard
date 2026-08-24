@@ -248,7 +248,7 @@ async def save_app_config(
 
 
 @router.get("/sports/leagues")
-def get_sports_leagues() -> list[dict[str, str]]:
+def get_sports_leagues() -> list[dict[str, Any]]:
     from libraries.espn_sports.library import _LEAGUES
 
     return _LEAGUES

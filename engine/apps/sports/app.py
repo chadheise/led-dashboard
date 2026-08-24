@@ -305,9 +305,15 @@ class SportsApp(DisplayApp):
 
     def _get_leagues(self) -> list[str]:
         raw = self.config.get("leagues", self.config.get("league", []))
-        if isinstance(raw, str):
-            return [raw]
-        return list(raw)
+        leagues = [raw] if isinstance(raw, str) else list(raw)
+        # Favoriting a team implicitly opts into fetching its league, even if
+        # that league isn't separately selected in `leagues` — otherwise the
+        # favorite is configured but its games are never fetched at all.
+        for fav in self.config.get("favorite_teams") or []:
+            fav_league = fav.split(":", 1)[0]
+            if fav_league not in leagues:
+                leagues.append(fav_league)
+        return leagues
 
     def _scores_per_screen(self) -> int:
         return max(1, min(4, int(self.config.get("scores_per_screen", 1))))
