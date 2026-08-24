@@ -114,7 +114,14 @@ def _make_app() -> Any:
         pass
 
     canvas = SimulatorCanvas(320, 64, _noop_broadcast)
-    return SportsApp({"leagues": [], "upcoming_game_window": {"days": 1}}, canvas, {}, {})
+    return SportsApp(
+        {
+            "leagues": [],
+            "upcoming_game_mode": "window",
+            "upcoming_game_window": {"days": 1},
+        },
+        canvas, {}, {},
+    )
 
 
 def _pre_game(game_id: str, start: datetime.datetime) -> dict[str, Any]:
