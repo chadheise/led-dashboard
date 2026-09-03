@@ -14,19 +14,13 @@ def blit(canvas: Canvas, img: Image.Image, x_offset: int = 0, y_offset: int = 0)
 
     Positive offsets shift the image right/down; negative values scroll it
     left/up. Only pixels within canvas bounds are drawn.
+
+    Delegates to Canvas.paste_image so buffer-backed canvases copy whole rows
+    in C. Compositing a 320x64 frame one pixel at a time from Python cost
+    ~20k calls per blit, which kept the Pi pegged and starved the rgbmatrix
+    refresh thread.
     """
-    data = img.tobytes()
-    w, h = img.size
-    dst_x_start = max(0, x_offset)
-    dst_x_end = min(canvas.width, x_offset + w)
-    dst_y_start = max(0, y_offset)
-    dst_y_end = min(canvas.height, y_offset + h)
-    for dst_x in range(dst_x_start, dst_x_end):
-        src_x = dst_x - x_offset
-        for dst_y in range(dst_y_start, dst_y_end):
-            src_y = dst_y - y_offset
-            idx = (src_y * w + src_x) * 3
-            canvas.set_pixel(dst_x, dst_y, data[idx], data[idx + 1], data[idx + 2])
+    canvas.paste_image(img, x_offset, y_offset)
 
 
 def parse_color(color: str) -> tuple[int, int, int]:

@@ -3,12 +3,22 @@ import logging
 import struct
 from collections.abc import Awaitable, Callable
 
-from .base import Canvas
+from PIL import Image
+
+from .base import BufferedCanvas
 
 logger = logging.getLogger(__name__)
 
+# Per-panel rotation as a whole-image transpose. Each maps exactly onto the
+# per-pixel arithmetic in _logical_to_physical (see test_hardware_canvas.py).
+_PANEL_TRANSPOSE = {
+    90: Image.Transpose.ROTATE_90,
+    180: Image.Transpose.ROTATE_180,
+    270: Image.Transpose.ROTATE_270,
+}
 
-class HardwareCanvas(Canvas):
+
+class HardwareCanvas(BufferedCanvas):
     """
     Drives HUB75 panels via rpi-rgb-led-matrix.
 
@@ -79,6 +89,12 @@ class HardwareCanvas(Canvas):
             options.pwm_dither_bits = hw_cfg["pwm_dither_bits"]
         if "panel_type" in hw_cfg:
             options.panel_type = hw_cfg["panel_type"]
+        # Pinning the refresh rate keeps the panel from visibly changing
+        # brightness when the refresh rate drifts under load (network traffic,
+        # other IO). Costs a little brightness; set it just under the lowest
+        # rate reported with show_refresh_rate: true.
+        if "limit_refresh_rate_hz" in hw_cfg:
+            options.limit_refresh_rate_hz = hw_cfg["limit_refresh_rate_hz"]
 
         pixel_mapper = hw_cfg.get("pixel_mapper", "")
         if pixel_mapper:
@@ -86,13 +102,15 @@ class HardwareCanvas(Canvas):
 
         logger.info(
             "HardwareCanvas options: rows=%d cols=%d chain=%d parallel=%d gpio_slowdown=%d "
-            "hardware_mapping=%s pwm_lsb_ns=%s pwm_bits=%s pwm_dither_bits=%s panel_type=%s",
+            "hardware_mapping=%s pwm_lsb_ns=%s pwm_bits=%s pwm_dither_bits=%s panel_type=%s "
+            "limit_refresh_rate_hz=%s",
             options.rows, options.cols, options.chain_length, options.parallel,
             options.gpio_slowdown, options.hardware_mapping,
             hw_cfg.get("pwm_lsb_nanoseconds", "<default>"),
             hw_cfg.get("pwm_bits", "<default>"),
             hw_cfg.get("pwm_dither_bits", "<default>"),
             hw_cfg.get("panel_type", "<default>"),
+            hw_cfg.get("limit_refresh_rate_hz", "<unlimited>"),
         )
 
         self._matrix = RGBMatrix(options=options)
@@ -101,8 +119,24 @@ class HardwareCanvas(Canvas):
         self._hw_rows = options.rows
         self._hw_cols = options.cols
         self._chain_length = options.chain_length
+        self._parallel = options.parallel
         self._rotation = hw_cfg.get("rotation", 0)
         self._alternate_rotation = hw_cfg.get("alternate_rotation", False)
+
+        # Size of one panel's slice of the logical canvas. Portrait panels are
+        # rows wide x cols tall; landscape panels keep the physical dimensions.
+        if self._rotation in (90, 270):
+            self._tile_w, self._tile_h = self._hw_rows, self._hw_cols
+        else:
+            self._tile_w, self._tile_h = self._hw_cols, self._hw_rows
+        self._panel_cols = min(self._chain_length, width // self._tile_w)
+        self._panel_rows = min(self._parallel, height // self._tile_h)
+
+        # Panel-space frame reused every render. Any physical pixel not covered
+        # by a panel tile stays black for the life of the process.
+        self._phys_frame = Image.new(
+            "RGB", (self._chain_length * self._hw_cols, self._parallel * self._hw_rows)
+        )
 
         alt_note = (
             f", alternating {self._rotation}/{(self._rotation + 180) % 360} deg"
@@ -118,7 +152,6 @@ class HardwareCanvas(Canvas):
             f", mapper: {pixel_mapper}" if pixel_mapper else "",
         )
 
-        self._pixels = bytearray(width * height * 3)
         self._broadcast = broadcast
 
     def _panel_rotation(self, logical_col: int) -> int:
@@ -163,18 +196,32 @@ class HardwareCanvas(Canvas):
             return phys_col * hw_cols + (hw_cols - 1 - px), panel_row * hw_rows + (hw_rows - 1 - py)
         return phys_col * hw_cols + px, panel_row * hw_rows + py
 
-    def set_pixel(self, x: int, y: int, r: int, g: int, b: int) -> None:
-        if 0 <= x < self.width and 0 <= y < self.height:
-            phys_x, phys_y = self._logical_to_physical(x, y)
-            self._canvas.SetPixel(phys_x, phys_y, r & 0xFF, g & 0xFF, b & 0xFF)
-            idx = (y * self.width + x) * 3
-            self._pixels[idx] = r & 0xFF
-            self._pixels[idx + 1] = g & 0xFF
-            self._pixels[idx + 2] = b & 0xFF
+    def _physical_frame(self) -> Image.Image:
+        """Remap the logical frame onto the physical panel grid.
 
-    def clear(self) -> None:
-        self._canvas.Clear()
-        self._pixels = bytearray(self.width * self.height * 3)
+        Produces exactly what calling _logical_to_physical for every pixel
+        would, but as one crop/rotate/paste per panel: a full 320x64 frame
+        costs ~10 C-level image operations instead of ~20k Python calls. The
+        whole physical canvas is rewritten each frame, so no separate Clear()
+        is needed.
+        """
+        logical = Image.frombytes("RGB", (self.width, self.height), bytes(self._pixels))
+        for panel_row in range(self._panel_rows):
+            top = panel_row * self._tile_h
+            for logical_col in range(self._panel_cols):
+                left = logical_col * self._tile_w
+                tile = logical.crop((left, top, left + self._tile_w, top + self._tile_h))
+                transpose = _PANEL_TRANSPOSE.get(self._panel_rotation(logical_col))
+                if transpose is not None:
+                    tile = tile.transpose(transpose)
+                self._phys_frame.paste(
+                    tile,
+                    (
+                        self._phys_panel_col(logical_col) * self._hw_cols,
+                        panel_row * self._hw_rows,
+                    ),
+                )
+        return self._phys_frame
 
     def set_brightness(self, brightness: int) -> None:
         super().set_brightness(brightness)
@@ -182,6 +229,8 @@ class HardwareCanvas(Canvas):
         self._canvas.brightness = brightness
 
     async def render(self) -> None:
+        # Push the whole frame in one call; SetImage loops over the pixels in C.
+        self._canvas.SetImage(self._physical_frame())
         # SwapOnVSync blocks until the next hardware vsync (~22ms at 45 Hz).
         # Running it in a thread executor lets the asyncio event loop continue
         # handling API requests and WebSocket traffic during that wait, reducing
