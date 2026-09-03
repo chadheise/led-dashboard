@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from canvas.base import Canvas
+
+if TYPE_CHECKING:
+    from PIL import Image
 
 
 class CanvasRegion(Canvas):
@@ -31,6 +36,24 @@ class CanvasRegion(Canvas):
                 y + self._y_offset,
                 r, g, b,
             )
+
+    def paste_image(self, img: "Image.Image", x_offset: int = 0, y_offset: int = 0) -> None:
+        # Clip to this region first -- the parent only clips at its own bounds,
+        # so an oversized image would otherwise bleed into neighbouring regions.
+        w, h = img.size
+        x0 = max(0, -x_offset)
+        y0 = max(0, -y_offset)
+        x1 = min(w, self.width - x_offset)
+        y1 = min(h, self.height - y_offset)
+        if x0 >= x1 or y0 >= y1:
+            return
+        if (x0, y0, x1, y1) != (0, 0, w, h):
+            img = img.crop((x0, y0, x1, y1))
+        self._parent.paste_image(
+            img,
+            x_offset + x0 + self._x_offset,
+            y_offset + y0 + self._y_offset,
+        )
 
     def clear(self) -> None:
         pass  # no-op: SceneManager clears the root canvas before each frame

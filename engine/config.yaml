@@ -31,3 +31,9 @@ hardware:
   pixel_mapper: "" # extra library mapper, e.g. "U-mapper" for zigzag chain wiring
   gpio_slowdown: 5 # raised from 4 to improve signal integrity on long 10-panel chain
   hardware_mapping: adafruit-hat-pwm
+  # show_refresh_rate: true    # log the achieved refresh rate to stdout
+  # Pin the refresh rate so it cannot drift under load -- a drifting rate reads
+  # as a brief flash on the panel. Set it a few Hz below the *lowest* rate seen
+  # with show_refresh_rate enabled; too low just costs brightness, too high has
+  # no effect. Left unset (free-running) by default.
+  # limit_refresh_rate_hz: 100

@@ -45,11 +45,12 @@ engine/              Python backend (FastAPI + async render loop)
       library.py
       icon.svg
       tests/           Only for libs that have tests
-  canvas/              base.py (Canvas ABC), simulator.py, hardware.py
+  canvas/              base.py (Canvas ABC + BufferedCanvas), simulator.py, hardware.py
   api/                 FastAPI server.py, routes.py, websocket.py
   tests/               Engine-level integration tests + snapshot framework
     framework/         Snapshot harness, comparison, clock, logo utilities
     output/            Gitignored transient diffs and contact sheets
+    test_hardware_canvas.py  Panel remapping (fake rgbmatrix driver)
     test_routes_reload.py
     test_startup_resume.py
     test_location_timezone_fallback.py
@@ -153,6 +154,24 @@ for adding snapshot coverage to a new app and for the logo-fixture system.
 
 Reuse existing helpers in `engine/libraries/` (e.g. `text_renderer` for fonts,
 `layout` for placement, `canvas_utils`) rather than re-implementing.
+
+## Render performance (why it matters on hardware)
+
+The Pi runs the rgbmatrix PWM refresh thread alongside the engine. If the render
+loop saturates a core, that thread gets preempted and the panel visibly
+flickers — a fault you will never see in the simulator. So keep per-frame work
+off the Python interpreter:
+
+- Composite with `canvas_utils.blit` (→ `Canvas.paste_image`), which copies whole
+  rows in C. Never loop `set_pixel` over a whole image; reserve it for a handful
+  of individual pixels.
+- `SimulatorCanvas` and `HardwareCanvas` both extend `BufferedCanvas`, which owns
+  the logical RGB frame buffer. `HardwareCanvas.render()` remaps that buffer onto
+  the panel grid with one crop/rotate/paste per panel and pushes it with a single
+  `SetImage`. `tests/test_hardware_canvas.py` pins that remap to the per-pixel
+  `_logical_to_physical` reference — keep the two in sync.
+- Avoid allocating per frame (reuse buffers), and let the render loop in
+  `main.py` idle between frames rather than redrawing continuously.
 
 ## Conventions & gotchas
 

@@ -1,4 +1,5 @@
 import asyncio
+import gc
 import logging
 import os
 import signal
@@ -164,19 +165,37 @@ async def _prefetch_flight_tracker(store: StateStore) -> None:
             logger.warning("FlightAware: startup prefetch failed for %s: %s", ident, exc)
 
 
-async def _render_loop(scene_manager: SceneManager, fps: int, vsync: bool = False) -> None:
-    # On hardware, SwapOnVSync (run in a thread executor) blocks until the next
-    # hardware vsync, naturally capping the rate at the panel refresh rate (~50 Hz).
-    # Adding an extra sleep on top would compound the wait and drop actual FPS to ~19.
-    # On simulator there is no vsync, so we keep the sleep to cap at the target FPS.
+async def _render_loop(scene_manager: SceneManager, fps: int) -> None:
+    """Render at a steady `fps`, sleeping out whatever is left of each frame.
+
+    The sleep is measured against a running deadline rather than added on top
+    of the frame, so the time already spent drawing (and, on hardware, waiting
+    for vsync inside SwapOnVSync) counts towards the interval instead of
+    compounding with it -- an unconditional sleep(1/fps) after each frame is
+    what used to drag the real rate down to ~19 fps.
+
+    Pacing matters most on hardware: without it the loop redraws continuously
+    and keeps a core pegged, which starves the rgbmatrix refresh thread and
+    shows up on the panel as an intermittent flicker. Idling between frames
+    leaves that thread the CPU it needs to hold a steady refresh.
+    """
     interval = 1.0 / fps
+    deadline = time.monotonic()
     while True:
         try:
             await scene_manager.render_frame()
         except Exception as exc:
             logger.warning("Render loop error: %s", exc)
-        if not vsync:
-            await asyncio.sleep(interval)
+        deadline += interval
+        now = time.monotonic()
+        if now < deadline:
+            await asyncio.sleep(deadline - now)
+        else:
+            # Fell behind (slow frame, or render_frame returned early while
+            # paused). Resync so we don't chase a stale deadline, and always
+            # yield -- otherwise a cheap frame turns this into a busy loop.
+            deadline = now
+            await asyncio.sleep(0)
 
 
 def _release_boot_display() -> None:
@@ -257,9 +276,8 @@ def main() -> None:
         prefetch_task = asyncio.create_task(_prefetch_flight_tracker(store))
         await scene_manager.start()
         await connectivity_monitor.start()
-        hardware_mode = os.environ.get("CANVAS", "").lower() == "hardware"
         render_task = asyncio.create_task(
-            _render_loop(scene_manager, display_cfg["fps"], vsync=hardware_mode)
+            _render_loop(scene_manager, display_cfg["fps"])
         )
         hot_reload_task: asyncio.Task | None = None
         if os.environ.get("HOT_RELOAD", "").lower() == "true":
@@ -271,6 +289,13 @@ def main() -> None:
                 )
             )
             logger.info("Hot-reload enabled")
+        # Move everything allocated during startup (app classes, fonts, cached
+        # icons) out of the generational collector's reach. The render loop
+        # churns a few MB/s of short-lived buffers, so full collections come
+        # around every few seconds; without this they walk the entire startup
+        # heap each time, and the resulting pause is long enough to disturb the
+        # LED refresh.
+        gc.freeze()
         try:
             yield
         finally:
