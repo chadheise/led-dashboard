@@ -117,7 +117,12 @@ class SportsApp(DisplayApp):
             "favorite_teams": {
                 "type": "array",
                 "title": "Favorite Teams",
-                "description": "Only show games for these teams. If empty, all teams are shown.",
+                "description": (
+                    "Also show these teams' games, even when their league isn't "
+                    "selected above. Added to the selected leagues, never "
+                    "subtracted from them: a selected league keeps showing all "
+                    "of its games."
+                ),
                 "x-input-type": "team-picker",
                 "items": {"type": "string"},
                 "default": [],
@@ -162,9 +167,9 @@ class SportsApp(DisplayApp):
                 "title": "Upcoming games mode",
                 "description": (
                     "\"Next game per team\" shows only each team's single next "
-                    "game — one per favorite team, or one per team in the "
-                    "selected leagues if no favorites are set. \"Time window\" "
-                    "shows every upcoming game within the window below."
+                    "game — one per team in each selected league, plus one per "
+                    "favorite team. \"Time window\" shows every upcoming game "
+                    "within the window below."
                 ),
                 "enum": ["next_game", "window"],
                 "x-enum-labels": {"next_game": "Next game per team", "window": "Time window"},
@@ -323,16 +328,15 @@ class SportsApp(DisplayApp):
         return idle
 
     def _get_leagues(self) -> list[str]:
+        """The leagues the user selected, in config order.
+
+        Only these: a favorite's own league is fetched too, but that happens
+        inside ``fetch_scores`` (which keeps just the favorites' games out of
+        a league nobody selected). Appending it here would instead pull in
+        every game of that whole league.
+        """
         raw = self.config.get("leagues", self.config.get("league", []))
-        leagues = [raw] if isinstance(raw, str) else list(raw)
-        # Favoriting a team implicitly opts into fetching its league, even if
-        # that league isn't separately selected in `leagues` — otherwise the
-        # favorite is configured but its games are never fetched at all.
-        for fav in self.config.get("favorite_teams") or []:
-            fav_league = fav.split(":", 1)[0]
-            if fav_league not in leagues:
-                leagues.append(fav_league)
-        return leagues
+        return [raw] if isinstance(raw, str) else list(raw)
 
     def _scores_per_screen(self) -> int:
         return max(1, min(4, int(self.config.get("scores_per_screen", 1))))
@@ -537,19 +541,21 @@ class SportsApp(DisplayApp):
     ) -> set[str]:
         """Game keys of each qualifying team's single soonest "pre" game.
 
-        Qualifying teams are ``favorite_teams`` if any are configured,
-        otherwise every team appearing among the fetched games (i.e. every
-        team in the selected leagues). A game shared by two qualifying teams
-        (e.g. two favorites playing each other) is naturally included once.
+        Qualifying teams are the union the module is configured for: every
+        team appearing in a selected league's games, plus every favorite.
+        Only in a league fetched purely to cover a favorite (mirroring
+        ``fetch_scores``) is qualifying limited to the favorites themselves —
+        otherwise a favorite's opponent would count as a qualifying team and
+        pull in a second, later favorite game as "their" next one.
+        A game shared by two qualifying teams (e.g. two favorites playing
+        each other) is naturally included once.
         """
-        favorite_teams = list(self.config.get("favorite_teams") or [])
-        qualifying: set[tuple[str, str]] | None = None
-        if favorite_teams:
-            qualifying = set()
-            for fav in favorite_teams:
-                parts = fav.split(":", 1)
-                if len(parts) == 2:
-                    qualifying.add((parts[0], parts[1]))
+        selected_leagues = set(self._get_leagues())
+        favorites_by_league: dict[str, set[str]] = {}
+        for fav in self.config.get("favorite_teams") or []:
+            parts = fav.split(":", 1)
+            if len(parts) == 2 and parts[0] not in selected_leagues:
+                favorites_by_league.setdefault(parts[0], set()).add(parts[1])
 
         best: dict[tuple[str, str], tuple[datetime.datetime, dict[str, Any]]] = {}
         for game in games:
@@ -562,9 +568,11 @@ class SportsApp(DisplayApp):
             if secs_until < -_PRE_START_GRACE_SECONDS:
                 continue
             league = game.get("league", "")
+            # None unless this league was fetched only for its favorites.
+            league_favorites = favorites_by_league.get(league)
             for abbr in (game.get("home_abbr", ""), game.get("away_abbr", "")):
                 team_key = (league, abbr)
-                if qualifying is not None and team_key not in qualifying:
+                if league_favorites is not None and abbr not in league_favorites:
                     continue
                 current = best.get(team_key)
                 if current is None or start < current[0]:

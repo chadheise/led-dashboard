@@ -1,7 +1,8 @@
 """``next_game`` upcoming-games mode: instead of showing every game
 inside a time window, keep only each qualifying team's single soonest
-upcoming game. Qualifying teams are the configured favorites, or (with no
-favorites set) every team appearing among the fetched games.
+upcoming game. Qualifying teams are every team in a selected league plus
+every favorite - only a league fetched purely to cover a favorite (its
+league isn't selected) is limited to the favorites themselves.
 """
 
 from __future__ import annotations
@@ -156,3 +157,45 @@ def test_window_mode_must_be_explicitly_selected() -> None:
     ]
     kept = {g["id"] for g in app._filter_by_time_window(games)}
     assert kept == {"kc_soon", "kc_later"}
+
+
+def test_next_game_mode_keeps_league_games_alongside_favorites() -> None:
+    """A module showing "NCAAF Top 25 + a few favorite teams" fetches the
+    top-25 slate (league id ``ncaaf-top25``) plus the favorites' own league —
+    so every top-25 team's next game must survive alongside the favorite's,
+    instead of the favorites list emptying the top-25 slate.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    app = _make_app(
+        {
+            "leagues": ["ncaaf-top25"],
+            "favorite_teams": ["college-football:UGA"],
+        }
+    )
+    games = [
+        _pre_game("top25_soon", "ncaaf-top25", "OSU", "MICH", now + datetime.timedelta(days=2)),
+        _pre_game("top25_later", "ncaaf-top25", "MICH", "OSU", now + datetime.timedelta(days=9)),
+        _pre_game("uga_soon", "college-football", "UGA", "VAN", now + datetime.timedelta(days=1)),
+        _pre_game("uga_later", "college-football", "UGA", "AUB", now + datetime.timedelta(days=8)),
+        # In the favorite's own (unselected) league but not favorited: it
+        # doesn't qualify, and in production the library already drops it
+        # from that league's fetch.
+        _pre_game("cfb_other", "college-football", "DUKE", "WAKE", now + datetime.timedelta(days=1)),
+    ]
+    kept = {g["id"] for g in app._filter_by_time_window(games)}
+    assert kept == {"top25_soon", "uga_soon"}
+
+
+def test_next_game_mode_favorite_does_not_narrow_its_selected_league() -> None:
+    """Selecting a league and favoriting a team in it is additive: every NFL
+    team still gets its next game, not just the favorite's."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    app = _make_app({"leagues": ["nfl"], "favorite_teams": ["nfl:KC"]})
+    games = [
+        _pre_game("kc_soon", "nfl", "KC", "LV", now + datetime.timedelta(days=2)),
+        _pre_game("kc_later", "nfl", "KC", "DEN", now + datetime.timedelta(days=9)),
+        _pre_game("den_soon", "nfl", "DEN", "MIA", now + datetime.timedelta(days=1)),
+    ]
+    kept = {g["id"] for g in app._filter_by_time_window(games)}
+    # kc_soon is KC's and LV's next game; den_soon is DEN's and MIA's.
+    assert kept == {"kc_soon", "den_soon"}
