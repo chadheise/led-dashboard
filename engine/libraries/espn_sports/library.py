@@ -55,6 +55,16 @@ _FETCH_RETRIES = 1
 _FETCH_RETRY_DELAY_SECONDS = 0.25
 
 
+def _league_path(league: str) -> str:
+    """The ESPN league a league id resolves to.
+
+    Filter/conference variants (``ncaaf-top25``, ``ncaaf-sec``, ...) are
+    separate ids over the same underlying league (``college-football``).
+    """
+    entry = _LEAGUE_BY_ID.get(league)
+    return entry["league"] if entry else league
+
+
 def _flag_url(abbr: str) -> str | None:
     code = _FIFA_FLAGS.get(abbr.upper())
     return _FLAGCDN_BASE.format(code=code) if code else None
@@ -183,20 +193,32 @@ class ESPNSportsLibrary(Library):
         days_ahead: int = 1,
         days_behind: int = 1,
     ) -> list[dict[str, Any]]:
+        """Games for every league in ``leagues``, merged into one list.
+
+        ``favorite_teams`` entries are ``"<league id>:<abbr>"`` and narrow
+        *only the league they name*: favoriting ``college-football:UGA``
+        trims the ``college-football`` fetch to UGA's games while a
+        separately selected ``ncaaf-top25`` (or any other league) still
+        contributes all of its games. Filtering the merged list instead
+        turned every other selected league into a no-op as soon as one
+        favorite was configured.
+        """
         client = self._get_client()
+        favorites = list(favorite_teams or [])
         results = await asyncio.gather(
             *[self._fetch_league(client, lg, days_ahead, days_behind) for lg in leagues],
             return_exceptions=True,
         )
         all_games: list[dict[str, Any]] = []
-        for result in results:
-            if isinstance(result, list):
-                all_games.extend(result)
-
-        if favorite_teams:
-            all_games = [
-                g for g in all_games if self._matches_favorites(g, favorite_teams)
-            ]
+        for league, result in zip(leagues, results):
+            if not isinstance(result, list):
+                continue
+            league_favorites = [f for f in favorites if f.split(":", 1)[0] == league]
+            if league_favorites:
+                result = [
+                    g for g in result if self._matches_favorites(g, league_favorites)
+                ]
+            all_games.extend(result)
         return all_games
 
     async def fetch_teams(self, league: str) -> list[dict[str, Any]]:
@@ -575,13 +597,21 @@ class ESPNSportsLibrary(Library):
 
     @staticmethod
     def _matches_favorites(game: dict[str, Any], favorites: list[str]) -> bool:
-        league = game.get("league", "")
+        """True when the game involves one of ``favorites`` ("<league>:<abbr>").
+
+        Leagues are compared by their underlying ESPN league, so a favorite
+        stored against the base league (the team picker only offers those,
+        e.g. ``college-football:UGA``) still matches its own game when that
+        game arrives via a variant of the same league (``ncaaf-top25``,
+        ``ncaaf-sec``, ...).
+        """
+        league = _league_path(game.get("league", ""))
         for fav in favorites:
             parts = fav.split(":", 1)
             if len(parts) != 2:
                 continue
             fav_league, fav_abbr = parts
-            if fav_league == league and fav_abbr in (
+            if _league_path(fav_league) == league and fav_abbr in (
                 game.get("home_abbr", ""),
                 game.get("away_abbr", ""),
             ):

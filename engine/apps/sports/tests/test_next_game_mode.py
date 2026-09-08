@@ -156,3 +156,30 @@ def test_window_mode_must_be_explicitly_selected() -> None:
     ]
     kept = {g["id"] for g in app._filter_by_time_window(games)}
     assert kept == {"kc_soon", "kc_later"}
+
+
+def test_next_game_mode_keeps_league_games_alongside_favorites() -> None:
+    """Favorites qualify per league, not globally. A module showing "NCAAF
+    Top 25 + a few favorite teams" fetches the top-25 slate (league id
+    ``ncaaf-top25``, no favorites of its own) plus the favorites' base
+    league — so every top-25 team's next game must survive alongside the
+    favorite's, instead of the favorites list emptying the top-25 slate.
+    """
+    now = datetime.datetime.now(datetime.timezone.utc)
+    app = _make_app(
+        {
+            "leagues": ["ncaaf-top25"],
+            "favorite_teams": ["college-football:UGA"],
+        }
+    )
+    games = [
+        _pre_game("top25_soon", "ncaaf-top25", "OSU", "MICH", now + datetime.timedelta(days=2)),
+        _pre_game("top25_later", "ncaaf-top25", "MICH", "OSU", now + datetime.timedelta(days=9)),
+        _pre_game("uga_soon", "college-football", "UGA", "VAN", now + datetime.timedelta(days=1)),
+        _pre_game("uga_later", "college-football", "UGA", "AUB", now + datetime.timedelta(days=8)),
+        # Same league as the favorite but not favorited: doesn't qualify (in
+        # production the library already drops it from that league's fetch).
+        _pre_game("cfb_other", "college-football", "DUKE", "WAKE", now + datetime.timedelta(days=1)),
+    ]
+    kept = {g["id"] for g in app._filter_by_time_window(games)}
+    assert kept == {"top25_soon", "uga_soon"}

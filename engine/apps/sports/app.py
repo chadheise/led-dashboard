@@ -117,7 +117,12 @@ class SportsApp(DisplayApp):
             "favorite_teams": {
                 "type": "array",
                 "title": "Favorite Teams",
-                "description": "Only show games for these teams. If empty, all teams are shown.",
+                "description": (
+                    "Narrows a selected league to just its favorited teams, and "
+                    "pulls in those teams' games even when their league isn't "
+                    "selected. Selected leagues with no favorited team (e.g. "
+                    "NCAAF Top 25) still show all of their games."
+                ),
                 "x-input-type": "team-picker",
                 "items": {"type": "string"},
                 "default": [],
@@ -162,9 +167,10 @@ class SportsApp(DisplayApp):
                 "title": "Upcoming games mode",
                 "description": (
                     "\"Next game per team\" shows only each team's single next "
-                    "game — one per favorite team, or one per team in the "
-                    "selected leagues if no favorites are set. \"Time window\" "
-                    "shows every upcoming game within the window below."
+                    "game — one per team in each selected league, or just the "
+                    "favorited teams in a league where you set favorites. "
+                    "\"Time window\" shows every upcoming game within the "
+                    "window below."
                 ),
                 "enum": ["next_game", "window"],
                 "x-enum-labels": {"next_game": "Next game per team", "window": "Time window"},
@@ -537,19 +543,18 @@ class SportsApp(DisplayApp):
     ) -> set[str]:
         """Game keys of each qualifying team's single soonest "pre" game.
 
-        Qualifying teams are ``favorite_teams`` if any are configured,
-        otherwise every team appearing among the fetched games (i.e. every
-        team in the selected leagues). A game shared by two qualifying teams
-        (e.g. two favorites playing each other) is naturally included once.
+        Qualifying is decided per league, mirroring how ``favorite_teams``
+        filters the fetch: in a league that has favorites configured only
+        those teams qualify, while a league with none (e.g. NCAAF Top 25
+        alongside favorites from plain NCAAF) qualifies every team appearing
+        among its fetched games. A game shared by two qualifying teams (e.g.
+        two favorites playing each other) is naturally included once.
         """
-        favorite_teams = list(self.config.get("favorite_teams") or [])
-        qualifying: set[tuple[str, str]] | None = None
-        if favorite_teams:
-            qualifying = set()
-            for fav in favorite_teams:
-                parts = fav.split(":", 1)
-                if len(parts) == 2:
-                    qualifying.add((parts[0], parts[1]))
+        favorites_by_league: dict[str, set[str]] = {}
+        for fav in self.config.get("favorite_teams") or []:
+            parts = fav.split(":", 1)
+            if len(parts) == 2:
+                favorites_by_league.setdefault(parts[0], set()).add(parts[1])
 
         best: dict[tuple[str, str], tuple[datetime.datetime, dict[str, Any]]] = {}
         for game in games:
@@ -562,9 +567,10 @@ class SportsApp(DisplayApp):
             if secs_until < -_PRE_START_GRACE_SECONDS:
                 continue
             league = game.get("league", "")
+            league_favorites = favorites_by_league.get(league)
             for abbr in (game.get("home_abbr", ""), game.get("away_abbr", "")):
                 team_key = (league, abbr)
-                if qualifying is not None and team_key not in qualifying:
+                if league_favorites is not None and abbr not in league_favorites:
                     continue
                 current = best.get(team_key)
                 if current is None or start < current[0]:
