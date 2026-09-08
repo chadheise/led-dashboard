@@ -193,31 +193,43 @@ class ESPNSportsLibrary(Library):
         days_ahead: int = 1,
         days_behind: int = 1,
     ) -> list[dict[str, Any]]:
-        """Games for every league in ``leagues``, merged into one list.
+        """Every game from every league in ``leagues``, plus the games of
+        every team in ``favorite_teams``.
 
-        ``favorite_teams`` entries are ``"<league id>:<abbr>"`` and narrow
-        *only the league they name*: favoriting ``college-football:UGA``
-        trims the ``college-football`` fetch to UGA's games while a
-        separately selected ``ncaaf-top25`` (or any other league) still
-        contributes all of its games. Filtering the merged list instead
-        turned every other selected league into a no-op as soon as one
-        favorite was configured.
+        The two selections are additive - a union, never an intersection. A
+        selected league always contributes all of its games, whether or not a
+        favorite plays in it, and a favorite always contributes its own games,
+        whether or not its league is selected.
+
+        ``favorite_teams`` entries are ``"<league id>:<abbr>"`` (e.g.
+        ``college-football:UGA``). A favorite whose league isn't selected
+        makes that league be fetched too; since the user never asked for that
+        whole league, only the favorites' own games are taken from it.
         """
         client = self._get_client()
-        favorites = list(favorite_teams or [])
+        favorites = [f for f in (favorite_teams or []) if ":" in f]
+        selected = list(dict.fromkeys(leagues))
+        # Leagues fetched only to cover a favorite, never selected in their
+        # own right: keep just the favorites' games out of them.
+        favorites_only = [
+            lg
+            for lg in dict.fromkeys(f.split(":", 1)[0] for f in favorites)
+            if lg not in selected
+        ]
+        all_leagues = selected + favorites_only
         results = await asyncio.gather(
-            *[self._fetch_league(client, lg, days_ahead, days_behind) for lg in leagues],
+            *[
+                self._fetch_league(client, lg, days_ahead, days_behind)
+                for lg in all_leagues
+            ],
             return_exceptions=True,
         )
         all_games: list[dict[str, Any]] = []
-        for league, result in zip(leagues, results):
+        for league, result in zip(all_leagues, results):
             if not isinstance(result, list):
                 continue
-            league_favorites = [f for f in favorites if f.split(":", 1)[0] == league]
-            if league_favorites:
-                result = [
-                    g for g in result if self._matches_favorites(g, league_favorites)
-                ]
+            if league in favorites_only:
+                result = [g for g in result if self._matches_favorites(g, favorites)]
             all_games.extend(result)
         return all_games
 

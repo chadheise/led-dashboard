@@ -1,4 +1,4 @@
-"""``favorite_teams`` narrows the league it names, not the whole fetch.
+"""Selected leagues and favorite teams are additive, never an intersection.
 
 A favorite is stored as ``"<league id>:<abbr>"`` and the team picker only
 offers base leagues, so favoriting a college team yields
@@ -7,6 +7,9 @@ filter over the *merged* result of every league, which silently emptied
 every other selected league: a module set to "NCAAF Top 25 + a few favorite
 teams" showed only the favorites' games, with the whole top-25 selection
 (past and upcoming) dropped.
+
+What's displayed is now the union: every game of every selected league,
+plus every game of every favorite team.
 """
 
 from __future__ import annotations
@@ -41,35 +44,35 @@ def _fetch(by_league: dict[str, list[dict[str, Any]]], leagues: list[str],
     return [g["id"] for g in games]
 
 
-def test_favorites_do_not_empty_other_selected_leagues() -> None:
+def test_selected_league_plus_favorites_is_a_union() -> None:
+    """The reported bug: "NCAAF Top 25 + a few favorite teams" showed only
+    the favorites. Both selections must contribute."""
     by_league = {
         "ncaaf-top25": [
             _game("top25_a", "ncaaf-top25", "OSU", "MICH"),
             _game("top25_b", "ncaaf-top25", "BAMA", "LSU"),
         ],
-        # Implicitly fetched because a favorite lives in this league.
+        # Fetched only because a favorite lives in this league; the user
+        # never selected all of NCAAF, so only UGA's games come from it.
         "college-football": [
             _game("uga_game", "college-football", "UGA", "VAN"),
             _game("other_cfb", "college-football", "DUKE", "WAKE"),
         ],
     }
-    ids = _fetch(
-        by_league,
-        ["ncaaf-top25", "college-football"],
-        ["college-football:UGA"],
-    )
-    # Top-25 games survive in full; the favorite's league is trimmed to UGA.
+    ids = _fetch(by_league, ["ncaaf-top25"], ["college-football:UGA"])
     assert ids == ["top25_a", "top25_b", "uga_game"]
 
 
-def test_favorites_still_filter_their_own_league() -> None:
+def test_favorites_never_narrow_their_own_selected_league() -> None:
+    """Selecting the NFL and favoriting an NFL team shows the whole NFL -
+    the favorite adds, it doesn't subtract."""
     by_league = {
         "nfl": [
             _game("kc_game", "nfl", "KC", "LV"),
             _game("no_fav", "nfl", "DEN", "MIA"),
         ]
     }
-    assert _fetch(by_league, ["nfl"], ["nfl:KC"]) == ["kc_game"]
+    assert _fetch(by_league, ["nfl"], ["nfl:KC"]) == ["kc_game", "no_fav"]
 
 
 def test_favorites_in_one_league_leave_another_league_untouched() -> None:
@@ -80,8 +83,29 @@ def test_favorites_in_one_league_leave_another_league_untouched() -> None:
         ],
         "mlb": [_game("mlb_game", "mlb", "BOS", "NYY")],
     }
-    ids = _fetch(by_league, ["nfl", "mlb"], ["nfl:KC"])
-    assert ids == ["kc_game", "mlb_game"]
+    ids = _fetch(by_league, ["mlb"], ["nfl:KC"])
+    assert ids == ["mlb_game", "kc_game"]
+
+
+def test_favorite_league_selected_and_favorited_is_fetched_once() -> None:
+    """A league that is both selected and home to a favorite is fetched a
+    single time, in full - no duplicate games from a second fetch."""
+    from libraries.espn_sports.library import ESPNSportsLibrary
+
+    calls: list[str] = []
+
+    async def _fetch_league(
+        _client: Any, league: str, days_ahead: int = 1, days_behind: int = 1
+    ) -> list[dict[str, Any]]:
+        calls.append(league)
+        return [_game("kc_game", "nfl", "KC", "LV"), _game("no_fav", "nfl", "DEN", "MIA")]
+
+    lib = ESPNSportsLibrary({})
+    lib._fetch_league = _fetch_league
+    lib._get_client = lambda: None
+    games = asyncio.run(lib.fetch_scores(["nfl"], favorite_teams=["nfl:KC"]))
+    assert calls == ["nfl"]
+    assert [g["id"] for g in games] == ["kc_game", "no_fav"]
 
 
 def test_no_favorites_returns_every_league_in_full() -> None:
@@ -110,10 +134,7 @@ def test_failed_league_does_not_shift_favorite_filtering() -> None:
     lib._fetch_league = _fetch_league
     lib._get_client = lambda: None
     games = asyncio.run(
-        lib.fetch_scores(
-            ["ncaaf-top25", "college-football"],
-            favorite_teams=["college-football:UGA"],
-        )
+        lib.fetch_scores(["ncaaf-top25"], favorite_teams=["college-football:UGA"])
     )
     assert [g["id"] for g in games] == ["uga_game"]
 
