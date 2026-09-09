@@ -792,12 +792,26 @@ class SportsApp(DisplayApp):
         if len(self._stagger_slot_idx) != n:
             self._init_stagger_state()
 
-        # Advance each slot's timer independently
+        # Advance each slot's timer independently. Every slot's deadline moves
+        # forward by whole ``seconds_per_score`` periods rather than being reset
+        # to *now*, so its phase within the cycle is preserved: a slow frame
+        # (data fetch, logo decode, a hitch on the Pi) that blows past several
+        # slots' deadlines at once no longer collapses them onto a shared
+        # deadline, which used to lock those slots into changing together for
+        # the rest of the run.
         now = self._now()
+        # When every game already fits on screen there is nothing to rotate to,
+        # so only the timers move — otherwise slots would pointlessly swap games
+        # with each other.
+        rotating = n_games > n
         for i in range(n):
-            if now - self._stagger_slot_started_at[i] >= seconds_per_score:
-                self._stagger_slot_started_at[i] = now
-                self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + 1) % max(1, n_games)
+            elapsed = now - self._stagger_slot_started_at[i]
+            if elapsed < seconds_per_score:
+                continue
+            steps = int(elapsed // seconds_per_score)
+            self._stagger_slot_started_at[i] += steps * seconds_per_score
+            if rotating:
+                self._stagger_slot_idx[i] = (self._stagger_slot_idx[i] + steps) % n_games
 
         h = self.canvas.height
         w = self.canvas.width
