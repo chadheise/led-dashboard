@@ -207,3 +207,104 @@ def test_build_marquee_strip_single_game_full_width():
 
     assert strip is not None
     assert strip.width == 320
+
+
+def _stagger_app_with_games(n_games: int, scores_per_screen: int = 4):
+    """A staggered app with ``n_games`` distinct live games and a stubbed
+    slot renderer that records the ids drawn each frame."""
+    from PIL import Image
+
+    from apps.sports.tests.fixtures import _game
+
+    app = _make_app({
+        "display_mode": "staggered",
+        "scores_per_screen": scores_per_screen,
+        "seconds_per_score": 5,
+        "stagger_delay": 2,
+    })
+    app._games = [
+        _game("nba", "basketball", ("LAL", "Los Angeles", "Lakers"),
+              ("BOS", "Boston", "Celtics"), away_score="50", home_score="48",
+              status="Q3", state="in", id=str(i))
+        for i in range(n_games)
+    ]
+    app._logos = {}
+
+    frame: list[str] = []
+
+    def fake_render_slot_image(game: Any, w: int, h: int) -> Image.Image:
+        frame.append(game["id"])
+        return Image.new("RGB", (max(1, w), max(1, h)))
+
+    app._render_slot_image = fake_render_slot_image
+    return app, frame
+
+
+def _run_frames(app, frame: list[str], times: list[float]) -> list[list[int]]:
+    """Render at each timestamp, returning the slot indices that changed."""
+    changes: list[list[int]] = []
+    prev: list[str] | None = None
+    for t in times:
+        app._now = lambda t=t: t
+        frame.clear()
+        app._render_staggered_frame()
+        cur = list(frame)
+        if prev is not None:
+            changes.append([i for i in range(len(cur)) if cur[i] != prev[i]])
+        prev = cur
+    return changes
+
+
+def test_slots_stay_staggered_after_a_stalled_frame():
+    """A slow frame that blows past several slots' deadlines at once must not
+    lock those slots into changing together from then on.
+
+    With 4 slots at 5s each the offsets are 1.25s, so slots 3, 2 and 1 are all
+    due during a single 4s hitch. Resetting their timers to *now* (the old
+    behaviour) gave them a shared deadline forever after; advancing by whole
+    periods keeps each slot on its own phase.
+    """
+    app, frame = _stagger_app_with_games(6)
+
+    app._now = lambda: 1000.0
+    app._init_stagger_state()
+    app._render_staggered_frame()
+
+    # One long frame at t+4.0: slots 3, 2 and 1 were all due during the hitch.
+    # Then sample every 0.25s for two more full cycles.
+    times = [1004.0] + [1004.0 + 0.25 * k for k in range(1, 49)]
+    changes = _run_frames(app, frame, times)
+
+    # After the stall each frame changes at most one slot.
+    assert all(len(c) <= 1 for c in changes), changes
+    # ...and every slot still takes its own turn.
+    assert {i for c in changes for i in c} == {0, 1, 2, 3}
+
+
+def test_slots_change_one_at_a_time_over_a_long_run():
+    app, frame = _stagger_app_with_games(6)
+
+    app._now = lambda: 1000.0
+    app._init_stagger_state()
+
+    times = [1000.0 + 0.1 * k for k in range(600)]  # 60s at 10fps
+    changes = _run_frames(app, frame, times)
+
+    assert all(len(c) <= 1 for c in changes), changes
+    # 4 slots x 5s -> ~12 slot changes per minute, evenly shared.
+    turns = [i for c in changes for i in c]
+    assert set(turns) == {0, 1, 2, 3}
+    assert len(turns) >= 40
+
+
+def test_no_rotation_when_every_game_already_fits_on_screen():
+    """4 games in 4 slots: they are all on screen, so nothing should move."""
+    app, frame = _stagger_app_with_games(4)
+
+    app._now = lambda: 1000.0
+    app._init_stagger_state()
+
+    times = [1000.0 + 0.5 * k for k in range(60)]  # 30s
+    changes = _run_frames(app, frame, times)
+
+    assert changes and all(c == [] for c in changes), changes
