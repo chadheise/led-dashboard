@@ -6,7 +6,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any, ClassVar
@@ -48,6 +48,11 @@ _SCORES_FALLBACK_TTL_SECONDS: float = 15 * 60
 # read gets extra headroom for large multi-day payloads (e.g. a 14+ day
 # World Cup date range) that can take longer than a typical single-day fetch.
 _SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
+
+# ESPN's scoreboard returns only a couple dozen events per response unless a
+# `limit` is given, silently dropping the rest of a requested date range. 1000
+# is the maximum the endpoint accepts.
+_SCOREBOARD_EVENT_LIMIT = 1000
 
 # One immediate retry absorbs a one-off connection blip (reset, DNS hiccup)
 # without waiting a full refresh cycle and falling back to cached/empty games.
@@ -650,16 +655,38 @@ class ESPNSportsLibrary(Library):
         groups = entry.get("groups")
         if groups:
             params["groups"] = groups
+        # ESPN truncates a scoreboard response to a couple dozen events unless
+        # `limit` asks for more, and a multi-week range holds many times that.
+        params["limit"] = str(_SCOREBOARD_EVENT_LIMIT)
         # Without an explicit date range, ESPN's scoreboard endpoint only
         # returns a narrow default window (often just "today"), which can
         # hide most of a tournament's upcoming fixtures (e.g. World Cup).
         today = datetime.now(timezone.utc).date()
         start_date = today - timedelta(days=max(0, days_behind))
         end_date = today + timedelta(days=max(0, days_ahead))
-        params["dates"] = f"{start_date:%Y%m%d}-{end_date:%Y%m%d}"
-        try:
-            data = await self._get_scoreboard(client, url, params)
-        except Exception as exc:
+        # The recent window gets its own request rather than being folded into
+        # one range with the look-ahead. "Next game per team" looks a month
+        # ahead, which is far more fixtures than a single truncated response
+        # returns, and the just-finished games sitting at the start of that
+        # range are exactly what the completed-score card needs. Splitting the
+        # two keeps a wide look-ahead from crowding them out (and a failure of
+        # one window from taking the other down with it).
+        windows: list[tuple[date, date]] = [(start_date, today)]
+        if end_date > today:
+            windows.append((today, end_date))
+        results = await asyncio.gather(
+            *[
+                self._get_scoreboard(
+                    client, url, {**params, "dates": f"{start:%Y%m%d}-{end:%Y%m%d}"}
+                )
+                for start, end in windows
+            ],
+            return_exceptions=True,
+        )
+        payloads = [r for r in results if not isinstance(r, BaseException)]
+        failures = [r for r in results if isinstance(r, BaseException)]
+        if not payloads:
+            exc = failures[0]
             # A transient API failure must not blank the display: serve the
             # last successful fetch for this league while it is still fresh.
             cached = self._scores_cache.get(league)
@@ -672,9 +699,27 @@ class ESPNSportsLibrary(Library):
                 "Scoreboard fetch failed for %s (%s); no fresh cache available", league, exc
             )
             return []
+        if failures:
+            logger.warning(
+                "Scoreboard fetch failed for %d of %d date windows of %s (%s); "
+                "continuing with the games the rest returned",
+                len(failures), len(windows), league, failures[0],
+            )
+
+        # The windows meet at today, so a game today comes back from both.
+        events: list[dict[str, Any]] = []
+        seen_event_ids: set[str] = set()
+        for data in payloads:
+            for event in data.get("events") or []:
+                event_id = str(event.get("id") or "")
+                if event_id:
+                    if event_id in seen_event_ids:
+                        continue
+                    seen_event_ids.add(event_id)
+                events.append(event)
 
         games: list[dict[str, Any]] = []
-        for event in data.get("events", []):
+        for event in events:
             try:
                 comp = event.get("competitions", [{}])[0]
                 competitors = comp.get("competitors", [])
