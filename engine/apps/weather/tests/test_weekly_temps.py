@@ -62,9 +62,16 @@ def _ink(img: Image.Image) -> set[tuple[int, int]]:
     }
 
 
-def _draw(lo: float, hi: float, sep: str, cx: int, color: tuple[int, int, int]) -> Image.Image:
+def _draw(
+    lo: float,
+    hi: float,
+    sep: str,
+    cx: int,
+    color: tuple[int, int, int],
+    lo_color: tuple[int, int, int] | None = None,
+) -> Image.Image:
     img = Image.new("RGB", (2 * cx, 12))
-    _app()._draw_temp_range(img, lo, hi, sep, 8, color, cx, 2)
+    _app()._draw_temp_range(img, lo, hi, sep, 8, color, lo_color or _dim(color), cx, 2)
     return img
 
 
@@ -101,9 +108,15 @@ def test_the_separator_sits_on_the_column_centre() -> None:
         assert (dash[0] + dash[1]) / 2 == cx, f"{lo}{sep}{hi} dash at {dash}, centre {cx}"
 
 
-def test_the_low_end_of_the_range_is_dimmed() -> None:
-    color = (200, 200, 200)
-    img = _draw(55, 75, " - ", 30, color)
+def test_each_end_of_the_range_is_drawn_in_its_own_color() -> None:
+    """The low is dimmed against the high; with the temperature spectrum on, the
+    two are also different hues, so each end has to land on its own run."""
+    hi_color, lo_color = (200, 200, 200), (0, 110, 255)
+    img = _draw(55, 75, " - ", 30, hi_color, lo_color)
 
-    colors = {img.load()[x, y] for x, y in _ink(img)}
-    assert colors == {_dim(color), color}
+    ink = _ink(img)
+    px = img.load()
+    assert {px[x, y] for x, y in ink} == {lo_color, hi_color}
+    # Low on the left of the separator, high on the right.
+    assert px[min(ink)] == lo_color
+    assert px[max(ink)] == hi_color

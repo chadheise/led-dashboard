@@ -1,5 +1,6 @@
 """Weather snapshot suite: current / daily / weekly views, both unit systems,
-with and without the opt-in air-quality readout.
+with and without the opt-in air-quality readout, plus a temperature sweep that
+walks the color ramp (and one fixture with that coloring switched off).
 
 ``datetime.now()`` in the app module is frozen to ``clock.FIXED_NOW`` (June 10
 2026, 12:00) and all fixture timestamps are fixed strings starting at that
@@ -20,6 +21,12 @@ _DAILY_CODES = [0, 2, 61, 71, 95, 3, 1]
 # exercise the whole color ramp (green -> yellow -> orange -> red -> purple).
 _HOURLY_AQI = [18, 34, 47, 62, 88, 105, 133, 158, 184, 215, 268, 320]
 _DAILY_AQI = [42, 78, 120, 165, 240, 310, 55]
+# The everyday fixtures all sit in the comfortable middle of the temperature
+# ramp, so the spectrum fixtures below sweep it instead: a sawtooth climbing
+# from arctic to extreme heat, spaced so the daily view (which samples every
+# third hour) walks the whole thing across its columns.
+_SPECTRUM_HOURLY = [4 + 6 * (i % 18) for i in range(48)]
+_SPECTRUM_DAILY = [(2, 20), (18, 34), (30, 48), (42, 62), (55, 76), (68, 90), (82, 104)]
 
 
 def _weather_data(*, air_quality: bool = False) -> dict[str, Any]:
@@ -59,6 +66,38 @@ def _weather_data(*, air_quality: bool = False) -> dict[str, Any]:
     }
 
 
+def _celsius_data() -> dict[str, Any]:
+    """The same readings in Celsius.
+
+    The payload arrives in whatever unit the app asked for, so the °C fixture
+    has to carry °C numbers — feeding it Fahrenheit ones would put the ramp in
+    a different band than its Fahrenheit twin.
+    """
+    def c(f: float) -> float:
+        return round((f - 32) * 5 / 9, 1)
+
+    data = _weather_data()
+    data["current"]["temperature"] = c(data["current"]["temperature"])
+    data["current"]["feels_like"] = c(data["current"]["feels_like"])
+    for entry in data["hourly"]:
+        entry["temperature"] = c(entry["temperature"])
+    for entry in data["daily"]:
+        entry["temp_min"], entry["temp_max"] = c(entry["temp_min"]), c(entry["temp_max"])
+    return data
+
+
+def _spectrum_data() -> dict[str, Any]:
+    """The same payload with its temperatures spread across the whole ramp."""
+    data = _weather_data()
+    data["current"]["temperature"] = 97.0
+    data["current"]["feels_like"] = 104.0
+    for i, entry in enumerate(data["hourly"]):
+        entry["temperature"] = _SPECTRUM_HOURLY[i]
+    for lo_hi, entry in zip(_SPECTRUM_DAILY, data["daily"]):
+        entry["temp_min"], entry["temp_max"] = lo_hi
+    return data
+
+
 def _seed(app: Any) -> None:
     app._data = _weather_data()
     app._fetched_once = True
@@ -69,13 +108,23 @@ def _seed_aqi(app: Any) -> None:
     app._fetched_once = True
 
 
+def _seed_celsius(app: Any) -> None:
+    app._data = _celsius_data()
+    app._fetched_once = True
+
+
+def _seed_spectrum(app: Any) -> None:
+    app._data = _spectrum_data()
+    app._fetched_once = True
+
+
 def _fixtures() -> dict[str, dict[str, Any]]:
     aqi_on = {"show_air_quality": True}
     return {
         "current": {"config": {"display_mode": "current"}, "seed": _seed},
         "current_celsius": {
             "config": {"display_mode": "current", "units": "celsius"},
-            "seed": _seed,
+            "seed": _seed_celsius,
         },
         "daily_forecast": {"config": {"display_mode": "daily_forecast"}, "seed": _seed},
         "weekly_forecast": {"config": {"display_mode": "weekly_forecast"}, "seed": _seed},
@@ -90,6 +139,18 @@ def _fixtures() -> dict[str, dict[str, Any]]:
         "weekly_forecast_aqi": {
             "config": {"display_mode": "weekly_forecast", **aqi_on},
             "seed": _seed_aqi,
+        },
+        "daily_forecast_spectrum": {
+            "config": {"display_mode": "daily_forecast"},
+            "seed": _seed_spectrum,
+        },
+        "weekly_forecast_spectrum": {
+            "config": {"display_mode": "weekly_forecast"},
+            "seed": _seed_spectrum,
+        },
+        "current_no_temp_colors": {
+            "config": {"display_mode": "current", "color_temps": False},
+            "seed": _seed_spectrum,
         },
         "unavailable": {
             "config": {"display_mode": "current"},

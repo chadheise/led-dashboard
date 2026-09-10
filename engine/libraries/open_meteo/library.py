@@ -100,6 +100,71 @@ def aqi_color(aqi: float | int | None) -> tuple[int, int, int]:
     return band[1] if band else _AQI_UNKNOWN_COLOR
 
 
+# ── Temperature color ramp ──────────────────────────────────────────────────
+#
+# Temperatures are color coded so a reading's band lands before the digits are
+# read: white and pink at arctic lows, violet into freezing, blue and cyan
+# through the cold and cool bands, green and yellow across the comfortable
+# middle, orange and red as it climbs, then magenta and purple at dangerous
+# heat. Stops are interpolated rather than banded, so neighbouring hours in a
+# forecast row differ by a shade instead of jumping a category.
+#
+# Anchors are in Fahrenheit (the finer scale of the two; Celsius readings are
+# converted before lookup) and every one is kept bright and saturated: the
+# literal "dark red" and "dark blue" ends of the scale read as near-black on
+# LED panels, so the ramp reaches those bands by hue, not by dimming.
+
+_TEMP_STOPS: tuple[tuple[float, tuple[int, int, int]], ...] = (
+    (-10.0, (255, 255, 255)),  # arctic
+    (10.0, (245, 175, 255)),   # ice pink
+    (26.0, (175, 110, 255)),   # violet
+    (32.0, (90, 90, 255)),     # freezing
+    (39.0, (0, 110, 255)),     # cold: blue
+    (46.0, (0, 190, 225)),     # cool: cyan/teal
+    (53.0, (0, 215, 150)),
+    (59.0, (60, 225, 80)),     # green
+    (66.0, (150, 235, 40)),    # mild: light green
+    (73.0, (215, 235, 0)),
+    (79.0, (255, 225, 0)),     # yellow
+    (86.0, (255, 165, 0)),     # warm: orange
+    (93.0, (255, 90, 20)),
+    (99.0, (255, 40, 40)),     # hot: bright red
+    (105.0, (255, 0, 90)),     # extreme heat
+    (112.0, (250, 0, 180)),    # magenta
+    (120.0, (200, 70, 255)),   # purple
+)
+
+# Readings we cannot place on the ramp (missing or unparseable) get no color of
+# their own; callers fall back to their own text color.
+_TEMP_UNKNOWN_COLOR: tuple[int, int, int] = (170, 170, 170)
+
+
+def _to_fahrenheit(value: float, unit: str) -> float:
+    return value * 9 / 5 + 32 if unit == "celsius" else value
+
+
+def temp_color(
+    value: float | int | None, unit: str = "fahrenheit"
+) -> tuple[int, int, int]:
+    """Display color for a temperature reading, cold (white/blue) to hot (red/purple).
+
+    ``unit`` names the scale ``value`` is already in, matching the app's units
+    setting; anything other than ``"celsius"`` is read as Fahrenheit.
+    """
+    try:
+        degrees_f = _to_fahrenheit(float(value), unit)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return _TEMP_UNKNOWN_COLOR
+
+    if degrees_f <= _TEMP_STOPS[0][0]:
+        return _TEMP_STOPS[0][1]
+    for (lo_t, lo_c), (hi_t, hi_c) in zip(_TEMP_STOPS, _TEMP_STOPS[1:]):
+        if degrees_f <= hi_t:
+            frac = (degrees_f - lo_t) / (hi_t - lo_t)
+            return tuple(round(a + (b - a) * frac) for a, b in zip(lo_c, hi_c))  # type: ignore[return-value]
+    return _TEMP_STOPS[-1][1]
+
+
 # ── Animated weather icons ──────────────────────────────────────────────────
 #
 # Full-color animated icons from the free amCharts SVG weather-icons set,
@@ -189,6 +254,7 @@ class OpenMeteoLibrary(Library):
     weather_icon_img = staticmethod(weather_icon_img)
     aqi_label = staticmethod(aqi_label)
     aqi_color = staticmethod(aqi_color)
+    temp_color = staticmethod(temp_color)
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
