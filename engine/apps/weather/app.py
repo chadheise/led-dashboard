@@ -20,6 +20,7 @@ from libraries.open_meteo.library import (
     aqi_label,
     condition_for_code,
     condition_label,
+    temp_color,
     weather_icon_img,
 )
 
@@ -112,17 +113,16 @@ def _temp_range_sep(days: list[dict[str, Any]], size: int, max_w: int) -> str | 
     )
 
 
-def _join_details(items: list[str], idx: int | None) -> tuple[str, tuple[int, int] | None]:
-    """Join a detail row, reporting where item `idx` lands in the joined string.
+def _item_span(items: list[str], idx: int | None) -> tuple[int, int] | None:
+    """Where item `idx` lands in ``_DETAIL_SEP.join(items)``, for tinting it.
 
-    The span is None when that item is not in `items` — the callers trim the row
-    to fit, so the highlighted item may have been dropped entirely.
+    None when that item is not in `items` — the callers trim the row to fit, so
+    a highlighted item may have been dropped entirely.
     """
-    joined = _DETAIL_SEP.join(items)
     if idx is None or idx >= len(items):
-        return joined, None
+        return None
     start = len(_DETAIL_SEP.join(items[:idx])) + (len(_DETAIL_SEP) if idx else 0)
-    return joined, (start, start + len(items[idx]))
+    return start, start + len(items[idx])
 
 
 def _tint_run(
@@ -171,10 +171,13 @@ def _build_debug_weather() -> dict[str, Any]:
     hourly_codes = [0, 0, 1, 1, 2, 2, 3, 61, 61, 80, 2, 1, 0, 0, 1, 2, 3, 3, 95, 61, 71, 71, 2, 1]
     # Walks every AQI band so debug mode exercises the full color ramp.
     hourly_aqi = [18, 34, 47, 62, 88, 105, 133, 158, 184, 215, 268, 320]
+    # Likewise for temperatures: arctic through extreme heat, so the debug view
+    # shows the whole spectrum rather than one comfortable shade of it.
+    hourly_temps = [12, 24, 31, 36, 44, 52, 61, 68, 75, 82, 91, 104]
     hourly = [
         {
             "time": (now + timedelta(hours=i)).strftime("%Y-%m-%dT%H:%M"),
-            "temperature": 58 + (i % 12),
+            "temperature": hourly_temps[i % len(hourly_temps)],
             "weather_code": hourly_codes[i % len(hourly_codes)],
             "aqi": hourly_aqi[i % len(hourly_aqi)],
         }
@@ -183,12 +186,13 @@ def _build_debug_weather() -> dict[str, Any]:
     daily_codes = [0, 2, 61, 71, 95, 3, 1]
     daily_aqi = [42, 78, 120, 165, 240, 310, 55]
     today = now.date()
+    daily_temps = [(28, 40), (38, 52), (47, 63), (55, 72), (64, 81), (73, 95), (84, 107)]
     daily = [
         {
             "date": (today + timedelta(days=d)).isoformat(),
             "weather_code": daily_codes[d],
-            "temp_max": 75 - d,
-            "temp_min": 55 + d,
+            "temp_max": daily_temps[d][1],
+            "temp_min": daily_temps[d][0],
             "aqi": daily_aqi[d],
         }
         for d in range(len(daily_codes))
@@ -253,6 +257,17 @@ class WeatherApp(DisplayApp):
                 "enum": ["fahrenheit", "celsius"],
                 "x-enum-labels": {"fahrenheit": "Fahrenheit (°F)", "celsius": "Celsius (°C)"},
                 "default": "fahrenheit",
+            },
+            "color_temps": {
+                "type": "boolean",
+                "title": "Color temperatures by value",
+                "description": (
+                    "Tints every temperature on a cold-to-hot spectrum: white and "
+                    "violet below freezing, blue and cyan when cold, green and "
+                    "yellow when mild, orange and red when hot, magenta and "
+                    "purple in extreme heat"
+                ),
+                "default": True,
             },
             "show_air_quality": {
                 "type": "boolean",
@@ -331,6 +346,19 @@ class WeatherApp(DisplayApp):
 
     def _show_air_quality(self) -> bool:
         return bool(self.config.get("show_air_quality", False))
+
+    def _temp_color(
+        self, value: float | None, fallback: tuple[int, int, int]
+    ) -> tuple[int, int, int]:
+        """Spectrum color for a reading, or `fallback` (the configured text color).
+
+        Missing readings render as "--°" and keep the text color: there is no
+        value to encode, and a stray grey among coloured neighbours would read
+        as a failed lookup rather than as a missing number.
+        """
+        if value is None or not self.config.get("color_temps", True):
+            return fallback
+        return temp_color(value, str(self.config.get("units", "fahrenheit")))
 
     def _hourly_from_now(self) -> list[dict[str, Any]]:
         hourly = self._data.get("hourly", [])
@@ -416,7 +444,9 @@ class WeatherApp(DisplayApp):
         temp = current.get("temperature")
         temp_str = f"{round(temp)}°{unit}" if temp is not None else f"--°{unit}"
         temp_size = max(10, min(h // 2, 28))
-        temp_img = render_text(_clip_text(temp_str, temp_size, avail_w), text_color, temp_size)
+        temp_img = render_text(
+            _clip_text(temp_str, temp_size, avail_w), self._temp_color(temp, text_color), temp_size
+        )
 
         label_size = max(7, temp_size // 2)
         label_img = render_text(_clip_text(condition_label(condition), label_size, avail_w), text_color, label_size)
@@ -426,8 +456,10 @@ class WeatherApp(DisplayApp):
         details: list[str] = []
         aqi = current.get("aqi") if self._show_air_quality() else None
         aqi_idx: int | None = None
+        feels_idx: int | None = None
         feels = current.get("feels_like")
         if feels is not None:
+            feels_idx = len(details)
             details.append(f"Feels {round(feels)}°")
         humidity = current.get("humidity")
         if humidity is not None:
@@ -445,20 +477,30 @@ class WeatherApp(DisplayApp):
             # partial join (e.g. "Feels 70°  Hum") reads worse than a shorter
             # but complete one, so prefer dropping whole items over clipping.
             # Where there is room, the AQI item also spells out its category.
-            candidates: list[tuple[str, tuple[int, int] | None]] = []
+            candidates: list[list[str]] = []
             for n in range(len(details), 0, -1):
                 if aqi_idx is not None and aqi_idx < n:
                     named = details[:n]
                     named[aqi_idx] = f"AQI {round(aqi)} {aqi_label(aqi)}"
-                    candidates.append(_join_details(named, aqi_idx))
-                candidates.append(_join_details(details[:n], aqi_idx))
-            chosen, aqi_span = next(
-                ((c, s) for c, s in candidates if can_fit_text(avail_w, detail_size, c)), ("", None)
+                    candidates.append(named)
+                candidates.append(details[:n])
+            items = next(
+                (c for c in candidates if can_fit_text(avail_w, detail_size, _DETAIL_SEP.join(c))),
+                [],
             )
-            if chosen:
+            if items:
+                chosen = _DETAIL_SEP.join(items)
                 detail_img = render_text(chosen, text_color, detail_size)
-                if aqi_span is not None:
-                    _tint_run(detail_img, chosen, *aqi_span, aqi_color(aqi), detail_size)
+                # The feels-like reading is a temperature too, so it carries the
+                # same spectrum color as the headline number; AQI keeps its own.
+                highlights = (
+                    (feels_idx, self._temp_color(feels, text_color)),
+                    (aqi_idx, aqi_color(aqi)),
+                )
+                for idx, color in highlights:
+                    span = _item_span(items, idx)
+                    if span is not None:
+                        _tint_run(detail_img, chosen, *span, color, detail_size)
                 used_h = sum(li.height for li in lines) + 2 * len(lines)
                 if used_h + detail_img.height <= h:
                     lines.append(detail_img)
@@ -533,12 +575,14 @@ class WeatherApp(DisplayApp):
         hi: float,
         sep: str,
         size: int,
-        color: tuple[int, int, int],
+        hi_color: tuple[int, int, int],
+        lo_color: tuple[int, int, int],
         cx: int,
         y: int,
     ) -> None:
-        """Draw "lo° - hi°" on one line, the low dimmed like the stacked layout
-        dims it. The caller has already checked it fits.
+        """Draw "lo° - hi°" on one line, each end in its own color (the caller
+        dims the low one, as the stacked layout does). The caller has already
+        checked it fits.
 
         `cx` pins the separator, not the string: the dash lands on the column
         centre and stays lined up with its neighbours' whatever the two ends
@@ -549,9 +593,9 @@ class WeatherApp(DisplayApp):
         """
         low_str = _temp_str(lo)
         text = _temp_range_text(lo, hi, sep)
-        range_img = render_text(text, color, size)
-        _tint_run(range_img, text, 0, len(low_str), _dim(color), size)
-        low_w = render_text(low_str, color, size).width
+        range_img = render_text(text, hi_color, size)
+        _tint_run(range_img, text, 0, len(low_str), lo_color, size)
+        low_w = render_text(low_str, hi_color, size).width
         img.paste(range_img, (round(cx - low_w - _sep_ink_cx(sep, size)), y))
 
     def _draw_daily_forecast(self) -> None:
@@ -604,7 +648,11 @@ class WeatherApp(DisplayApp):
 
             temp = entry.get("temperature")
             temp_str = f"{round(temp)}°" if temp is not None else "--°"
-            temp_img = render_text(_clip_text(temp_str, temp_size, max_w), text_color, temp_size)
+            temp_img = render_text(
+                _clip_text(temp_str, temp_size, max_w),
+                self._temp_color(temp, text_color),
+                temp_size,
+            )
             img.paste(temp_img, (cx - temp_img.width // 2, temp_y))
 
             self._draw_aqi_footer(img, aqi_plan, entry.get("aqi"), cx, col_w)
@@ -669,16 +717,20 @@ class WeatherApp(DisplayApp):
 
             hi = entry.get("temp_max")
             lo = entry.get("temp_min")
+            # Each end is colored for its own reading; the low stays dimmed
+            # relative to the high, so the pair still reads as a range.
+            hi_color = self._temp_color(hi, text_color)
+            lo_color = _dim(self._temp_color(lo, text_color))
             y = temp_y
             if range_sep is not None:
-                self._draw_temp_range(img, lo, hi, range_sep, temp_size, text_color, cx, y)
+                self._draw_temp_range(img, lo, hi, range_sep, temp_size, hi_color, lo_color, cx, y)
             else:
                 if hi is not None:
-                    hi_img = render_text(_clip_text(f"{round(hi)}°", temp_size, max_w), text_color, temp_size)
+                    hi_img = render_text(_clip_text(f"{round(hi)}°", temp_size, max_w), hi_color, temp_size)
                     img.paste(hi_img, (cx - hi_img.width // 2, y))
                     y += temp_h + 1
                 if stacked and lo is not None:
-                    lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), _dim(text_color), temp_size)
+                    lo_img = render_text(_clip_text(f"{round(lo)}°", temp_size, max_w), lo_color, temp_size)
                     img.paste(lo_img, (cx - lo_img.width // 2, y))
 
             self._draw_aqi_footer(img, aqi_plan, entry.get("aqi"), cx, col_w)
