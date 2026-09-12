@@ -166,10 +166,11 @@ class SportsApp(DisplayApp):
                 "type": "string",
                 "title": "Upcoming games mode",
                 "description": (
-                    "\"Next game per team\" shows only each team's single next "
+                    "\"Next game per team\" shows only each team's next "
                     "game — one per team in each selected league, plus one per "
-                    "favorite team. \"Time window\" shows every upcoming game "
-                    "within the window below."
+                    "favorite team, and both games of a doubleheader when a "
+                    "team plays twice on the same day. \"Time window\" shows "
+                    "every upcoming game within the window below."
                 ),
                 "enum": ["next_game", "window"],
                 "x-enum-labels": {"next_game": "Next game per team", "window": "Time window"},
@@ -186,6 +187,11 @@ class SportsApp(DisplayApp):
             "completed_game_window": {
                 "type": "object",
                 "title": "Keep completed games for",
+                "description": (
+                    "How long a final score can stay on screen. It drops off "
+                    "sooner once one of its teams plays again — games on the "
+                    "same day (a doubleheader) stay up together."
+                ),
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
                 "default": {"days": 1},
@@ -536,19 +542,42 @@ class SportsApp(DisplayApp):
         except Exception:
             return None
 
-    def _next_game_per_team_keys(
-        self, games: list[dict[str, Any]], now: datetime.datetime
-    ) -> set[str]:
-        """Game keys of each qualifying team's single soonest "pre" game.
+    def _game_day(
+        self, start: datetime.datetime, tz: datetime.tzinfo
+    ) -> datetime.date:
+        """The calendar day a game falls on, in the display's local timezone.
 
-        Qualifying teams are the union the module is configured for: every
-        team appearing in a selected league's games, plus every favorite.
-        Only in a league fetched purely to cover a favorite (mirroring
-        ``fetch_scores``) is qualifying limited to the favorites themselves —
-        otherwise a favorite's opponent would count as a qualifying team and
-        pull in a second, later favorite game as "their" next one.
-        A game shared by two qualifying teams (e.g. two favorites playing
-        each other) is naturally included once.
+        "Same day" throughout this module means the same calendar day, not a
+        24h span: an MLB doubleheader's two games share a day, while last
+        night's game and this afternoon's do not.
+        """
+        return start.astimezone(tz).date()
+
+    def _local_tz(self) -> datetime.tzinfo:
+        """The timezone calendar days are measured in (UTC when unconfigured)."""
+        return self._get_user_tz() or datetime.timezone.utc
+
+    def _qualifying_teams(
+        self, game: dict[str, Any], favorites_by_league: dict[str, set[str]]
+    ) -> list[tuple[str, str]]:
+        """The ``(league, abbr)`` teams in ``game`` this module is showing for."""
+        league = game.get("league", "")
+        # None unless this league was fetched only for its favorites.
+        league_favorites = favorites_by_league.get(league)
+        return [
+            (league, abbr)
+            for abbr in (game.get("home_abbr", ""), game.get("away_abbr", ""))
+            if abbr and (league_favorites is None or abbr in league_favorites)
+        ]
+
+    def _favorites_by_league(self) -> dict[str, set[str]]:
+        """Favorites grouped by league, for leagues not selected outright.
+
+        A selected league qualifies every team in it, so only a league
+        fetched purely to cover a favorite (mirroring ``fetch_scores``)
+        narrows qualifying down to the favorites themselves - otherwise a
+        favorite's opponent would count as a qualifying team and pull in a
+        second, later favorite game as "their" next one.
         """
         selected_leagues = set(self._get_leagues())
         favorites_by_league: dict[str, set[str]] = {}
@@ -556,8 +585,28 @@ class SportsApp(DisplayApp):
             parts = fav.split(":", 1)
             if len(parts) == 2 and parts[0] not in selected_leagues:
                 favorites_by_league.setdefault(parts[0], set()).add(parts[1])
+        return favorites_by_league
 
-        best: dict[tuple[str, str], tuple[datetime.datetime, dict[str, Any]]] = {}
+    def _next_game_per_team_keys(
+        self, games: list[dict[str, Any]], now: datetime.datetime,
+        tz: datetime.tzinfo | None = None,
+    ) -> set[str]:
+        """Game keys of each qualifying team's next "pre" game day.
+
+        One game per team, except that a team playing twice on the same
+        calendar day (a baseball doubleheader) keeps both: the cut is made on
+        the soonest day a team plays, not on its single soonest game.
+
+        Qualifying teams are the union the module is configured for: every
+        team appearing in a selected league's games, plus every favorite
+        (see ``_favorites_by_league``). A game shared by two qualifying teams
+        (e.g. two favorites playing each other) is naturally included once.
+        """
+        tz = tz or self._local_tz()
+        favorites_by_league = self._favorites_by_league()
+
+        first_day: dict[tuple[str, str], datetime.date] = {}
+        candidates: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
         for game in games:
             if game.get("state", "pre") != "pre":
                 continue
@@ -567,23 +616,89 @@ class SportsApp(DisplayApp):
             secs_until = (start - now).total_seconds()
             if secs_until < -_PRE_START_GRACE_SECONDS:
                 continue
-            league = game.get("league", "")
-            # None unless this league was fetched only for its favorites.
-            league_favorites = favorites_by_league.get(league)
-            for abbr in (game.get("home_abbr", ""), game.get("away_abbr", "")):
-                team_key = (league, abbr)
-                if league_favorites is not None and abbr not in league_favorites:
-                    continue
-                current = best.get(team_key)
-                if current is None or start < current[0]:
-                    best[team_key] = (start, game)
+            teams = self._qualifying_teams(game, favorites_by_league)
+            if not teams:
+                continue
+            day = self._game_day(start, tz)
+            candidates.append((game, day, teams))
+            for team_key in teams:
+                current = first_day.get(team_key)
+                if current is None or day < current:
+                    first_day[team_key] = day
 
-        return {game_key(g) for _, g in best.values()}
+        return {
+            game_key(game)
+            for game, day, teams in candidates
+            if any(first_day[team_key] == day for team_key in teams)
+        }
+
+    def _superseded_past_keys(
+        self, games: list[dict[str, Any]], tz: datetime.tzinfo | None = None
+    ) -> set[str]:
+        """Game keys of finals a team has already moved on from.
+
+        A final score is worth showing until one of its teams plays again:
+        once a team has a newer game under way or completed, the older result
+        is stale and drops off, even if the configured "keep completed games
+        for" window hasn't run out. The comparison is by calendar day, so the
+        two halves of a doubleheader never supersede each other - both stay up
+        for the rest of that day.
+        """
+        tz = tz or self._local_tz()
+
+        latest_played: dict[tuple[str, str], datetime.date] = {}
+        finals: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
+        for game in games:
+            state = game.get("state", "pre")
+            if state not in ("in", "post"):
+                continue
+            start = self._parse_start(game)
+            if start is None:
+                continue
+            league = game.get("league", "")
+            teams = [
+                (league, abbr)
+                for abbr in (game.get("home_abbr", ""), game.get("away_abbr", ""))
+                if abbr
+            ]
+            day = self._game_day(start, tz)
+            for team_key in teams:
+                current = latest_played.get(team_key)
+                if current is None or day > current:
+                    latest_played[team_key] = day
+            if state == "post":
+                finals.append((game, day, teams))
+
+        return {
+            game_key(game)
+            for game, day, teams in finals
+            if any(latest_played[team_key] > day for team_key in teams)
+        }
+
+    def _settle_stale_live_game(
+        self, game: dict[str, Any], now: datetime.datetime
+    ) -> dict[str, Any]:
+        """Demote a game ESPN never flipped out of "in" to "post".
+
+        A game stuck reporting "in" for longer than any real match is a
+        glitched feed, not a live game, and would otherwise pin the screen
+        forever. Settling it up front also lets the per-team passes below see
+        the same states the filter acts on.
+        """
+        if game.get("state") != "in":
+            return game
+        start = self._parse_start(game)
+        if start is None:
+            return game
+        if (now - start).total_seconds() <= _MAX_LIVE_GAME_SECONDS:
+            return game
+        return {**game, "state": "post"}
 
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         now = datetime.datetime.now(datetime.timezone.utc)
+        tz = self._local_tz()
         show_upcoming = bool(self.config.get("show_upcoming_games", True))
         next_game_mode = (
             show_upcoming
@@ -595,9 +710,13 @@ class SportsApp(DisplayApp):
         completed_secs = _duration_to_seconds(
             self.config.get("completed_game_window", {"days": 1})
         )
+
+        games = [self._settle_stale_live_game(game, now) for game in games]
+
         next_game_keys = (
-            self._next_game_per_team_keys(games, now) if next_game_mode else None
+            self._next_game_per_team_keys(games, now, tz) if next_game_mode else None
         )
+        superseded_keys = self._superseded_past_keys(games, tz)
 
         result: list[dict[str, Any]] = []
         for game in games:
@@ -605,19 +724,12 @@ class SportsApp(DisplayApp):
             start = self._parse_start(game)
 
             if state == "in":
-                if start is not None and (
-                    now - start
-                ).total_seconds() > _MAX_LIVE_GAME_SECONDS:
-                    # ESPN never flipped this game out of "in" - treat as
-                    # stale/completed so it doesn't pin the screen forever.
-                    state = "post"
-                    game = {**game, "state": "post"}
-                else:
-                    result.append(game)
-                    continue
+                result.append(game)
 
-            if state == "post":
+            elif state == "post":
                 if completed_secs <= 0:
+                    continue
+                if game_key(game) in superseded_keys:
                     continue
                 if start is None:
                     result.append(game)
