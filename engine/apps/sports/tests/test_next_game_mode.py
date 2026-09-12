@@ -263,8 +263,8 @@ def test_next_game_mode_same_day_is_calendar_day_not_24_hours() -> None:
 
 
 def test_past_game_drops_once_the_team_has_a_live_game() -> None:
-    """A final stops showing as soon as one of its teams starts a later game,
-    even though the completed-game window is still wide open."""
+    """A final stops showing once the day of a later game has arrived, even
+    though the completed-game window is still wide open."""
     now = datetime.datetime.now(datetime.timezone.utc)
     app = _make_app(
         {"favorite_teams": ["mlb:SEA"], "completed_game_window": {"days": 7}}
@@ -325,9 +325,9 @@ def test_doubleheader_finals_drop_together_on_the_next_game_day() -> None:
     assert kept == {"next_day"}
 
 
-def test_upcoming_game_does_not_supersede_a_past_game() -> None:
-    """Only a game under way or finished retires an older result - a scheduled
-    game still leaves the last final on screen."""
+def test_final_stays_up_until_the_day_of_the_next_game() -> None:
+    """A final expires on the next day its team plays, so a game still days
+    out leaves the last result on screen in the meantime."""
     now = datetime.datetime.now(datetime.timezone.utc)
     app = _make_app(
         {"favorite_teams": ["nfl:SEA"], "completed_game_window": {"days": 7}}
@@ -338,6 +338,25 @@ def test_upcoming_game_does_not_supersede_a_past_game() -> None:
     ]
     kept = {g["id"] for g in app._filter_by_time_window(games)}
     assert kept == {"last_week", "next_week"}
+
+
+def test_final_expires_at_the_start_of_the_next_game_day() -> None:
+    """The old result goes as soon as the next game day begins, without
+    waiting for first pitch: a completed game and that day's upcoming game
+    are never on screen together."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    app = _make_app(
+        {"favorite_teams": ["mlb:SEA"], "completed_game_window": {"days": 7}}
+    )
+    # Scheduled for late today, so it is still to be played - the final from
+    # the day before has to be gone already.
+    today_game = _utc_day(now.date(), 23)
+    games = [
+        _game("yesterday", "mlb", "SEA", "OAK", today_game - datetime.timedelta(days=1), "post"),
+        _pre_game("today_pre", "mlb", "SEA", "TEX", today_game),
+    ]
+    kept = {g["id"] for g in app._filter_by_time_window(games)}
+    assert kept == {"today_pre"}
 
 
 def test_another_teams_newer_game_leaves_a_final_alone() -> None:

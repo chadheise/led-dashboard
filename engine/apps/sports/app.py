@@ -189,8 +189,9 @@ class SportsApp(DisplayApp):
                 "title": "Keep completed games for",
                 "description": (
                     "How long a final score can stay on screen. It drops off "
-                    "sooner once one of its teams plays again — games on the "
-                    "same day (a doubleheader) stay up together."
+                    "sooner at the start of the next day either team has a "
+                    "game — games on the same day (a doubleheader) stay up "
+                    "together for the rest of that day."
                 ),
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
@@ -632,26 +633,29 @@ class SportsApp(DisplayApp):
             if any(first_day[team_key] == day for team_key in teams)
         }
 
-    def _superseded_past_keys(
-        self, games: list[dict[str, Any]], tz: datetime.tzinfo | None = None
+    def _expired_final_keys(
+        self, games: list[dict[str, Any]], now: datetime.datetime,
+        tz: datetime.tzinfo | None = None,
     ) -> set[str]:
-        """Game keys of finals a team has already moved on from.
+        """Game keys of finals whose day has passed.
 
-        A final score is worth showing until one of its teams plays again:
-        once a team has a newer game under way or completed, the older result
-        is stale and drops off, even if the configured "keep completed games
-        for" window hasn't run out. The comparison is by calendar day, so the
-        two halves of a doubleheader never supersede each other - both stay up
-        for the rest of that day.
+        A final score stays up until the start of the next day either of its
+        teams has a game - scheduled, under way or finished alike - even if
+        the configured "keep completed games for" window would hold it longer.
+        Expiring on the day boundary rather than at the next game's start
+        keeps yesterday's result off the screen on game day, where it would
+        sit confusingly alongside the game still to be played. Days are
+        calendar days, so games sharing one never expire each other: both
+        halves of a doubleheader stay up for the rest of that day.
         """
         tz = tz or self._local_tz()
+        today = self._game_day(now, tz)
 
-        latest_played: dict[tuple[str, str], datetime.date] = {}
+        # Per team, the latest day up to and including today that it has a
+        # game on. Today counts from midnight, before any of it is played.
+        latest_day: dict[tuple[str, str], datetime.date] = {}
         finals: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
         for game in games:
-            state = game.get("state", "pre")
-            if state not in ("in", "post"):
-                continue
             start = self._parse_start(game)
             if start is None:
                 continue
@@ -662,17 +666,26 @@ class SportsApp(DisplayApp):
                 if abbr
             ]
             day = self._game_day(start, tz)
-            for team_key in teams:
-                current = latest_played.get(team_key)
-                if current is None or day > current:
-                    latest_played[team_key] = day
-            if state == "post":
+            if day <= today:
+                for team_key in teams:
+                    current = latest_day.get(team_key)
+                    if current is None or day > current:
+                        latest_day[team_key] = day
+            if game.get("state", "pre") == "post":
                 finals.append((game, day, teams))
+
+        def _has_reached_a_later_game_day(
+            day: datetime.date, teams: list[tuple[str, str]]
+        ) -> bool:
+            return any(
+                latest_day.get(team_key) is not None and latest_day[team_key] > day
+                for team_key in teams
+            )
 
         return {
             game_key(game)
             for game, day, teams in finals
-            if any(latest_played[team_key] > day for team_key in teams)
+            if _has_reached_a_later_game_day(day, teams)
         }
 
     def _settle_stale_live_game(
@@ -716,7 +729,7 @@ class SportsApp(DisplayApp):
         next_game_keys = (
             self._next_game_per_team_keys(games, now, tz) if next_game_mode else None
         )
-        superseded_keys = self._superseded_past_keys(games, tz)
+        expired_final_keys = self._expired_final_keys(games, now, tz)
 
         result: list[dict[str, Any]] = []
         for game in games:
@@ -729,7 +742,7 @@ class SportsApp(DisplayApp):
             elif state == "post":
                 if completed_secs <= 0:
                     continue
-                if game_key(game) in superseded_keys:
+                if game_key(game) in expired_final_keys:
                     continue
                 if start is None:
                     result.append(game)
