@@ -67,18 +67,23 @@ _ANIM_FPS = 8                # sprite frames per second
 _PK_FLASH_SECONDS = 5.0      # how long a fresh shootout dot blinks
 _PK_FLASH_HZ = 3             # blink toggles per second while flashing
 
-# Shown in place of a card when the configured leagues/teams have nothing
-# inside the upcoming and completed windows. Without it the module renders an
-# all-black frame, which reads as a broken display rather than "no games".
+# Shown in place of a card when there is nothing to draw. Without it the
+# module renders an all-black frame, which reads as a broken display.
+#
+# Which message matters: "No games" is a claim about the world, and making it
+# while ESPN is unreachable is simply false - the viewer can see there is
+# sport on. So the two cases are named separately, and only a fetch that
+# actually came back empty gets to say there are no games.
 _EMPTY_TEXT = "No games"
+_UNAVAILABLE_TEXT = "Scores unavailable"
 _EMPTY_COLOR: tuple[int, int, int] = (110, 110, 110)  # dim: it is a non-event
 _EMPTY_FONT_MAX = 14
 
 # render_frame() runs every frame for as long as the module is on screen, so
-# the placeholder is composed once per canvas size rather than per frame (the
-# same reasoning as connectivity.py's offline message: per-frame text layout
-# competes with the rgbmatrix GPIO driver on the Pi).
-_empty_cache: dict[tuple[int, int], Image.Image] = {}
+# the placeholder is composed once per (size, message) rather than per frame
+# (the same reasoning as connectivity.py's offline message: per-frame text
+# layout competes with the rgbmatrix GPIO driver on the Pi).
+_empty_cache: dict[tuple[int, int, str], Image.Image] = {}
 
 
 _DEBUG_GAMES: list[dict[str, Any]] = json.loads(
@@ -105,11 +110,11 @@ def _duration_to_seconds(d: Any) -> float:
     return 0.0
 
 
-def _empty_message_image(w: int, h: int) -> Image.Image:
-    img = _empty_cache.get((w, h))
-    if img is not None:
-        return img
-    text = _EMPTY_TEXT
+def _empty_message_image(w: int, h: int, message: str = _EMPTY_TEXT) -> Image.Image:
+    cached = _empty_cache.get((w, h, message))
+    if cached is not None:
+        return cached
+    text = message
     size = _EMPTY_FONT_MAX
     max_text_w = max(6, w - 4)
     while size > 6 and not can_fit_text(max_text_w, size, text):
@@ -123,7 +128,7 @@ def _empty_message_image(w: int, h: int) -> Image.Image:
             text_img,
             (max(0, (w - text_img.width) // 2), max(0, (h - text_img.height) // 2)),
         )
-    _empty_cache[(w, h)] = img
+    _empty_cache[(w, h, message)] = img
     return img
 
 
@@ -289,6 +294,9 @@ class SportsApp(DisplayApp):
         self._user_tz: ZoneInfo | None = None
         self._user_tz_key: tuple[float, float, str] | None = None  # cached (lat, lon, tz) → tz
         self._games: list[dict[str, Any]] = []
+        # Leagues the last fetch could not reach, so an empty screen can say
+        # "scores unavailable" instead of asserting there are no games.
+        self._fetch_failures: list[str] = []
         self._logos: dict[str, Image.Image | None] = {}
 
         # Paginate state
@@ -426,6 +434,7 @@ class SportsApp(DisplayApp):
         game = _DEBUG_GAME_BY_ID.get(self.config.get("debug_game", ""))
         if game:
             self._games = [dict(game)]
+            self._fetch_failures = []
             new_logos = await self._espn.fetch_logos(self._games, (64, 64))
             self._logos.update(new_logos)
             self._marquee_strip = self._build_marquee_strip()
@@ -455,6 +464,7 @@ class SportsApp(DisplayApp):
             days_behind=days_behind,
         )
 
+        self._fetch_failures = self._espn.last_fetch_failures
         self._games = self._filter_by_time_window(self._dedupe_games(games))
 
         self._update_celebrations()
@@ -848,6 +858,19 @@ class SportsApp(DisplayApp):
         self._stagger_slot_idx = list(range(n))
         self._stagger_slot_started_at = [now - i * offset_s for i in range(n)]
 
+    def _empty_message(self) -> str:
+        """What to say when there is no game to draw.
+
+        Only a fetch that actually reached ESPN may claim there are no games.
+        When a league's scores could not be fetched at all, the truthful
+        answer is that they are unknown - a viewer looking at a screen that
+        says "No games" during a full slate of fixtures has been told the
+        display is working when it isn't.
+        """
+        if self._fetch_failures:
+            return _UNAVAILABLE_TEXT
+        return _EMPTY_TEXT
+
     async def should_display(self) -> bool:
         return bool(self._games)
 
@@ -867,11 +890,16 @@ class SportsApp(DisplayApp):
 
     async def render_frame(self) -> None:
         if not self._games:
-            # Nothing qualifies right now. A playlist entry with "skip if
+            # Nothing to draw right now. A playlist entry with "skip if
             # hidden" set never reaches this (should_display() gates it), so
             # whoever gets here asked to keep the module in rotation - say why
             # it is empty rather than showing them an all-black panel.
-            blit(self.canvas, _empty_message_image(self.canvas.width, self.canvas.height))
+            blit(
+                self.canvas,
+                _empty_message_image(
+                    self.canvas.width, self.canvas.height, self._empty_message()
+                ),
+            )
             return
 
         featured_games = self._featured_live_games()

@@ -12,7 +12,9 @@ import asyncio
 import datetime
 from typing import Any
 
-from libraries.espn_sports.library import ESPNSportsLibrary
+import pytest
+
+from libraries.espn_sports.library import ESPNSportsLibrary, ScoresUnavailable
 
 
 class _Resp:
@@ -80,10 +82,15 @@ def test_fetch_failure_serves_cached_games() -> None:
     assert [g["home_abbr"] for g in second] == ["USA"]
 
 
-def test_fetch_failure_without_cache_returns_empty() -> None:
+def test_fetch_failure_without_cache_raises_rather_than_reporting_no_games() -> None:
+    """An unreachable league is not a league with no games on. Returning an
+    empty list conflated the two, and the display then told the viewer there
+    was no sport happening - so the failure is raised for the caller to see.
+    """
     lib = ESPNSportsLibrary({})
     client = _StubClient([RuntimeError("timeout")])
-    assert asyncio.run(lib._fetch_league(client, "fifa.world")) == []
+    with pytest.raises(ScoresUnavailable):
+        asyncio.run(lib._fetch_league(client, "fifa.world"))
 
 
 def test_fetch_retries_once_after_transient_error() -> None:
@@ -103,7 +110,8 @@ def test_fetch_failure_ignores_stale_cache() -> None:
     fetched_at, games = lib._scores_cache["fifa.world"]
     lib._scores_cache["fifa.world"] = (fetched_at - 16 * 60, games)
 
-    assert asyncio.run(lib._fetch_league(client, "fifa.world")) == []
+    with pytest.raises(ScoresUnavailable):
+        asyncio.run(lib._fetch_league(client, "fifa.world"))
 
 
 def _make_app() -> Any:

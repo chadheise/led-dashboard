@@ -50,14 +50,33 @@ _SCORES_FALLBACK_TTL_SECONDS: float = 15 * 60
 _SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 
 # ESPN's scoreboard returns only a couple dozen events per response unless a
-# `limit` is given, silently dropping the rest of a requested date range. 1000
-# is the maximum the endpoint accepts.
+# `limit` is given, silently dropping the rest of a requested date range.
+#
+# The endpoint caps the value it accepts and rejects the request outright
+# rather than clamping, and the cap is undocumented and not ours to pin down
+# from here - so `limit` is treated as a tuning parameter the fetch can do
+# without. Ask for the full slate; if the endpoint refuses, `_fetch_league`
+# drops the parameter, notes the refusal, and stops sending it until
+# `_LIMIT_REPROBE_SECONDS` has passed. Better a truncated slate than the
+# every-league blackout an unconditional `limit` caused.
 _SCOREBOARD_EVENT_LIMIT = 1000
+_LIMIT_REPROBE_SECONDS: float = 3600.0
 
 # One immediate retry absorbs a one-off connection blip (reset, DNS hiccup)
 # without waiting a full refresh cycle and falling back to cached/empty games.
 _FETCH_RETRIES = 1
 _FETCH_RETRY_DELAY_SECONDS = 0.25
+
+
+class ScoresUnavailable(RuntimeError):
+    """A league's scores could not be fetched, and no fresh cache stood in.
+
+    Distinct from a successful fetch that found no games: "nothing is on" and
+    "we could not ask" look identical in a list of games, and the display has
+    to tell the viewer which one it is rather than claiming there is no sport
+    happening. ``fetch_scores`` records these per league (see
+    ``last_fetch_failures``).
+    """
 
 
 def _league_path(league: str) -> str:
@@ -183,6 +202,14 @@ class ESPNSportsLibrary(Library):
         # Reused across fetch cycles so the ~60s refresh loop doesn't pay a
         # fresh TCP/TLS handshake to ESPN every time.
         self._client: httpx.AsyncClient | None = None
+        # Leagues whose scores the last fetch_scores() call could not get at
+        # all, so a caller with no games to show can say whether that means
+        # "nothing is on" or "ESPN is unreachable".
+        self._last_fetch_failures: list[str] = []
+        # When the endpoint last refused our `limit`, so we stop paying a
+        # doomed request every refresh cycle but still re-probe periodically
+        # (the refusal may have been a coincidental outage, or may be fixed).
+        self._limit_refused_at: float | None = None
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -230,13 +257,34 @@ class ESPNSportsLibrary(Library):
             return_exceptions=True,
         )
         all_games: list[dict[str, Any]] = []
+        failed: list[str] = []
         for league, result in zip(all_leagues, results):
             if not isinstance(result, list):
+                # Logged here rather than deeper down so every way a league
+                # can come back unusable - an unreachable endpoint, a raised
+                # ScoresUnavailable, an unexpected error - leaves one line in
+                # the log naming the league and the cause.
+                failed.append(league)
+                logger.warning(
+                    "No scores for %s; it will show as unavailable rather than "
+                    "as having no games (%r)",
+                    league, result,
+                )
                 continue
             if league in favorites_only:
                 result = [g for g in result if self._matches_favorites(g, favorites)]
             all_games.extend(result)
+        self._last_fetch_failures = failed
         return all_games
+
+    @property
+    def last_fetch_failures(self) -> list[str]:
+        """Leagues the last ``fetch_scores`` could not reach at all.
+
+        Non-empty alongside an empty game list means the scores are unknown,
+        not that there are none - see ``ScoresUnavailable``.
+        """
+        return list(self._last_fetch_failures)
 
     async def fetch_teams(self, league: str) -> list[dict[str, Any]]:
         # Disk-backed cache: safe filename from league id (e.g. "eng.1" → "eng_1")
@@ -523,6 +571,48 @@ class ESPNSportsLibrary(Library):
             self._client = httpx.AsyncClient(timeout=_SCOREBOARD_TIMEOUT)
         return self._client
 
+    def _limit_is_worth_asking_for(self) -> bool:
+        """Whether to send ``limit`` on this fetch.
+
+        Suppressed for a while after the endpoint refused it, so a rejected
+        value costs one wasted request an hour rather than one per refresh
+        cycle - and is retried after that, since the refusal may have been a
+        coincidental outage or may since have been fixed.
+        """
+        if self._limit_refused_at is None:
+            return True
+        if time.time() - self._limit_refused_at >= _LIMIT_REPROBE_SECONDS:
+            self._limit_refused_at = None
+            return True
+        return False
+
+    async def _fetch_windows(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        params: dict[str, str],
+        windows: list[tuple[date, date]],
+    ) -> tuple[list[dict[str, Any]], list[BaseException]]:
+        """Request every date window at once, splitting hits from misses.
+
+        One window failing must not take the others down with it, so the
+        payloads that did arrive come back alongside the exceptions that
+        didn't.
+        """
+        results = await asyncio.gather(
+            *[
+                self._get_scoreboard(
+                    client, url, {**params, "dates": f"{start:%Y%m%d}-{end:%Y%m%d}"}
+                )
+                for start, end in windows
+            ],
+            return_exceptions=True,
+        )
+        return (
+            [r for r in results if not isinstance(r, BaseException)],
+            [r for r in results if isinstance(r, BaseException)],
+        )
+
     @staticmethod
     async def _get_scoreboard(
         client: httpx.AsyncClient, url: str, params: dict[str, str]
@@ -657,7 +747,8 @@ class ESPNSportsLibrary(Library):
             params["groups"] = groups
         # ESPN truncates a scoreboard response to a couple dozen events unless
         # `limit` asks for more, and a multi-week range holds many times that.
-        params["limit"] = str(_SCOREBOARD_EVENT_LIMIT)
+        if self._limit_is_worth_asking_for():
+            params["limit"] = str(_SCOREBOARD_EVENT_LIMIT)
         # Without an explicit date range, ESPN's scoreboard endpoint only
         # returns a narrow default window (often just "today"), which can
         # hide most of a tournament's upcoming fixtures (e.g. World Cup).
@@ -674,17 +765,32 @@ class ESPNSportsLibrary(Library):
         windows: list[tuple[date, date]] = [(start_date, today)]
         if end_date > today:
             windows.append((today, end_date))
-        results = await asyncio.gather(
-            *[
-                self._get_scoreboard(
-                    client, url, {**params, "dates": f"{start:%Y%m%d}-{end:%Y%m%d}"}
+
+        payloads, failures = await self._fetch_windows(client, url, params, windows)
+        if not payloads and "limit" in params:
+            # Every window failed the same way. `limit` is a tuning parameter,
+            # not data: the endpoint rejects a value above its cap outright
+            # instead of clamping it, which takes down every league at once
+            # and leaves the module with no scores to show. A truncated
+            # response beats none, so drop `limit` and ask again. The split
+            # windows keep this degradation mild - the recent window is its
+            # own request, so just-finished games still come back in it.
+            logger.warning(
+                "Scoreboard fetch failed for %s in all %d date windows with "
+                "limit=%s (%s); retrying without it",
+                league, len(windows), params["limit"], failures[0],
+            )
+            bare = {k: v for k, v in params.items() if k != "limit"}
+            payloads, failures = await self._fetch_windows(client, url, bare, windows)
+            if payloads:
+                self._limit_refused_at = time.time()
+                logger.warning(
+                    "Scoreboard fetch for %s succeeded without `limit`: the "
+                    "endpoint is refusing limit=%s, so responses are capped at "
+                    "its default and a long date range may be truncated. "
+                    "Dropping `limit` for the next %.0f minutes",
+                    league, _SCOREBOARD_EVENT_LIMIT, _LIMIT_REPROBE_SECONDS / 60,
                 )
-                for start, end in windows
-            ],
-            return_exceptions=True,
-        )
-        payloads = [r for r in results if not isinstance(r, BaseException)]
-        failures = [r for r in results if isinstance(r, BaseException)]
         if not payloads:
             exc = failures[0]
             # A transient API failure must not blank the display: serve the
@@ -695,10 +801,10 @@ class ESPNSportsLibrary(Library):
                     "Scoreboard fetch failed for %s (%s); serving cached games", league, exc
                 )
                 return [dict(g) for g in cached[1]]
-            logger.warning(
-                "Scoreboard fetch failed for %s (%s); no fresh cache available", league, exc
-            )
-            return []
+            # Raise rather than return no games: the caller has to be able to
+            # tell "ESPN is unreachable" from "this league has no games on",
+            # so the display can say which.
+            raise ScoresUnavailable(f"{league}: {exc}") from exc
         if failures:
             logger.warning(
                 "Scoreboard fetch failed for %d of %d date windows of %s (%s); "
