@@ -18,6 +18,7 @@ from marquee import Marquee
 from libraries.canvas_utils.library import blit
 from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
 from libraries.location.library import LocationLibrary
+from libraries.text_renderer.library import can_fit_text, render_text
 from libraries.timezones.library import resolve_zone
 
 from .cards import render_card
@@ -66,6 +67,20 @@ _ANIM_FPS = 8                # sprite frames per second
 _PK_FLASH_SECONDS = 5.0      # how long a fresh shootout dot blinks
 _PK_FLASH_HZ = 3             # blink toggles per second while flashing
 
+# Shown in place of a card when the configured leagues/teams have nothing
+# inside the upcoming and completed windows. Without it the module renders an
+# all-black frame, which reads as a broken display rather than "no games".
+_EMPTY_TEXT = "No games"
+_EMPTY_COLOR: tuple[int, int, int] = (110, 110, 110)  # dim: it is a non-event
+_EMPTY_FONT_MAX = 14
+
+# render_frame() runs every frame for as long as the module is on screen, so
+# the placeholder is composed once per canvas size rather than per frame (the
+# same reasoning as connectivity.py's offline message: per-frame text layout
+# competes with the rgbmatrix GPIO driver on the Pi).
+_empty_cache: dict[tuple[int, int], Image.Image] = {}
+
+
 _DEBUG_GAMES: list[dict[str, Any]] = json.loads(
     (Path(__file__).parent / "debug_games.json").read_text()
 )
@@ -88,6 +103,28 @@ def _duration_to_seconds(d: Any) -> float:
             if k in _UNIT_SECONDS
         )
     return 0.0
+
+
+def _empty_message_image(w: int, h: int) -> Image.Image:
+    img = _empty_cache.get((w, h))
+    if img is not None:
+        return img
+    text = _EMPTY_TEXT
+    size = _EMPTY_FONT_MAX
+    max_text_w = max(6, w - 4)
+    while size > 6 and not can_fit_text(max_text_w, size, text):
+        size -= 1
+    while text and not can_fit_text(max_text_w, size, text):
+        text = text[:-1]
+    img = Image.new("RGB", (w, h))
+    if text:
+        text_img = render_text(text, _EMPTY_COLOR, size)
+        img.paste(
+            text_img,
+            (max(0, (w - text_img.width) // 2), max(0, (h - text_img.height) // 2)),
+        )
+    _empty_cache[(w, h)] = img
+    return img
 
 
 class SportsApp(DisplayApp):
@@ -190,8 +227,9 @@ class SportsApp(DisplayApp):
                 "description": (
                     "How long a final score can stay on screen. It drops off "
                     "sooner at the start of the next day either team has a "
-                    "game — games on the same day (a doubleheader) stay up "
-                    "together for the rest of that day."
+                    "game that is on screen too — games on the same day (a "
+                    "doubleheader) stay up together for the rest of that day, "
+                    "and a result is never retired with nothing to replace it."
                 ),
                 "x-input-type": "duration",
                 "x-duration-units": ["days", "hours", "minutes"],
@@ -647,6 +685,15 @@ class SportsApp(DisplayApp):
         sit confusingly alongside the game still to be played. Days are
         calendar days, so games sharing one never expire each other: both
         halves of a doubleheader stay up for the rest of that day.
+
+        ``games`` must be the games the module is *already* showing (what
+        ``_filter_by_time_window`` kept on its first pass), not the whole
+        fetch. Only a game that is itself on screen may retire a final, which
+        is what keeps this from blanking the display: the newer game that
+        expires a result is always there to take its place. Feeding it the
+        raw fetch instead would let a game the module never displays - an
+        upcoming fixture when "show upcoming games" is off, or one beyond the
+        upcoming window - silently delete the last result on screen.
         """
         tz = tz or self._local_tz()
         today = self._game_day(now, tz)
@@ -707,6 +754,46 @@ class SportsApp(DisplayApp):
             return game
         return {**game, "state": "post"}
 
+    def _within_windows(
+        self,
+        game: dict[str, Any],
+        now: datetime.datetime,
+        next_game_keys: set[str] | None,
+        *,
+        show_upcoming: bool,
+        upcoming_secs: float,
+        completed_secs: float,
+    ) -> bool:
+        """Whether ``game`` falls inside the windows the module displays.
+
+        Everything except final expiry, which needs the full set of games
+        this returns before it can tell which results have been superseded
+        (see ``_expired_final_keys``).
+        """
+        state = game.get("state", "pre")
+        start = self._parse_start(game)
+
+        if state == "in":
+            return True
+
+        if state == "post":
+            if completed_secs <= 0:
+                return False
+            if start is None:
+                return True
+            approx_end = start + datetime.timedelta(hours=4)
+            return (now - approx_end).total_seconds() <= completed_secs
+
+        if state == "pre" and show_upcoming:
+            if next_game_keys is not None:
+                return game_key(game) in next_game_keys
+            if start is None:
+                return True
+            secs_until = (start - now).total_seconds()
+            return -_PRE_START_GRACE_SECONDS <= secs_until <= upcoming_secs
+
+        return False
+
     def _filter_by_time_window(
         self, games: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
@@ -729,42 +816,28 @@ class SportsApp(DisplayApp):
         next_game_keys = (
             self._next_game_per_team_keys(games, now, tz) if next_game_mode else None
         )
-        expired_final_keys = self._expired_final_keys(games, now, tz)
 
-        result: list[dict[str, Any]] = []
-        for game in games:
-            state = game.get("state", "pre")
-            start = self._parse_start(game)
+        # Pass 1: the games the module shows, before any final is retired.
+        shown = [
+            game
+            for game in games
+            if self._within_windows(
+                game,
+                now,
+                next_game_keys,
+                show_upcoming=show_upcoming,
+                upcoming_secs=upcoming_secs,
+                completed_secs=completed_secs,
+            )
+        ]
 
-            if state == "in":
-                result.append(game)
-
-            elif state == "post":
-                if completed_secs <= 0:
-                    continue
-                if game_key(game) in expired_final_keys:
-                    continue
-                if start is None:
-                    result.append(game)
-                    continue
-                approx_end = start + datetime.timedelta(hours=4)
-                elapsed = (now - approx_end).total_seconds()
-                if elapsed <= completed_secs:
-                    result.append(game)
-
-            elif state == "pre" and show_upcoming:
-                if next_game_keys is not None:
-                    if game_key(game) in next_game_keys:
-                        result.append(game)
-                    continue
-                if start is None:
-                    result.append(game)
-                    continue
-                secs_until = (start - now).total_seconds()
-                if -_PRE_START_GRACE_SECONDS <= secs_until <= upcoming_secs:
-                    result.append(game)
-
-        return result
+        # Pass 2: retire the results the screen has moved past. Only the games
+        # kept by pass 1 get a say, so whatever expires a final is on screen
+        # in its place - a fixture the module isn't showing (upcoming games
+        # switched off, or a game beyond the upcoming window) can no longer
+        # take down the last result and leave the module blank.
+        expired_final_keys = self._expired_final_keys(shown, now, tz)
+        return [game for game in shown if game_key(game) not in expired_final_keys]
 
     def _init_stagger_state(self) -> None:
         n = self._active_slot_count()
@@ -794,7 +867,12 @@ class SportsApp(DisplayApp):
 
     async def render_frame(self) -> None:
         if not self._games:
-            return  # blank canvas — scene manager has already cleared it
+            # Nothing qualifies right now. A playlist entry with "skip if
+            # hidden" set never reaches this (should_display() gates it), so
+            # whoever gets here asked to keep the module in rotation - say why
+            # it is empty rather than showing them an all-black panel.
+            blit(self.canvas, _empty_message_image(self.canvas.width, self.canvas.height))
+            return
 
         featured_games = self._featured_live_games()
         if featured_games:

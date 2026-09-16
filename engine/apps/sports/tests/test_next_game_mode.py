@@ -389,3 +389,104 @@ def test_doubleheader_day_shows_finished_live_and_next_game() -> None:
     ]
     kept = {g["id"] for g in app._filter_by_time_window(games)}
     assert kept == {"dh_1", "dh_2", "tomorrow"}
+
+
+# ── A final is only ever retired by a game that is on screen too ──────────
+#
+# Expiring a result at the start of the next game day used to consult the
+# whole fetch, including fixtures the module was never going to display. A
+# team with a game later today therefore lost last night's score at local
+# midnight even when that upcoming game was filtered out, which left the
+# module with nothing to draw - an all-black panel that reads as a broken
+# display. Only the games kept by the window pass may retire a final now, so
+# whatever supersedes a result is on screen in its place.
+#
+# These run on a frozen clock: the scenario turns on "later today, but not
+# yet played", which a wall-clock "now" cannot express at every hour of the
+# day (near midnight UTC there is no such slot left).
+
+# Midday, so both "earlier today" and "later today" exist either side of it.
+_NOON = datetime.datetime(2026, 6, 10, 12, 0, tzinfo=datetime.timezone.utc)
+_LAST_NIGHT = _NOON - datetime.timedelta(hours=13)   # 23:00 the day before
+_TONIGHT = _NOON + datetime.timedelta(hours=11)      # 23:00 the same day
+
+
+def _frozen_filter(app: Any, games: list[dict[str, Any]]) -> set[str]:
+    """``_filter_by_time_window`` with the app's clock pinned to ``_NOON``."""
+    from tests.framework.clock import frozen_time
+
+    with frozen_time("apps.sports.app.datetime.datetime", _NOON):
+        return {g["id"] for g in app._filter_by_time_window(games)}
+
+
+def _last_night_and_tonight() -> list[dict[str, Any]]:
+    return [
+        _game("last_night", "mlb", "SEA", "OAK", _LAST_NIGHT, "post"),
+        _pre_game("tonight", "mlb", "SEA", "TEX", _TONIGHT),
+    ]
+
+
+def test_upcoming_game_does_not_retire_a_final_when_upcoming_is_off() -> None:
+    """With "show upcoming games" off, tonight's fixture is not on screen, so
+    it must not take last night's result down with it - that combination used
+    to leave the module with nothing at all to render."""
+    app = _make_app(
+        {
+            "favorite_teams": ["mlb:SEA"],
+            "show_upcoming_games": False,
+            "completed_game_window": {"days": 7},
+        }
+    )
+    assert _frozen_filter(app, _last_night_and_tonight()) == {"last_night"}
+
+
+def test_upcoming_game_beyond_the_window_does_not_retire_a_final() -> None:
+    """In window mode a fixture outside the upcoming window is not displayed
+    either, so it cannot expire the last result."""
+    app = _make_app(
+        {
+            "favorite_teams": ["mlb:SEA"],
+            "upcoming_game_mode": "window",
+            "upcoming_game_window": {"hours": 2},  # tonight's game is 11h out
+            "completed_game_window": {"days": 7},
+        }
+    )
+    assert _frozen_filter(app, _last_night_and_tonight()) == {"last_night"}
+
+
+def test_a_displayed_upcoming_game_still_retires_the_final() -> None:
+    """The flip side, and the behaviour this must not regress: when tonight's
+    game *is* on screen it retires last night's result, so a final and the
+    upcoming card for the same matchup are never shown side by side."""
+    app = _make_app(
+        {"favorite_teams": ["mlb:SEA"], "completed_game_window": {"days": 7}}
+    )
+    assert _frozen_filter(app, _last_night_and_tonight()) == {"tonight"}
+
+
+def test_final_expiry_never_empties_a_non_empty_screen() -> None:
+    """The invariant behind the fix, across every upcoming-games setting: if
+    anything survives the time windows, something survives final expiry."""
+    configs = [
+        {},
+        {"show_upcoming_games": False},
+        {"upcoming_game_mode": "window"},
+        {"upcoming_game_mode": "window", "upcoming_game_window": {"hours": 1}},
+    ]
+    for extra in configs:
+        app = _make_app(
+            {
+                "favorite_teams": ["mlb:SEA"],
+                "completed_game_window": {"days": 7},
+                **extra,
+            }
+        )
+        games = [
+            # Two finals inside the 7-day completed window, so the window pass
+            # always hands final expiry something to work with.
+            _game("two_nights_ago", "mlb", "SEA", "OAK",
+                  _LAST_NIGHT - datetime.timedelta(days=1), "post"),
+            _game("last_night", "mlb", "SEA", "TEX", _LAST_NIGHT, "post"),
+            _pre_game("tonight", "mlb", "SEA", "LAA", _TONIGHT),
+        ]
+        assert _frozen_filter(app, games), f"expiry emptied the screen: {extra}"
