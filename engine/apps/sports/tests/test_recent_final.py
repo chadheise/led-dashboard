@@ -2,16 +2,16 @@
 
 End-to-end over ``fetch_data``: an NFL favorite whose game ended a few hours
 ago, with the default "next game per team" mode looking a month ahead. ESPN
-returns only part of a wide date range, so the recent games and the
-look-ahead have to be fetched as separate windows - otherwise the month of
-upcoming fixtures crowds the final score out of the response and the module
-shows nothing but the next scheduled game.
+returns only part of an over-long span, so the fetch asks a calendar month at
+a time - otherwise the month of upcoming fixtures crowds the final score out
+of the response and the module shows nothing but the next scheduled game.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime
+import re
 from typing import Any
 
 _DEFAULT_RESPONSE_CAP = 25  # what ESPN returns when a request omits `limit`
@@ -50,11 +50,14 @@ def _nfl_season(now: datetime.datetime) -> list[dict[str, Any]]:
 
 async def _espn_scoreboard(events: list[dict[str, Any]]):
     async def get(_client: Any, _url: str, params: dict[str, str]) -> dict[str, Any]:
-        start_raw, _, end_raw = params["dates"].partition("-")
-        start = datetime.datetime.strptime(start_raw, "%Y%m%d").replace(tzinfo=datetime.timezone.utc)
-        end = datetime.datetime.strptime(end_raw, "%Y%m%d").replace(
-            tzinfo=datetime.timezone.utc
-        ) + datetime.timedelta(days=1)
+        # ESPN's `dates` takes one YYYYMM; a range is rejected outright.
+        dates = params["dates"]
+        assert re.fullmatch(r"\d{6}", dates), f"unsupported dates value: {dates}"
+        year, month = int(dates[:4]), int(dates[4:])
+        start = datetime.datetime(year, month, 1, tzinfo=datetime.timezone.utc)
+        end = datetime.datetime(
+            year + (month == 12), (month % 12) + 1, 1, tzinfo=datetime.timezone.utc
+        )
         matched = [
             e
             for e in events

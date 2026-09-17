@@ -52,15 +52,13 @@ _SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 # ESPN's scoreboard returns only a couple dozen events per response unless a
 # `limit` is given, silently dropping the rest of a requested date range.
 #
-# The endpoint caps the value it accepts and rejects the request outright
-# rather than clamping, and the cap is undocumented and not ours to pin down
-# from here - so `limit` is treated as a tuning parameter the fetch can do
-# without. Ask for the full slate; if the endpoint refuses, `_fetch_league`
-# drops the parameter, notes the refusal, and stops sending it until
-# `_LIMIT_REPROBE_SECONDS` has passed. Better a truncated slate than the
-# every-league blackout an unconditional `limit` caused.
-_SCOREBOARD_EVENT_LIMIT = 1000
-_LIMIT_REPROBE_SECONDS: float = 3600.0
+# 500 is the largest value the endpoint honours. It does not clamp or reject
+# a larger one: it quietly ignores the parameter and serves the endpoint's
+# small default instead, which reads as "this league barely has a slate on"
+# rather than as an error. Measured against the live endpoint - one day of
+# college football returns 80 events up to limit=500 and 25 from 510 on.
+# Raise this only against a re-measured cap.
+_SCOREBOARD_EVENT_LIMIT = 500
 
 # One immediate retry absorbs a one-off connection blip (reset, DNS hiccup)
 # without waiting a full refresh cycle and falling back to cached/empty games.
@@ -87,6 +85,22 @@ def _league_path(league: str) -> str:
     """
     entry = _LEAGUE_BY_ID.get(league)
     return entry["league"] if entry else league
+
+
+def _month_windows(start: date, end: date) -> list[str]:
+    """``dates`` values covering every calendar month from ``start`` to ``end``.
+
+    ESPN's scoreboard ``dates`` takes a single YYYY, YYYYMM or YYYYMMDD - a
+    YYYYMMDD-YYYYMMDD range is rejected with HTTP 400. A month per request
+    covers an arbitrary span in one or two calls, at the cost of a few games
+    either side of it that the caller filters out.
+    """
+    windows: list[str] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        windows.append(f"{year:04d}{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return windows
 
 
 def _flag_url(abbr: str) -> str | None:
@@ -206,10 +220,6 @@ class ESPNSportsLibrary(Library):
         # all, so a caller with no games to show can say whether that means
         # "nothing is on" or "ESPN is unreachable".
         self._last_fetch_failures: list[str] = []
-        # When the endpoint last refused our `limit`, so we stop paying a
-        # doomed request every refresh cycle but still re-probe periodically
-        # (the refusal may have been a coincidental outage, or may be fixed).
-        self._limit_refused_at: float | None = None
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -571,27 +581,12 @@ class ESPNSportsLibrary(Library):
             self._client = httpx.AsyncClient(timeout=_SCOREBOARD_TIMEOUT)
         return self._client
 
-    def _limit_is_worth_asking_for(self) -> bool:
-        """Whether to send ``limit`` on this fetch.
-
-        Suppressed for a while after the endpoint refused it, so a rejected
-        value costs one wasted request an hour rather than one per refresh
-        cycle - and is retried after that, since the refusal may have been a
-        coincidental outage or may since have been fixed.
-        """
-        if self._limit_refused_at is None:
-            return True
-        if time.time() - self._limit_refused_at >= _LIMIT_REPROBE_SECONDS:
-            self._limit_refused_at = None
-            return True
-        return False
-
     async def _fetch_windows(
         self,
         client: httpx.AsyncClient,
         url: str,
         params: dict[str, str],
-        windows: list[tuple[date, date]],
+        windows: list[str],
     ) -> tuple[list[dict[str, Any]], list[BaseException]]:
         """Request every date window at once, splitting hits from misses.
 
@@ -601,10 +596,8 @@ class ESPNSportsLibrary(Library):
         """
         results = await asyncio.gather(
             *[
-                self._get_scoreboard(
-                    client, url, {**params, "dates": f"{start:%Y%m%d}-{end:%Y%m%d}"}
-                )
-                for start, end in windows
+                self._get_scoreboard(client, url, {**params, "dates": window})
+                for window in windows
             ],
             return_exceptions=True,
         )
@@ -746,50 +739,37 @@ class ESPNSportsLibrary(Library):
         if groups:
             params["groups"] = groups
         # ESPN truncates a scoreboard response to a couple dozen events unless
-        # `limit` asks for more, and a multi-week range holds many times that.
-        if self._limit_is_worth_asking_for():
-            params["limit"] = str(_SCOREBOARD_EVENT_LIMIT)
-        # Without an explicit date range, ESPN's scoreboard endpoint only
-        # returns a narrow default window (often just "today"), which can
-        # hide most of a tournament's upcoming fixtures (e.g. World Cup).
+        # `limit` asks for more, and a month of fixtures is many times that.
+        params["limit"] = str(_SCOREBOARD_EVENT_LIMIT)
+        # Without an explicit `dates`, ESPN's scoreboard endpoint only returns
+        # a narrow default window (often just "today"), which can hide most of
+        # a tournament's upcoming fixtures (e.g. World Cup).
         today = datetime.now(timezone.utc).date()
         start_date = today - timedelta(days=max(0, days_behind))
         end_date = today + timedelta(days=max(0, days_ahead))
-        # The recent window gets its own request rather than being folded into
-        # one range with the look-ahead. "Next game per team" looks a month
-        # ahead, which is far more fixtures than a single truncated response
-        # returns, and the just-finished games sitting at the start of that
-        # range are exactly what the completed-score card needs. Splitting the
-        # two keeps a wide look-ahead from crowding them out (and a failure of
-        # one window from taking the other down with it).
-        windows: list[tuple[date, date]] = [(start_date, today)]
-        if end_date > today:
-            windows.append((today, end_date))
+        # One request per calendar month the span touches. ESPN's `dates`
+        # accepts YYYY, YYYYMM or YYYYMMDD - but not the YYYYMMDD-YYYYMMDD
+        # range it once did: a range now fails the request outright (HTTP 400,
+        # "Failed to get events endpoint") for every league, which is what took
+        # the whole module down. Months keep the request count at one or two
+        # per league however wide the look-ahead, and cost only some games
+        # outside the span, which `_filter_by_time_window` drops anyway.
+        #
+        # A month is also small enough to stay clear of the event cap on its
+        # own - the busiest we measured is an MLB month at ~430 of the 500 -
+        # so a wide look-ahead can't crowd just-finished games out of the
+        # response the completed-score card needs. One month failing leaves
+        # the others standing.
+        windows = _month_windows(start_date, end_date)
 
         payloads, failures = await self._fetch_windows(client, url, params, windows)
-        if not payloads and "limit" in params:
-            # Every window failed the same way. `limit` is a tuning parameter,
-            # not data: the endpoint rejects a value above its cap outright
-            # instead of clamping it, which takes down every league at once
-            # and leaves the module with no scores to show. A truncated
-            # response beats none, so drop `limit` and ask again. The split
-            # windows keep this degradation mild - the recent window is its
-            # own request, so just-finished games still come back in it.
-            logger.warning(
-                "Scoreboard fetch failed for %s in all %d date windows with "
-                "limit=%s (%s); retrying without it",
-                league, len(windows), params["limit"], failures[0],
-            )
-            bare = {k: v for k, v in params.items() if k != "limit"}
-            payloads, failures = await self._fetch_windows(client, url, bare, windows)
-            if payloads:
-                self._limit_refused_at = time.time()
+        for payload in payloads:
+            if len(payload.get("events") or []) >= _SCOREBOARD_EVENT_LIMIT:
                 logger.warning(
-                    "Scoreboard fetch for %s succeeded without `limit`: the "
-                    "endpoint is refusing limit=%s, so responses are capped at "
-                    "its default and a long date range may be truncated. "
-                    "Dropping `limit` for the next %.0f minutes",
-                    league, _SCOREBOARD_EVENT_LIMIT, _LIMIT_REPROBE_SECONDS / 60,
+                    "Scoreboard response for %s came back at the %d-event cap; "
+                    "some of that month's games are missing. Narrow the window "
+                    "or request shorter spans than a month",
+                    league, _SCOREBOARD_EVENT_LIMIT,
                 )
         if not payloads:
             exc = failures[0]
