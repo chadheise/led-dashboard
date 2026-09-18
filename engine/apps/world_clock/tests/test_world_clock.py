@@ -1,6 +1,6 @@
 """Unit tests for the world_clock config handling: per-city colors, the
-any-city typeahead options, and backward compatibility with the legacy
-bare-timezone city list."""
+any-city typeahead options, the local clock's label, and backward
+compatibility with the legacy bare-timezone city list."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import asyncio
 from typing import Any
 
 from canvas.simulator import SimulatorCanvas
+from libraries.location.library import LocationLibrary
 
 from apps.world_clock.app import WorldClockApp, _parse_city_item
 
@@ -155,3 +156,93 @@ def test_legacy_text_color_still_applies_when_no_local_color():
     asyncio.run(app.fetch_data())
     asyncio.run(app.render_frame())
     assert _has_color(app, (255, 0, 0))
+
+
+# ── Local clock label ────────────────────────────────────────────────────────
+
+
+def _make_app_with_location(location: dict[str, Any]) -> WorldClockApp:
+    async def _noop(_frame: bytes) -> None:
+        pass
+
+    return WorldClockApp(
+        {"show_local": True, "cities": []},
+        SimulatorCanvas(128, 64, _noop),
+        {},
+        {"location": {"location": location}},
+    )
+
+
+def test_local_label_uses_configured_location_name():
+    # Seattle shares America/Los_Angeles with Los Angeles; the home location's
+    # own name must win over the timezone's representative city. No network:
+    # the stored name is enough, so the reverse-geocode is never reached.
+    app = _make_app_with_location({
+        "latitude": 47.6062,
+        "longitude": -122.3321,
+        "name": "Seattle, WA, United States",
+        "timezone": "America/Los_Angeles",
+    })
+    asyncio.run(app.fetch_data())
+
+    assert app._entries == [("America/Los_Angeles", "Seattle", None)]
+
+
+def test_local_label_falls_back_to_reverse_geocode_without_a_stored_name():
+    # A pin dropped on the map has coordinates but no name.
+    app = _make_app_with_location({
+        "latitude": 47.6062,
+        "longitude": -122.3321,
+        "timezone": "America/Los_Angeles",
+    })
+
+    async def _fake_city_country(self: Any) -> dict[str, str]:
+        return {"city": "Tacoma", "country": "United States"}
+
+    orig = LocationLibrary.get_city_country
+    LocationLibrary.get_city_country = _fake_city_country  # type: ignore[method-assign]
+    try:
+        asyncio.run(app.fetch_data())
+    finally:
+        LocationLibrary.get_city_country = orig  # type: ignore[method-assign]
+
+    assert app._entries == [("America/Los_Angeles", "Tacoma", None)]
+
+
+def test_local_label_falls_back_to_timezone_city_when_geocode_fails():
+    # Offline / rate-limited Nominatim: the timezone's city is the last resort.
+    app = _make_app_with_location({
+        "latitude": 47.6062,
+        "longitude": -122.3321,
+        "timezone": "America/Los_Angeles",
+    })
+
+    async def _failing_city_country(self: Any) -> dict[str, str]:
+        raise RuntimeError("no network")
+
+    orig = LocationLibrary.get_city_country
+    LocationLibrary.get_city_country = _failing_city_country  # type: ignore[method-assign]
+    try:
+        asyncio.run(app.fetch_data())
+    finally:
+        LocationLibrary.get_city_country = orig  # type: ignore[method-assign]
+
+    assert app._entries == [("America/Los_Angeles", "Los Angeles", None)]
+
+
+def test_local_label_refreshes_when_the_location_name_changes():
+    # The name can be backfilled or edited without the pin moving; the cached
+    # label must not survive that.
+    location = {
+        "latitude": 47.6062,
+        "longitude": -122.3321,
+        "name": "Seattle, WA, United States",
+        "timezone": "America/Los_Angeles",
+    }
+    app = _make_app_with_location(location)
+    asyncio.run(app.fetch_data())
+    assert app._entries == [("America/Los_Angeles", "Seattle", None)]
+
+    location["name"] = "Bellevue, WA, United States"
+    asyncio.run(app.fetch_data())
+    assert app._entries == [("America/Los_Angeles", "Bellevue", None)]

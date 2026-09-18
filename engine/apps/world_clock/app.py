@@ -177,7 +177,7 @@ class WorldClockApp(DisplayApp):
         self._entries: list[ClockEntry] = []
         self._home_tz: str | None = None
         self._fetched_once: bool = False
-        self._local_key: tuple[float, float] | None = None
+        self._local_key: tuple[float, float, str] | None = None
         self._local_entry: tuple[str, str] | None = None
         self._page_idx: int = 0
         self._page_last_ts: float = time.monotonic()
@@ -213,15 +213,26 @@ class WorldClockApp(DisplayApp):
     async def _resolve_local(self) -> tuple[str, str] | None:
         """Resolve (timezone, label) for the user's home location.
 
-        Cached by (lat, lon) so the network-bound reverse-geocode in
+        The label is the home location's own city, never the timezone's
+        representative city: a viewer in Seattle must not be labelled "Los
+        Angeles" just because both share ``America/Los_Angeles``. Sources, in
+        order of trust: the name the Location library already stores for the
+        picked location, then a reverse-geocode for pins dropped on the map
+        without one, and only as a last resort the timezone's city.
+
+        Cached by (lat, lon, name) so the network-bound reverse-geocode in
         `get_city_country` only runs when the location actually changes —
         mirrors `_get_user_tz` in `apps/sports/app.py`.
         """
         lib_loc = self.library_configs.get("location", {}).get("location", {})
-        lat = float(lib_loc.get("latitude", 0.0)) if isinstance(lib_loc, dict) else 0.0
-        lon = float(lib_loc.get("longitude", 0.0)) if isinstance(lib_loc, dict) else 0.0
+        if not isinstance(lib_loc, dict):
+            lib_loc = {}
+        lat = float(lib_loc.get("latitude", 0.0))
+        lon = float(lib_loc.get("longitude", 0.0))
+        stored_name = lib_loc.get("name")
+        stored_name = stored_name.strip() if isinstance(stored_name, str) else ""
 
-        key = (lat, lon)
+        key = (lat, lon, stored_name)
         if key == self._local_key:
             return self._local_entry
 
@@ -236,14 +247,17 @@ class WorldClockApp(DisplayApp):
             self._local_entry = None
             return None
 
-        label = city_name(tz_name)
-        try:
-            city_country = await location_lib.get_city_country()
-            city = city_country.get("city", "")
-            if city:
-                label = city
-        except Exception as exc:
-            logger.warning("Reverse geocode for local clock failed: %s", exc)
+        # The picker stores "City, ST, Country"; the display only has room for
+        # the city, so strip the suffix the same way configured cities do.
+        label = _city_only(stored_name) if stored_name else ""
+        if not label:
+            try:
+                city_country = await location_lib.get_city_country()
+                label = city_country.get("city", "") or ""
+            except Exception as exc:
+                logger.warning("Reverse geocode for local clock failed: %s", exc)
+        if not label:
+            label = city_name(tz_name)
 
         self._local_entry = (tz_name, label)
         return self._local_entry
