@@ -49,10 +49,27 @@ _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 # approximate game length used for completed games.
 _PRE_START_GRACE_SECONDS = 4 * 3600
 
-# "Next game per team" mode doesn't have a user-configured window, so the ESPN
-# fetch itself needs to look far enough ahead to find each team's next game
-# even across a bye week or short break between fixtures.
-_NEXT_GAME_FETCH_DAYS = 30
+# "Next game per team" mode has no user-configured window, so the horizon is
+# fixed here: a team's next game counts only if it falls within the next two
+# weeks and a bit. That covers every real gap between fixtures - a bye week
+# puts a team's next game 14 days out, and nothing in a season's schedule is
+# further than that - while keeping the mode honest about what it is for.
+#
+# The cap is what stops a team the module can only see *part* of the schedule
+# for from dragging a game weeks out onto the screen. Plenty of teams are
+# visible only in passing: an FCS side that appears in the college-football
+# scoreboard once all season, when it visits an FBS team; a non-conference
+# opponent showing up in a single game of a conference-filtered feed; an
+# unranked team in a top-25 feed. That one appearance looks exactly like
+# "this team's next game" to a rule that only knows the games it was given,
+# so without a horizon, a whole-league selection quietly fills up with
+# fixtures a month and more away.
+_NEXT_GAME_MAX_DAYS = 15
+
+# The fetch looks one day past the horizon, so a game right at the edge of it
+# is decided by the horizon rather than lost to the fetch span (the two are
+# measured differently: calendar days there, a UTC date range here).
+_NEXT_GAME_FETCH_DAYS = _NEXT_GAME_MAX_DAYS + 1
 
 # A game stuck reporting "in" for longer than any real match (extra time,
 # rain delays, etc. included) is a stale/glitched ESPN feed, not a live game.
@@ -211,7 +228,8 @@ class SportsApp(DisplayApp):
                     "\"Next game per team\" shows only each team's next "
                     "game — one per team in each selected league, plus one per "
                     "favorite team, and both games of a doubleheader when a "
-                    "team plays twice on the same day. \"Time window\" shows "
+                    "team plays twice on the same day. Games more than two "
+                    "weeks out are left off. \"Time window\" shows "
                     "every upcoming game within the window below."
                 ),
                 "enum": ["next_game", "window"],
@@ -465,7 +483,9 @@ class SportsApp(DisplayApp):
         )
 
         self._fetch_failures = self._espn.last_fetch_failures
-        self._games = self._filter_by_time_window(self._dedupe_games(games))
+        self._games = self._display_order(
+            self._filter_by_time_window(self._dedupe_games(games))
+        )
 
         self._update_celebrations()
         self._update_pk_flashes()
@@ -650,9 +670,15 @@ class SportsApp(DisplayApp):
         team appearing in a selected league's games, plus every favorite
         (see ``_favorites_by_league``). A game shared by two qualifying teams
         (e.g. two favorites playing each other) is naturally included once.
+
+        Only games inside ``_NEXT_GAME_MAX_DAYS`` are eligible at all. A game
+        further out than that isn't "the next game" in any useful sense, and
+        counting it would let a team whose schedule the fetch can only see a
+        sliver of put a fixture weeks away on screen (see the constant).
         """
         tz = tz or self._local_tz()
         favorites_by_league = self._favorites_by_league()
+        horizon = self._game_day(now, tz) + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS)
 
         first_day: dict[tuple[str, str], datetime.date] = {}
         candidates: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
@@ -664,6 +690,8 @@ class SportsApp(DisplayApp):
                 continue
             secs_until = (start - now).total_seconds()
             if secs_until < -_PRE_START_GRACE_SECONDS:
+                continue
+            if self._game_day(start, tz) > horizon:
                 continue
             teams = self._qualifying_teams(game, favorites_by_league)
             if not teams:
@@ -848,6 +876,36 @@ class SportsApp(DisplayApp):
         # take down the last result and leave the module blank.
         expired_final_keys = self._expired_final_keys(shown, now, tz)
         return [game for game in shown if game_key(game) not in expired_final_keys]
+
+    def _display_order(self, games: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Games in the order the cards should rotate through them.
+
+        Live games first, then the most recent results, then the soonest
+        fixtures. Order matters more than it looks: the module restarts at
+        the first card every time the playlist brings it back on screen
+        (``on_activate``), so with a league-sized slate - a Saturday of
+        college football is a hundred-odd games - only the front of the list
+        is ever actually seen. Left in ESPN's payload order, which is neither
+        documented nor chronological across a multi-window fetch, that front
+        can be next month's fixtures while today's final scores sit at the
+        back, never reached.
+
+        Sorting is stable, so games that tie (a slate all kicking off at
+        once) keep the order they were fetched in.
+        """
+        def key(game: dict[str, Any]) -> tuple[int, float]:
+            state = game.get("state", "pre")
+            start = self._parse_start(game)
+            stamp = start.timestamp() if start is not None else 0.0
+            if state == "in":
+                return (0, 0.0)
+            if state == "post":
+                # Most recently finished first: today's results before
+                # yesterday's, which is the order a viewer scans them in.
+                return (1, -stamp)
+            return (2, stamp if start is not None else float("inf"))
+
+        return sorted(games, key=key)
 
     def _init_stagger_state(self) -> None:
         n = self._active_slot_count()

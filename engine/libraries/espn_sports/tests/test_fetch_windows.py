@@ -10,12 +10,19 @@ the way the endpoint does, so that can't pass silently again.
 So the fetch asks one month at a time, merged and deduped, and asks for the
 full slate with ``limit`` - which the endpoint honours up to 500 and quietly
 ignores above that, serving its small default instead.
+
+A month is not always under that cap. College football carries every division
+on a Saturday, and a month of them runs past 500 events, at which point ESPN
+serves a silently truncated response - whole days of it simply missing, with
+no indication of which. Any month that comes back at the cap is therefore
+re-asked one day at a time, where no league comes close to it.
 """
 
 from __future__ import annotations
 
 import asyncio
 import re
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -44,6 +51,11 @@ _DEFAULT_RESPONSE_CAP = 25
 _MAX_ACCEPTED_LIMIT = 500
 
 
+def _day_bounds(token: str) -> tuple[datetime, datetime]:
+    start = datetime(int(token[:4]), int(token[4:6]), int(token[6:]), tzinfo=timezone.utc)
+    return start, start + timedelta(days=1)
+
+
 def _month_bounds(token: str) -> tuple[datetime, datetime]:
     year, month = int(token[:4]), int(token[4:])
     start = datetime(year, month, 1, tzinfo=timezone.utc)
@@ -70,10 +82,10 @@ class _Recorder:
     ) -> dict[str, Any]:
         self.calls.append(dict(params))
         dates = params["dates"]
-        if not re.fullmatch(r"\d{6}", dates):
+        if not re.fullmatch(r"\d{6}|\d{8}", dates):
             # The endpoint's own answer to a range or any other shape.
             raise RuntimeError(f"HTTP 400: Failed to get events endpoint (dates={dates})")
-        start, end = _month_bounds(dates)
+        start, end = _month_bounds(dates) if len(dates) == 6 else _day_bounds(dates)
         matched = [
             e
             for e in self._events
@@ -129,7 +141,8 @@ def test_dates_is_never_sent_as_a_range() -> None:
     _fetch(lib, days_ahead=30, days_behind=1)
 
     assert recorder.calls, "expected at least one scoreboard request"
-    assert all(re.fullmatch(r"\d{6}", c["dates"]) for c in recorder.calls)
+    # A month (YYYYMM) or a single day (YYYYMMDD) - never a range.
+    assert all(re.fullmatch(r"\d{6}|\d{8}", c["dates"]) for c in recorder.calls)
 
 
 def test_every_request_asks_for_the_full_slate_within_the_cap() -> None:
@@ -228,3 +241,124 @@ def test_all_windows_failing_falls_back_to_the_cached_games() -> None:
     lib._get_scoreboard = always_fails  # type: ignore[method-assign]
 
     assert [g["id"] for g in _fetch(lib, days_ahead=30, days_behind=1)] == ["cached"]
+
+
+# A mid-month day, so a short span around it can't straddle a month boundary
+# and split the dense slate across two (individually uncapped) responses.
+_FROZEN_NOW = datetime(2026, 9, 19, 20, 0, tzinfo=timezone.utc)
+
+
+@contextmanager
+def _frozen_clock() -> Any:
+    """Pin the fetch's idea of today, so the span under test is fixed."""
+    from libraries.espn_sports import library
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return _FROZEN_NOW if tz else _FROZEN_NOW.replace(tzinfo=None)
+
+    real = library.datetime
+    library.datetime = _Clock  # type: ignore[misc]
+    try:
+        yield
+    finally:
+        library.datetime = real  # type: ignore[misc]
+
+
+def _dense_month_events() -> list[dict[str, Any]]:
+    """More events in this month than one response can carry.
+
+    Modelled on a college-football month: a slate heavy enough to run past
+    the cap, and one just-finished game that the display needs - listed
+    first, so a response truncated from either end can drop it.
+    """
+    events = [_event("final", _FROZEN_NOW - timedelta(hours=6), "post", "UGA", "BAMA")]
+    # Enough to push the month past the cap within the fetched span alone.
+    events += [
+        _event(f"pad{i}", _FROZEN_NOW + timedelta(hours=1 + (i % 40)), "pre", "SEA", "SF")
+        for i in range(_SCOREBOARD_EVENT_LIMIT + 50)
+    ]
+    return events
+
+
+def test_a_month_over_the_event_cap_is_re_asked_day_by_day() -> None:
+    """The regression: a capped month is silently short, and the games it
+    drops can be the ones that just finished."""
+    lib = _library()
+    recorder = _Recorder(_dense_month_events())
+    lib._get_scoreboard = recorder  # type: ignore[method-assign]
+
+    with _frozen_clock():
+        games = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+
+    day_calls = [c["dates"] for c in recorder.calls if len(c["dates"]) == 8]
+    # The span is today-1 .. today+2, so four days and not the whole month.
+    assert day_calls == ["20260918", "20260919", "20260920", "20260921"]
+    assert "final" in {g["id"] for g in games}
+
+
+def test_a_capped_month_is_not_re_downloaded_every_refresh() -> None:
+    """Once a month is known to be over the cap, the truncated response it
+    would serve is worth nothing and costs the largest download of the fetch."""
+    lib = _library()
+    recorder = _Recorder(_dense_month_events())
+    lib._get_scoreboard = recorder  # type: ignore[method-assign]
+
+    with _frozen_clock():
+        asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+        recorder.calls.clear()
+        games = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+
+    assert "202609" not in [c["dates"] for c in recorder.calls]
+    # The days still cover the span, so the fetch is no poorer for it.
+    assert "final" in {g["id"] for g in games}
+
+
+def test_a_capped_month_whose_day_windows_all_fail_keeps_what_it_had() -> None:
+    """A truncated month still carries real games: losing the day re-ask must
+    not cost the display what the month did return."""
+    lib = _library()
+    served = _Recorder(_dense_month_events())
+
+    async def days_fail(client: Any, url: str, params: dict[str, str]) -> dict[str, Any]:
+        if len(params["dates"]) == 8:
+            raise RuntimeError("day window failed")
+        return await served(client, url, params)
+
+    lib._get_scoreboard = days_fail  # type: ignore[method-assign]
+
+    with _frozen_clock():
+        games = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+
+    assert len(games) == _SCOREBOARD_EVENT_LIMIT
+
+
+def test_day_windows_cover_only_the_requested_span() -> None:
+    from datetime import date
+
+    from libraries.espn_sports.library import _day_windows
+
+    windows = _day_windows("202609", date(2026, 9, 28), date(2026, 10, 3))
+
+    assert windows == ["20260928", "20260929", "20260930"]
+
+
+def test_a_refresh_after_a_capped_month_still_falls_back_when_the_days_fail() -> None:
+    """Skipping the month it already knows is truncated must not cost the
+    league its "serve the last good fetch" safety net."""
+    lib = _library()
+    recorder = _Recorder(_dense_month_events())
+    lib._get_scoreboard = recorder  # type: ignore[method-assign]
+
+    with _frozen_clock():
+        first = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+        lib._scores_cache["college-football"] = (datetime.now(timezone.utc).timestamp(), first)
+
+        async def always_fails(*_a: Any, **_k: Any) -> dict[str, Any]:
+            raise RuntimeError("ESPN down")
+
+        lib._get_scoreboard = always_fails  # type: ignore[method-assign]
+        games = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+
+    assert [g["id"] for g in games] == [g["id"] for g in first]

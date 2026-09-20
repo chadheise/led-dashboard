@@ -60,6 +60,13 @@ _SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 # Raise this only against a re-measured cap.
 _SCOREBOARD_EVENT_LIMIT = 500
 
+# A month that comes back at the cap is re-asked a day at a time, which turns
+# two requests into a few dozen. They still run concurrently, but a few at a
+# time: the render loop shares a core with the rgbmatrix refresh thread on the
+# Pi, and dozens of simultaneous TLS handshakes are exactly the kind of work
+# that makes the panel flicker.
+_MAX_CONCURRENT_WINDOWS = 6
+
 # One immediate retry absorbs a one-off connection blip (reset, DNS hiccup)
 # without waiting a full refresh cycle and falling back to cached/empty games.
 _FETCH_RETRIES = 1
@@ -100,6 +107,26 @@ def _month_windows(start: date, end: date) -> list[str]:
     while (year, month) <= (end.year, end.month):
         windows.append(f"{year:04d}{month:02d}")
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return windows
+
+
+def _day_windows(month: str, start: date, end: date) -> list[str]:
+    """``dates`` values for every day of ``month`` inside ``start``..``end``.
+
+    The fallback for a month that comes back at the event cap: a single day
+    is far under the cap for any league, so asking day by day is the one way
+    to be sure no day of the span is silently missing. Only the days the
+    caller actually asked for are requested - the rest of the month would be
+    filtered out anyway, and each request costs a round trip.
+    """
+    first = date(int(month[:4]), int(month[4:]), 1)
+    last = date(first.year + (first.month == 12), (first.month % 12) + 1, 1) - timedelta(days=1)
+    day = max(first, start)
+    stop = min(last, end)
+    windows: list[str] = []
+    while day <= stop:
+        windows.append(day.strftime("%Y%m%d"))
+        day += timedelta(days=1)
     return windows
 
 
@@ -220,6 +247,11 @@ class ESPNSportsLibrary(Library):
         # all, so a caller with no games to show can say whether that means
         # "nothing is on" or "ESPN is unreachable".
         self._last_fetch_failures: list[str] = []
+        # (league, YYYYMM) pairs whose month response came back at the event
+        # cap. Those months are fetched a day at a time from then on, so the
+        # ~60s refresh loop doesn't re-download the largest response ESPN will
+        # serve every cycle just to rediscover that it is truncated.
+        self._capped_windows: set[tuple[str, str]] = set()
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -587,22 +619,30 @@ class ESPNSportsLibrary(Library):
         url: str,
         params: dict[str, str],
         windows: list[str],
-    ) -> tuple[list[dict[str, Any]], list[BaseException]]:
-        """Request every date window at once, splitting hits from misses.
+    ) -> tuple[list[tuple[str, dict[str, Any]]], list[BaseException]]:
+        """Request every date window, splitting hits from misses.
 
         One window failing must not take the others down with it, so the
         payloads that did arrive come back alongside the exceptions that
-        didn't.
+        didn't - each paired with the window that produced it, so a caller
+        can tell which window needs re-asking in smaller pieces.
+
+        Requests run concurrently but no more than ``_MAX_CONCURRENT_WINDOWS``
+        at a time: refining a capped month turns two requests into a few
+        dozen, and firing those at once would both hammer ESPN and stall the
+        render loop on the Pi.
         """
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_WINDOWS)
+
+        async def one(window: str) -> dict[str, Any]:
+            async with sem:
+                return await self._get_scoreboard(client, url, {**params, "dates": window})
+
         results = await asyncio.gather(
-            *[
-                self._get_scoreboard(client, url, {**params, "dates": window})
-                for window in windows
-            ],
-            return_exceptions=True,
+            *[one(window) for window in windows], return_exceptions=True
         )
         return (
-            [r for r in results if not isinstance(r, BaseException)],
+            [(w, r) for w, r in zip(windows, results) if not isinstance(r, BaseException)],
             [r for r in results if isinstance(r, BaseException)],
         )
 
@@ -755,24 +795,50 @@ class ESPNSportsLibrary(Library):
         # per league however wide the look-ahead, and cost only some games
         # outside the span, which `_filter_by_time_window` drops anyway.
         #
-        # A month is also small enough to stay clear of the event cap on its
-        # own - the busiest we measured is an MLB month at ~430 of the 500 -
-        # so a wide look-ahead can't crowd just-finished games out of the
-        # response the completed-score card needs. One month failing leaves
-        # the others standing.
+        # One month failing leaves the others standing.
+        #
+        # A month is not always small enough to stay under the event cap,
+        # though: an MLB month measured ~430 of the 500, but college football
+        # puts every division on the same Saturday and a month of them runs
+        # past it. A capped response is silently short - ESPN gives no sign of
+        # which games it dropped, and the missing one can be the day whose
+        # scores just went final - so any month that comes back at the cap is
+        # re-asked a day at a time below, where no league is near the cap.
         windows = _month_windows(start_date, end_date)
+        # Months already known to be over the cap for this league skip the
+        # capped request entirely: it costs the largest response of the fetch
+        # (and this runs every refresh cycle) only to be superseded.
+        known_capped = [w for w in windows if (league, w) in self._capped_windows]
+        payloads, failures = await self._fetch_windows(
+            client, url, params, [w for w in windows if w not in known_capped]
+        )
 
-        payloads, failures = await self._fetch_windows(client, url, params, windows)
-        for payload in payloads:
-            if len(payload.get("events") or []) >= _SCOREBOARD_EVENT_LIMIT:
-                logger.warning(
-                    "Scoreboard response for %s came back at the %d-event cap; "
-                    "some of that month's games are missing. Narrow the window "
-                    "or request shorter spans than a month",
-                    league, _SCOREBOARD_EVENT_LIMIT,
-                )
+        capped = [w for w, p in payloads if len(p.get("events") or []) >= _SCOREBOARD_EVENT_LIMIT]
+        self._capped_windows.update((league, w) for w in capped)
+        refine = known_capped + capped
+        if refine:
+            day_windows = [
+                d for w in refine for d in _day_windows(w, start_date, end_date)
+            ]
+            logger.info(
+                "Scoreboard month(s) %s of %s exceed the %d-event cap; "
+                "re-asking those %d day(s) individually so no day goes missing",
+                ", ".join(refine), league, _SCOREBOARD_EVENT_LIMIT, len(day_windows),
+            )
+            day_payloads, day_failures = await self._fetch_windows(
+                client, url, params, day_windows
+            )
+            # The capped month's own (incomplete) payload is kept alongside
+            # the day responses rather than replaced: its events are real, the
+            # merge below dedupes them, and keeping them means a day window
+            # that failed costs nothing it would otherwise have contributed.
+            payloads += day_payloads
+            failures += day_failures
+
         if not payloads:
-            exc = failures[0]
+            exc: BaseException = (
+                failures[0] if failures else RuntimeError("no date windows were fetched")
+            )
             # A transient API failure must not blank the display: serve the
             # last successful fetch for this league while it is still fresh.
             cached = self._scores_cache.get(league)
@@ -789,13 +855,14 @@ class ESPNSportsLibrary(Library):
             logger.warning(
                 "Scoreboard fetch failed for %d of %d date windows of %s (%s); "
                 "continuing with the games the rest returned",
-                len(failures), len(windows), league, failures[0],
+                len(failures), len(failures) + len(payloads), league, failures[0],
             )
 
-        # The windows meet at today, so a game today comes back from both.
+        # Windows overlap by design - months meet at today, and a refined
+        # month is served twice over - so events are deduped by id.
         events: list[dict[str, Any]] = []
         seen_event_ids: set[str] = set()
-        for data in payloads:
+        for _window, data in payloads:
             for event in data.get("events") or []:
                 event_id = str(event.get("id") or "")
                 if event_id:

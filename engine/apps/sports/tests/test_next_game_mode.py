@@ -490,3 +490,59 @@ def test_final_expiry_never_empties_a_non_empty_screen() -> None:
             _pre_game("tonight", "mlb", "SEA", "LAA", _TONIGHT),
         ]
         assert _frozen_filter(app, games), f"expiry emptied the screen: {extra}"
+
+
+# ── A "next game" has a horizon ───────────────────────────────────────────
+#
+# Not every team in a fetch is a team whose schedule the fetch can see. An
+# FCS side appears in the college-football scoreboard once all season, when
+# it visits an FBS team; a non-conference opponent shows up in one game of a
+# conference-filtered feed; an unranked team appears once in a top-25 feed.
+# To a rule that only knows the games it was handed, that single appearance
+# looks exactly like "this team's next game", and it landed fixtures a month
+# and more out on a display asked for the next one - NCAAF in next-game mode
+# showed games five weeks away. Games past _NEXT_GAME_MAX_DAYS are no longer
+# eligible, which is both the honest reading of "next game" and what keeps a
+# half-seen team from speaking for a schedule nobody asked about.
+
+
+def test_next_game_mode_ignores_a_game_beyond_the_horizon() -> None:
+    from apps.sports.app import _NEXT_GAME_MAX_DAYS
+
+    app = _make_app({"leagues": ["college-football"]})
+    far = _NOON + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS + 1, hours=1)
+    games = [
+        _pre_game("this_week", "college-football", "UGA", "BAMA",
+                  _NOON + datetime.timedelta(days=1)),
+        # The FCS visitor's only appearance in the whole fetch.
+        _pre_game("cupcake", "college-football", "MER", "BAMA", far),
+    ]
+    assert _frozen_filter(app, games) == {"this_week"}
+
+
+def test_a_team_seen_only_beyond_the_horizon_shows_nothing() -> None:
+    """The horizon is a cut on the games, not a fallback: a team whose only
+    fixture is weeks out contributes no card, rather than its far one."""
+    from apps.sports.app import _NEXT_GAME_MAX_DAYS
+
+    app = _make_app({"leagues": ["college-football"]})
+    far = _NOON + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS + 5)
+    games = [_pre_game("far_off", "college-football", "MER", "CIT", far)]
+    assert _frozen_filter(app, games) == set()
+
+
+def test_next_game_mode_still_crosses_a_bye_week() -> None:
+    """The horizon has to clear the longest real gap between fixtures: a bye
+    week puts a team's next game a fortnight out, and that is still its next
+    game."""
+    app = _make_app({"favorite_teams": ["nfl:SEA"]})
+    after_bye = _NOON + datetime.timedelta(days=14, hours=3)
+    games = [_pre_game("after_bye", "nfl", "SEA", "SF", after_bye)]
+    assert _frozen_filter(app, games) == {"after_bye"}
+
+
+def test_the_fetch_looks_at_least_as_far_as_the_horizon() -> None:
+    """A game the filter would keep must be a game the fetch asked for."""
+    from apps.sports.app import _NEXT_GAME_FETCH_DAYS, _NEXT_GAME_MAX_DAYS
+
+    assert _NEXT_GAME_FETCH_DAYS > _NEXT_GAME_MAX_DAYS
