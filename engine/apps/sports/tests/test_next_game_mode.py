@@ -492,57 +492,112 @@ def test_final_expiry_never_empties_a_non_empty_screen() -> None:
         assert _frozen_filter(app, games), f"expiry emptied the screen: {extra}"
 
 
-# ── A "next game" has a horizon ───────────────────────────────────────────
+# ── A selected league shows its next round, and stops there ──────────────
 #
-# Not every team in a fetch is a team whose schedule the fetch can see. An
-# FCS side appears in the college-football scoreboard once all season, when
-# it visits an FBS team; a non-conference opponent shows up in one game of a
-# conference-filtered feed; an unranked team appears once in a top-25 feed.
-# To a rule that only knows the games it was handed, that single appearance
-# looks exactly like "this team's next game", and it landed fixtures a month
-# and more out on a display asked for the next one - NCAAF in next-game mode
-# showed games five weeks away. Games past _NEXT_GAME_MAX_DAYS are no longer
-# eligible, which is both the honest reading of "next game" and what keeps a
-# half-seen team from speaking for a schedule nobody asked about.
+# Not every team in a feed is a team the feed covers. A Top 25 feed carries
+# the unranked opponent of every ranked team; a conference feed carries
+# non-conference visitors; the college-football feed carries FCS sides on
+# their one trip to an FBS stadium. Each appears in it exactly once, often a
+# month out, and that lone fixture read as "their next game" - which is how
+# NCAAF in next-game mode came to show games five weeks away. A league's
+# round is anchored to its own soonest game day, so a fixture past it is
+# never mistaken for the next one, and no fixed date window is involved.
 
 
-def test_next_game_mode_ignores_a_game_beyond_the_horizon() -> None:
-    from apps.sports.app import _NEXT_GAME_MAX_DAYS
+def _round_end(day_offset: int) -> datetime.datetime:
+    return _NOON + datetime.timedelta(days=day_offset)
 
-    app = _make_app({"leagues": ["college-football"]})
-    far = _NOON + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS + 1, hours=1)
+
+def test_a_leagues_round_stops_before_the_following_week() -> None:
+    app = _make_app({"leagues": ["ncaaf-top25"]})
     games = [
-        _pre_game("this_week", "college-football", "UGA", "BAMA",
-                  _NOON + datetime.timedelta(days=1)),
-        # The FCS visitor's only appearance in the whole fetch.
-        _pre_game("cupcake", "college-football", "MER", "BAMA", far),
+        _pre_game("saturday", "ncaaf-top25", "UGA", "BAMA", _round_end(2)),
+        # The unranked visitor's only appearance in the whole feed.
+        _pre_game("next_month", "ncaaf-top25", "CHAR", "UGA", _round_end(30)),
+    ]
+    assert _frozen_filter(app, games) == {"saturday"}
+
+
+def test_the_round_holds_a_thursday_to_monday_slate_together() -> None:
+    """The round is a competition week, not a day: an NFL week opens on
+    Thursday night and closes on Monday, and all of it is "next"."""
+    app = _make_app({"leagues": ["nfl"]})
+    games = [
+        _pre_game("thursday", "nfl", "DEN", "LV", _round_end(1)),
+        _pre_game("sunday", "nfl", "KC", "SF", _round_end(4)),
+        _pre_game("monday", "nfl", "NE", "MIA", _round_end(5)),
+        # The following week, opened by the same Thursday slot.
+        _pre_game("next_thursday", "nfl", "DEN", "SEA", _round_end(8)),
+    ]
+    assert _frozen_filter(app, games) == {"thursday", "sunday", "monday"}
+
+
+def test_a_team_seen_only_beyond_the_round_shows_nothing() -> None:
+    """The round is a cut on the games, not a fallback: a team whose only
+    fixture is weeks out contributes no card, rather than its far one."""
+    app = _make_app({"leagues": ["ncaaf-top25"]})
+    games = [
+        _pre_game("saturday", "ncaaf-top25", "UGA", "BAMA", _round_end(2)),
+        _pre_game("far_off", "ncaaf-top25", "CHAR", "MER", _round_end(25)),
+    ]
+    assert _frozen_filter(app, games) == {"saturday"}
+
+
+def test_a_bye_team_waits_for_its_round() -> None:
+    """A league team that isn't playing this round shows nothing until it is
+    - the screen shows the round, not a mix of this week and next."""
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("this_week", "college-football", "UGA", "BAMA", _round_end(2)),
+        # BAMA's opponent next week is on a bye this week.
+        _pre_game("after_bye", "college-football", "MSU", "BAMA", _round_end(9)),
     ]
     assert _frozen_filter(app, games) == {"this_week"}
 
 
-def test_a_team_seen_only_beyond_the_horizon_shows_nothing() -> None:
-    """The horizon is a cut on the games, not a fallback: a team whose only
-    fixture is weeks out contributes no card, rather than its far one."""
-    from apps.sports.app import _NEXT_GAME_MAX_DAYS
-
-    app = _make_app({"leagues": ["college-football"]})
-    far = _NOON + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS + 5)
-    games = [_pre_game("far_off", "college-football", "MER", "CIT", far)]
-    assert _frozen_filter(app, games) == set()
-
-
-def test_next_game_mode_still_crosses_a_bye_week() -> None:
-    """The horizon has to clear the longest real gap between fixtures: a bye
-    week puts a team's next game a fortnight out, and that is still its next
-    game."""
-    app = _make_app({"favorite_teams": ["nfl:SEA"]})
-    after_bye = _NOON + datetime.timedelta(days=14, hours=3)
-    games = [_pre_game("after_bye", "nfl", "SEA", "SF", after_bye)]
-    assert _frozen_filter(app, games) == {"after_bye"}
+def test_a_favorite_team_keeps_its_next_game_through_a_bye() -> None:
+    """The exemption: a favorite was picked by name, so its next game shows
+    whenever it falls - that is the whole point of favoriting a team."""
+    app = _make_app(
+        {"leagues": ["college-football"], "favorite_teams": ["college-football:UW"]}
+    )
+    games = [
+        _pre_game("this_week", "college-football", "UGA", "BAMA", _round_end(2)),
+        _pre_game("uw_after_bye", "college-football", "UW", "ORE", _round_end(9)),
+    ]
+    assert _frozen_filter(app, games) == {"this_week", "uw_after_bye"}
 
 
-def test_the_fetch_looks_at_least_as_far_as_the_horizon() -> None:
-    """A game the filter would keep must be a game the fetch asked for."""
-    from apps.sports.app import _NEXT_GAME_FETCH_DAYS, _NEXT_GAME_MAX_DAYS
+def test_a_favorite_is_exempt_through_a_league_variant() -> None:
+    """Favorites are stored against the base league (the team picker offers
+    only those), while a Top 25 or conference feed labels the same game with
+    its own id - the exemption has to see through that."""
+    app = _make_app(
+        {"leagues": ["ncaaf-top25"], "favorite_teams": ["college-football:UW"]}
+    )
+    games = [
+        _pre_game("saturday", "ncaaf-top25", "UGA", "BAMA", _round_end(2)),
+        _pre_game("uw_after_bye", "ncaaf-top25", "UW", "ORE", _round_end(9)),
+    ]
+    assert _frozen_filter(app, games) == {"saturday", "uw_after_bye"}
 
-    assert _NEXT_GAME_FETCH_DAYS > _NEXT_GAME_MAX_DAYS
+
+def test_each_league_gets_its_own_round() -> None:
+    """Leagues run on their own calendars: college football's Saturday must
+    not drag in - or be cut short by - what the NFL is doing."""
+    app = _make_app({"leagues": ["college-football", "nfl"]})
+    games = [
+        _pre_game("cfb_saturday", "college-football", "UGA", "BAMA", _round_end(2)),
+        _pre_game("cfb_next_week", "college-football", "MSU", "OSU", _round_end(9)),
+        _pre_game("nfl_sunday", "nfl", "KC", "SF", _round_end(3)),
+        _pre_game("nfl_next_week", "nfl", "KC", "DEN", _round_end(10)),
+    ]
+    assert _frozen_filter(app, games) == {"cfb_saturday", "nfl_sunday"}
+
+
+def test_the_fetch_reaches_past_the_round() -> None:
+    """A game the filter would keep must be a game the fetch asked for: the
+    span has to cover a favorite's bye week, not just the round."""
+    from apps.sports.app import _NEXT_GAME_FETCH_DAYS, _ROUND_DAYS
+
+    assert _NEXT_GAME_FETCH_DAYS >= 2 * _ROUND_DAYS

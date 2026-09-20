@@ -49,27 +49,18 @@ _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 # approximate game length used for completed games.
 _PRE_START_GRACE_SECONDS = 4 * 3600
 
-# "Next game per team" mode has no user-configured window, so the horizon is
-# fixed here: a team's next game counts only if it falls within the next two
-# weeks and a bit. That covers every real gap between fixtures - a bye week
-# puts a team's next game 14 days out, and nothing in a season's schedule is
-# further than that - while keeping the mode honest about what it is for.
-#
-# The cap is what stops a team the module can only see *part* of the schedule
-# for from dragging a game weeks out onto the screen. Plenty of teams are
-# visible only in passing: an FCS side that appears in the college-football
-# scoreboard once all season, when it visits an FBS team; a non-conference
-# opponent showing up in a single game of a conference-filtered feed; an
-# unranked team in a top-25 feed. That one appearance looks exactly like
-# "this team's next game" to a rule that only knows the games it was given,
-# so without a horizon, a whole-league selection quietly fills up with
-# fixtures a month and more away.
-_NEXT_GAME_MAX_DAYS = 15
+# How long a league's round of fixtures runs, measured from its own next game
+# day (see ``_round_cutoffs``). A competition week: long enough to hold a
+# round that opens on Thursday night and closes on Monday, short enough to
+# close before the following week's fixtures open.
+_ROUND_DAYS = 7
 
-# The fetch looks one day past the horizon, so a game right at the edge of it
-# is decided by the horizon rather than lost to the fetch span (the two are
-# measured differently: calendar days there, a UTC date range here).
-_NEXT_GAME_FETCH_DAYS = _NEXT_GAME_MAX_DAYS + 1
+# How far ahead the ESPN fetch looks in "next game per team" mode. Not a
+# display rule - what reaches the screen is decided by the round above - just
+# the span the games have to be *in hand* for that to be possible. A bye week
+# puts a favorite's next game 14 days out, which is the longest gap between
+# fixtures a season contains, so a fortnight and change covers it.
+_NEXT_GAME_FETCH_DAYS = 16
 
 # A game stuck reporting "in" for longer than any real match (extra time,
 # rain delays, etc. included) is a stale/glitched ESPN feed, not a live game.
@@ -226,10 +217,11 @@ class SportsApp(DisplayApp):
                 "title": "Upcoming games mode",
                 "description": (
                     "\"Next game per team\" shows only each team's next "
-                    "game — one per team in each selected league, plus one per "
-                    "favorite team, and both games of a doubleheader when a "
-                    "team plays twice on the same day. Games more than two "
-                    "weeks out are left off. \"Time window\" shows "
+                    "game — one per team, and both games of a doubleheader "
+                    "when a team plays twice on the same day. A selected "
+                    "league shows its next round of fixtures and stops "
+                    "there; a favorite team's next game is shown whenever it "
+                    "falls, bye week or not. \"Time window\" shows "
                     "every upcoming game within the window below."
                 ),
                 "enum": ["next_game", "window"],
@@ -671,17 +663,15 @@ class SportsApp(DisplayApp):
         (see ``_favorites_by_league``). A game shared by two qualifying teams
         (e.g. two favorites playing each other) is naturally included once.
 
-        Only games inside ``_NEXT_GAME_MAX_DAYS`` are eligible at all. A game
-        further out than that isn't "the next game" in any useful sense, and
-        counting it would let a team whose schedule the fetch can only see a
-        sliver of put a fixture weeks away on screen (see the constant).
+        A selected league shows its next *round* and stops there - see
+        ``_round_cutoffs``. A favorite team is exempt: it was picked by name,
+        so its next game is shown whenever it falls, bye week or not.
         """
         tz = tz or self._local_tz()
         favorites_by_league = self._favorites_by_league()
-        horizon = self._game_day(now, tz) + datetime.timedelta(days=_NEXT_GAME_MAX_DAYS)
+        favorite_teams = list(self.config.get("favorite_teams") or [])
 
-        first_day: dict[tuple[str, str], datetime.date] = {}
-        candidates: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
+        eligible: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
         for game in games:
             if game.get("state", "pre") != "pre":
                 continue
@@ -691,13 +681,25 @@ class SportsApp(DisplayApp):
             secs_until = (start - now).total_seconds()
             if secs_until < -_PRE_START_GRACE_SECONDS:
                 continue
-            if self._game_day(start, tz) > horizon:
-                continue
             teams = self._qualifying_teams(game, favorites_by_league)
             if not teams:
                 continue
-            day = self._game_day(start, tz)
-            candidates.append((game, day, teams))
+            eligible.append((game, self._game_day(start, tz), teams))
+
+        # The round cut comes first, so a game outside it can neither be shown
+        # nor stand in as some team's "next game" - a team whose only fixture
+        # in the feed is beyond the round simply isn't a team this module can
+        # speak for.
+        cutoffs = self._round_cutoffs(eligible)
+        candidates = [
+            (game, day, teams)
+            for game, day, teams in eligible
+            if day <= cutoffs.get(game.get("league", ""), day)
+            or (favorite_teams and self._espn._matches_favorites(game, favorite_teams))
+        ]
+
+        first_day: dict[tuple[str, str], datetime.date] = {}
+        for _game, day, teams in candidates:
             for team_key in teams:
                 current = first_day.get(team_key)
                 if current is None or day < current:
@@ -707,6 +709,40 @@ class SportsApp(DisplayApp):
             game_key(game)
             for game, day, teams in candidates
             if any(first_day[team_key] == day for team_key in teams)
+        }
+
+    @staticmethod
+    def _round_cutoffs(
+        eligible: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]],
+    ) -> dict[str, datetime.date]:
+        """The last day of each league's next round of fixtures.
+
+        A round is anchored to the league's own soonest upcoming game day and
+        runs ``_ROUND_DAYS`` from there, which is what makes this a property
+        of the schedule rather than a date window: NFL's round opens on
+        Thursday night and closes on Monday, college football's opens midweek
+        and closes on Saturday, and a daily sport's round is over about as
+        fast as it starts. Whatever the league, the cut lands in the gap
+        before the following round.
+
+        This is what keeps a team the feed barely covers from speaking for a
+        schedule nobody can see. A Top 25 feed carries the unranked opponent
+        of every ranked team, an SEC feed carries non-conference visitors, the
+        college-football feed carries FCS sides on their one trip to an FBS
+        stadium - and each of those teams appears in it exactly once, often a
+        month out. Taken as "their next game", that lone fixture earned a card
+        weeks before anybody would want to see it. Outside the round, it is
+        simply not this module's to show.
+        """
+        first_upcoming: dict[str, datetime.date] = {}
+        for game, day, _teams in eligible:
+            league = game.get("league", "")
+            current = first_upcoming.get(league)
+            if current is None or day < current:
+                first_upcoming[league] = day
+        return {
+            league: day + datetime.timedelta(days=_ROUND_DAYS - 1)
+            for league, day in first_upcoming.items()
         }
 
     def _expired_final_keys(
