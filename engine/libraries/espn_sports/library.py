@@ -60,8 +60,14 @@ _SCOREBOARD_TIMEOUT = httpx.Timeout(connect=5.0, read=12.0, write=5.0, pool=5.0)
 # Raise this only against a re-measured cap.
 _SCOREBOARD_EVENT_LIMIT = 500
 
+# How far ahead a capped month is re-asked day by day (see ``_fetch_league``).
+# Far enough to cover every day whose scores or imminent fixtures the display
+# can actually show, short enough that a dense league costs a dozen extra
+# requests a refresh rather than one per day of the whole look-ahead.
+_REFINE_AHEAD_DAYS = 10
+
 # A month that comes back at the cap is re-asked a day at a time, which turns
-# two requests into a few dozen. They still run concurrently, but a few at a
+# two requests into a dozen or so. They still run concurrently, but a few at a
 # time: the render loop shares a core with the rgbmatrix refresh thread on the
 # Pi, and dozens of simultaneous TLS handshakes are exactly the kind of work
 # that makes the panel flicker.
@@ -247,11 +253,6 @@ class ESPNSportsLibrary(Library):
         # all, so a caller with no games to show can say whether that means
         # "nothing is on" or "ESPN is unreachable".
         self._last_fetch_failures: list[str] = []
-        # (league, YYYYMM) pairs whose month response came back at the event
-        # cap. Those months are fetched a day at a time from then on, so the
-        # ~60s refresh loop doesn't re-download the largest response ESPN will
-        # serve every cycle just to rediscover that it is truncated.
-        self._capped_windows: set[tuple[str, str]] = set()
         data_dir = Path(__file__).parent.parent.parent / "data" / "espn_sports"
         self._logo_dir = data_dir / "logos"
         self._logo_dir.mkdir(parents=True, exist_ok=True)
@@ -805,25 +806,28 @@ class ESPNSportsLibrary(Library):
         # scores just went final - so any month that comes back at the cap is
         # re-asked a day at a time below, where no league is near the cap.
         windows = _month_windows(start_date, end_date)
-        # Months already known to be over the cap for this league skip the
-        # capped request entirely: it costs the largest response of the fetch
-        # (and this runs every refresh cycle) only to be superseded.
-        known_capped = [w for w in windows if (league, w) in self._capped_windows]
-        payloads, failures = await self._fetch_windows(
-            client, url, params, [w for w in windows if w not in known_capped]
-        )
+        payloads, failures = await self._fetch_windows(client, url, params, windows)
 
         capped = [w for w, p in payloads if len(p.get("events") or []) >= _SCOREBOARD_EVENT_LIMIT]
-        self._capped_windows.update((league, w) for w in capped)
-        refine = known_capped + capped
-        if refine:
+        if capped:
+            # Only the near days are re-asked. A league dense enough to cap a
+            # month is one playing a full slate every week, and in "next game"
+            # mode nothing beyond the next few days of such a league reaches
+            # the screen anyway - a fixture weeks out is never the next game
+            # for both sides of it. The far end of the span is what a
+            # post-season look-ahead is for, and a post-season month is
+            # nowhere near the cap, so it is not capped and not truncated.
+            # Bounding it this way keeps a Saturday of college football at a
+            # dozen extra requests a refresh rather than thirty.
+            refine_end = min(end_date, today + timedelta(days=_REFINE_AHEAD_DAYS))
             day_windows = [
-                d for w in refine for d in _day_windows(w, start_date, end_date)
+                d for w in capped for d in _day_windows(w, start_date, refine_end)
             ]
             logger.info(
                 "Scoreboard month(s) %s of %s exceed the %d-event cap; "
-                "re-asking those %d day(s) individually so no day goes missing",
-                ", ".join(refine), league, _SCOREBOARD_EVENT_LIMIT, len(day_windows),
+                "re-asking %d near day(s) individually so no day of scores or "
+                "imminent fixtures goes missing",
+                ", ".join(capped), league, _SCOREBOARD_EVENT_LIMIT, len(day_windows),
             )
             day_payloads, day_failures = await self._fetch_windows(
                 client, url, params, day_windows

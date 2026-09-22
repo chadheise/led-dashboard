@@ -10,7 +10,8 @@ fixtures five weeks out (10/16, 10/23) sat there instead. Two faults met:
 * Every team in the response could claim a "next game", including teams the
   feed only ever shows in passing. A Top 25 feed carries the unranked
   opponent of each ranked team, and each of those appears in it about once a
-  season. That lone fixture, weeks out, read as "their next game".
+  season. That lone fixture, weeks out, read as "their next game" - though
+  the ranked team on the other side of it plays on Saturday.
 
 Both are exercised here through ``SportsApp.fetch_data`` with only ESPN's
 HTTP responses faked, so neither can come back unnoticed.
@@ -38,9 +39,9 @@ _SATURDAYS = [datetime.date(2026, 10, 3) + datetime.timedelta(days=7 * i) for i 
 _GAMES_PER_SATURDAY = 130
 _RANKED = {f"T{i:03d}": i + 1 for i in range(25)}
 
-# A favorite on a bye this round, playing a ranked team a fortnight out - its
-# one appearance in the Top 25 feed, exactly like the unranked opponents the
-# round is there to keep off the screen. Being favorited is the difference.
+# A favorite on a bye, playing a ranked team a fortnight out - its one
+# appearance in the Top 25 feed, exactly like the unranked opponents that no
+# longer reach the screen. Being favorited is the difference.
 _FAVORITE = "UW"
 _FAVORITE_DAY = _SATURDAYS[2]
 
@@ -192,7 +193,9 @@ def test_todays_final_scores_survive_a_capped_month() -> None:
     assert app._games[0]["state"] == "post", "the rotation must lead with them"
 
 
-def test_only_this_rounds_fixtures_reach_the_screen() -> None:
+def test_only_the_soonest_fixtures_reach_the_screen() -> None:
+    """Every ranked team plays next Saturday, so that is every one of their
+    next games - and the Saturdays after it belong to nobody yet."""
     app = _run_fetch()
 
     upcoming = [g for g in app._games if g["state"] == "pre"]
@@ -204,9 +207,9 @@ def test_only_this_rounds_fixtures_reach_the_screen() -> None:
 def test_no_team_appears_in_two_upcoming_games() -> None:
     """One upcoming card per team - the complaint that started this.
 
-    The single exception is whoever a favorite plays outside the round:
-    showing the favorite's game necessarily shows its opponent, who already
-    has a card of its own this round.
+    The single exception is whoever a favorite plays later: showing the
+    favorite's game necessarily shows its opponent, who already has a card
+    of its own for the game it plays first.
     """
     app = _run_fetch()
 
@@ -220,9 +223,9 @@ def test_no_team_appears_in_two_upcoming_games() -> None:
 
 
 def test_a_favorite_on_a_bye_still_shows_its_next_game() -> None:
-    """The one fixture allowed past the round, because it was asked for by
-    name - and asked for against the base league, while the Top 25 feed
-    labels the same game with its own id."""
+    """The one fixture shown though its opponent plays first, because it was
+    asked for by name - and asked for against the base league, while the Top
+    25 feed labels the same game with its own id."""
     app = _run_fetch()
 
     favorite = [g for g in app._games if _FAVORITE in (g["home_abbr"], g["away_abbr"])]

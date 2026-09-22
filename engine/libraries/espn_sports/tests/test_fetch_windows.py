@@ -298,21 +298,28 @@ def test_a_month_over_the_event_cap_is_re_asked_day_by_day() -> None:
     assert "final" in {g["id"] for g in games}
 
 
-def test_a_capped_month_is_not_re_downloaded_every_refresh() -> None:
-    """Once a month is known to be over the cap, the truncated response it
-    would serve is worth nothing and costs the largest download of the fetch."""
+def test_the_day_re_ask_covers_the_near_days_not_the_whole_look_ahead() -> None:
+    """A league dense enough to cap a month plays a full slate every week, so
+    only its near days can reach the screen - and one request per day of a
+    month-long look-ahead, every refresh, is work the Pi has to do between
+    frames. The far end of the span rides on the month response, which in the
+    seasons that need a long look-ahead (a post-season of scattered bowls) is
+    nowhere near the cap and so isn't truncated at all."""
+    from libraries.espn_sports.library import _REFINE_AHEAD_DAYS
+
     lib = _library()
     recorder = _Recorder(_dense_month_events())
     lib._get_scoreboard = recorder  # type: ignore[method-assign]
 
     with _frozen_clock():
-        asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
-        recorder.calls.clear()
-        games = asyncio.run(lib._fetch_league(object(), "college-football", 2, 1))
+        asyncio.run(lib._fetch_league(object(), "college-football", 30, 1))
 
-    assert "202609" not in [c["dates"] for c in recorder.calls]
-    # The days still cover the span, so the fetch is no poorer for it.
-    assert "final" in {g["id"] for g in games}
+    day_calls = [c["dates"] for c in recorder.calls if len(c["dates"]) == 8]
+    assert len(day_calls) <= _REFINE_AHEAD_DAYS + 2
+    assert _FROZEN_NOW.strftime("%Y%m%d") in day_calls
+    # The month it truncated is still asked for, so nothing past the re-asked
+    # days is simply absent.
+    assert "202609" in [c["dates"] for c in recorder.calls]
 
 
 def test_a_capped_month_whose_day_windows_all_fail_keeps_what_it_had() -> None:

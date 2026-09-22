@@ -16,7 +16,7 @@ from app_base import DisplayApp
 from grid import SizeConstraints
 from marquee import Marquee
 from libraries.canvas_utils.library import blit
-from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES
+from libraries.espn_sports.library import ESPNSportsLibrary, _LEAGUES, _league_path
 from libraries.location.library import LocationLibrary
 from libraries.text_renderer.library import can_fit_text, render_text
 from libraries.timezones.library import resolve_zone
@@ -49,18 +49,14 @@ _CELEBRATION_SECONDS = 60.0  # how long a scoring celebration stays on screen
 # approximate game length used for completed games.
 _PRE_START_GRACE_SECONDS = 4 * 3600
 
-# How long a league's round of fixtures runs, measured from its own next game
-# day (see ``_round_cutoffs``). A competition week: long enough to hold a
-# round that opens on Thursday night and closes on Monday, short enough to
-# close before the following week's fixtures open.
-_ROUND_DAYS = 7
-
 # How far ahead the ESPN fetch looks in "next game per team" mode. Not a
-# display rule - what reaches the screen is decided by the round above - just
-# the span the games have to be *in hand* for that to be possible. A bye week
-# puts a favorite's next game 14 days out, which is the longest gap between
-# fixtures a season contains, so a fortnight and change covers it.
-_NEXT_GAME_FETCH_DAYS = 16
+# display rule - what reaches the screen is decided by the fixtures
+# themselves (see ``_next_game_per_team_keys``), which is why this can be
+# generous without fixtures weeks out leaking onto the screen. It just has to
+# cover the longest gap a schedule contains, and those are all in the
+# post-season: the weeks between a team's last regular-season game and its
+# bowl, or between one round of a play-off and the next.
+_NEXT_GAME_FETCH_DAYS = 30
 
 # A game stuck reporting "in" for longer than any real match (extra time,
 # rain delays, etc. included) is a stale/glitched ESPN feed, not a live game.
@@ -217,11 +213,12 @@ class SportsApp(DisplayApp):
                 "title": "Upcoming games mode",
                 "description": (
                     "\"Next game per team\" shows only each team's next "
-                    "game — one per team, and both games of a doubleheader "
-                    "when a team plays twice on the same day. A selected "
-                    "league shows its next round of fixtures and stops "
-                    "there; a favorite team's next game is shown whenever it "
-                    "falls, bye week or not. \"Time window\" shows "
+                    "game — one card per team, and both games of a "
+                    "doubleheader when a team plays twice on the same day. A "
+                    "game appears once it is the next one for both sides, so "
+                    "a team on a bye waits while the round it is missing is "
+                    "played; a favorite team's next game is shown whenever "
+                    "it falls, bye week or not. \"Time window\" shows "
                     "every upcoming game within the window below."
                 ),
                 "enum": ["next_game", "window"],
@@ -618,17 +615,39 @@ class SportsApp(DisplayApp):
         """The timezone calendar days are measured in (UTC when unconfigured)."""
         return self._get_user_tz() or datetime.timezone.utc
 
-    def _qualifying_teams(
-        self, game: dict[str, Any], favorites_by_league: dict[str, set[str]]
-    ) -> list[tuple[str, str]]:
-        """The ``(league, abbr)`` teams in ``game`` this module is showing for."""
-        league = game.get("league", "")
-        # None unless this league was fetched only for its favorites.
-        league_favorites = favorites_by_league.get(league)
+    @staticmethod
+    def _team_keys(game: dict[str, Any]) -> list[tuple[str, str]]:
+        """Both sides of ``game`` as keys identifying the team itself.
+
+        Keyed by the *underlying* ESPN league, not the configured league id,
+        so one team is one team however its game reached the module. The same
+        fixture can arrive labelled ``ncaaf-top25``, ``ncaaf-sec`` or
+        ``college-football`` depending on which selection returned it, and a
+        team whose games land under two of those labels would otherwise read
+        as two teams - each with a "next game" of its own to show.
+        """
+        league = _league_path(game.get("league", ""))
         return [
             (league, abbr)
             for abbr in (game.get("home_abbr", ""), game.get("away_abbr", ""))
-            if abbr and (league_favorites is None or abbr in league_favorites)
+            if abbr
+        ]
+
+    def _qualifying_teams(
+        self, game: dict[str, Any], favorites_by_league: dict[str, set[str]]
+    ) -> list[tuple[str, str]]:
+        """The teams in ``game`` this module is showing for.
+
+        The favorites-only narrowing is keyed on the configured league id,
+        which is what ``fetch_scores`` fetched against; the keys themselves
+        identify teams (see ``_team_keys``).
+        """
+        # None unless this league was fetched only for its favorites.
+        league_favorites = favorites_by_league.get(game.get("league", ""))
+        return [
+            (league, abbr)
+            for league, abbr in self._team_keys(game)
+            if league_favorites is None or abbr in league_favorites
         ]
 
     def _favorites_by_league(self) -> dict[str, set[str]]:
@@ -652,7 +671,7 @@ class SportsApp(DisplayApp):
         self, games: list[dict[str, Any]], now: datetime.datetime,
         tz: datetime.tzinfo | None = None,
     ) -> set[str]:
-        """Game keys of each qualifying team's next "pre" game day.
+        """Game keys of each qualifying team's next "pre" game.
 
         One game per team, except that a team playing twice on the same
         calendar day (a baseball doubleheader) keeps both: the cut is made on
@@ -663,15 +682,38 @@ class SportsApp(DisplayApp):
         (see ``_favorites_by_league``). A game shared by two qualifying teams
         (e.g. two favorites playing each other) is naturally included once.
 
-        A selected league shows its next *round* and stops there - see
-        ``_round_cutoffs``. A favorite team is exempt: it was picked by name,
-        so its next game is shown whenever it falls, bye week or not.
+        A game is kept when it is the next one for *both* sides. That is what
+        makes "next game" mean it, and it asks nothing of the calendar - no
+        window, no notion of a week - which matters because schedules are not
+        as regular as they look. Week one of a college-football season runs
+        Thursday to Monday; the post-season is a scatter of bowls weeks
+        apart; a European league stops dead for an international break. The
+        rule reads only the fixtures themselves, so all of those behave the
+        same way.
+
+        It also settles what a lone fixture may claim. A Top 25 feed carries
+        the unranked opponent of every ranked team, a conference feed carries
+        non-conference visitors, the college-football feed carries FCS sides
+        on their one trip to an FBS stadium - each appearing in it about once
+        a season, often a month out. Taken as "their next game", that fixture
+        used to earn a card weeks early. It can't now: the other side of it
+        is a team the feed follows properly, and that team plays sooner.
+
+        The same test is what keeps a team to one upcoming card. A team on a
+        bye waits while the round it is missing is played - its next game is
+        not yet its opponent's next game - rather than sitting on screen
+        beside fixtures that come first. Once that round has been played the
+        game becomes the soonest for both, and up it goes.
+
+        A favorite team is exempt: picked by name, its next game is shown
+        whenever it falls, bye week or not.
         """
         tz = tz or self._local_tz()
         favorites_by_league = self._favorites_by_league()
-        favorite_teams = list(self.config.get("favorite_teams") or [])
+        favorite_keys = self._favorite_team_keys()
 
-        eligible: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
+        first_day: dict[tuple[str, str], datetime.date] = {}
+        candidates: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]] = []
         for game in games:
             if game.get("state", "pre") != "pre":
                 continue
@@ -684,66 +726,46 @@ class SportsApp(DisplayApp):
             teams = self._qualifying_teams(game, favorites_by_league)
             if not teams:
                 continue
-            eligible.append((game, self._game_day(start, tz), teams))
-
-        # The round cut comes first, so a game outside it can neither be shown
-        # nor stand in as some team's "next game" - a team whose only fixture
-        # in the feed is beyond the round simply isn't a team this module can
-        # speak for.
-        cutoffs = self._round_cutoffs(eligible)
-        candidates = [
-            (game, day, teams)
-            for game, day, teams in eligible
-            if day <= cutoffs.get(game.get("league", ""), day)
-            or (favorite_teams and self._espn._matches_favorites(game, favorite_teams))
-        ]
-
-        first_day: dict[tuple[str, str], datetime.date] = {}
-        for _game, day, teams in candidates:
+            day = self._game_day(start, tz)
+            candidates.append((game, day, teams))
             for team_key in teams:
                 current = first_day.get(team_key)
                 if current is None or day < current:
                     first_day[team_key] = day
 
+        def _is_next_for_everyone(
+            day: datetime.date, teams: list[tuple[str, str]]
+        ) -> bool:
+            return all(first_day[team_key] == day for team_key in teams)
+
+        def _is_next_for_a_favorite(
+            day: datetime.date, teams: list[tuple[str, str]]
+        ) -> bool:
+            return any(
+                team_key in favorite_keys and first_day[team_key] == day
+                for team_key in teams
+            )
+
         return {
             game_key(game)
             for game, day, teams in candidates
-            if any(first_day[team_key] == day for team_key in teams)
+            if _is_next_for_everyone(day, teams) or _is_next_for_a_favorite(day, teams)
         }
 
-    @staticmethod
-    def _round_cutoffs(
-        eligible: list[tuple[dict[str, Any], datetime.date, list[tuple[str, str]]]],
-    ) -> dict[str, datetime.date]:
-        """The last day of each league's next round of fixtures.
+    def _favorite_team_keys(self) -> set[tuple[str, str]]:
+        """Configured favorites, keyed the way ``_team_keys`` keys a game.
 
-        A round is anchored to the league's own soonest upcoming game day and
-        runs ``_ROUND_DAYS`` from there, which is what makes this a property
-        of the schedule rather than a date window: NFL's round opens on
-        Thursday night and closes on Monday, college football's opens midweek
-        and closes on Saturday, and a daily sport's round is over about as
-        fast as it starts. Whatever the league, the cut lands in the gap
-        before the following round.
-
-        This is what keeps a team the feed barely covers from speaking for a
-        schedule nobody can see. A Top 25 feed carries the unranked opponent
-        of every ranked team, an SEC feed carries non-conference visitors, the
-        college-football feed carries FCS sides on their one trip to an FBS
-        stadium - and each of those teams appears in it exactly once, often a
-        month out. Taken as "their next game", that lone fixture earned a card
-        weeks before anybody would want to see it. Outside the round, it is
-        simply not this module's to show.
+        The team picker stores a favorite against the base league
+        (``college-football:UGA``), while the same game can arrive labelled
+        with a variant (``ncaaf-top25``), so both go through
+        ``_league_path``.
         """
-        first_upcoming: dict[str, datetime.date] = {}
-        for game, day, _teams in eligible:
-            league = game.get("league", "")
-            current = first_upcoming.get(league)
-            if current is None or day < current:
-                first_upcoming[league] = day
-        return {
-            league: day + datetime.timedelta(days=_ROUND_DAYS - 1)
-            for league, day in first_upcoming.items()
-        }
+        keys: set[tuple[str, str]] = set()
+        for fav in self.config.get("favorite_teams") or []:
+            league, _, abbr = fav.partition(":")
+            if abbr:
+                keys.add((_league_path(league), abbr))
+        return keys
 
     def _expired_final_keys(
         self, games: list[dict[str, Any]], now: datetime.datetime,
@@ -780,12 +802,7 @@ class SportsApp(DisplayApp):
             start = self._parse_start(game)
             if start is None:
                 continue
-            league = game.get("league", "")
-            teams = [
-                (league, abbr)
-                for abbr in (game.get("home_abbr", ""), game.get("away_abbr", ""))
-                if abbr
-            ]
+            teams = self._team_keys(game)
             day = self._game_day(start, tz)
             if day <= today:
                 for team_key in teams:
