@@ -490,3 +490,211 @@ def test_final_expiry_never_empties_a_non_empty_screen() -> None:
             _pre_game("tonight", "mlb", "SEA", "LAA", _TONIGHT),
         ]
         assert _frozen_filter(app, games), f"expiry emptied the screen: {extra}"
+
+
+# ── "Next game" is decided by the fixtures, not by the calendar ──────────
+#
+# A game is shown once it is the next one for both sides. Nothing here asks
+# what day of the week it is, or how far out the game is, which is what makes
+# it hold up where a schedule stops being regular: an opening week that runs
+# Thursday to Monday, a post-season of bowls weeks apart, a play-off bracket
+# whose next round depends on the last one.
+#
+# It is also what settles the fault this module was reported for. A Top 25
+# feed carries the unranked opponent of every ranked team, a conference feed
+# carries non-conference visitors, the college-football feed carries FCS
+# sides on their one trip to an FBS stadium - each appearing about once a
+# season, often a month out. Read as "their next game", those fixtures earned
+# cards weeks early. The other side of such a game is always a team the feed
+# follows properly, and that team plays sooner, so the game waits its turn.
+
+
+def _day(offset: int, hour: int = 19) -> datetime.datetime:
+    return _NOON.replace(hour=hour) + datetime.timedelta(days=offset)
+
+
+def test_a_lone_far_off_fixture_waits_for_the_team_that_plays_sooner() -> None:
+    """The reported fault: an unranked visitor's one appearance in a Top 25
+    feed, five weeks out, is not UGA's next game - UGA plays on Saturday."""
+    app = _make_app({"leagues": ["ncaaf-top25"]})
+    games = [
+        _pre_game("saturday", "ncaaf-top25", "UGA", "BAMA", _day(2)),
+        _pre_game("next_month", "ncaaf-top25", "CHAR", "UGA", _day(30)),
+    ]
+    assert _frozen_filter(app, games) == {"saturday"}
+
+
+def test_a_bye_team_waits_while_the_round_it_is_missing_is_played() -> None:
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("this_week", "college-football", "UGA", "BAMA", _day(2)),
+        # BAMA's opponent next week is on a bye this week.
+        _pre_game("after_bye", "college-football", "MSU", "BAMA", _day(9)),
+    ]
+    assert _frozen_filter(app, games) == {"this_week"}
+
+
+def test_the_bye_game_arrives_once_that_round_has_been_played() -> None:
+    """The other half: the game isn't suppressed, it is waiting. Once BAMA's
+    Saturday game is over, the game a week out is next for both sides."""
+    app = _make_app(
+        {"leagues": ["college-football"], "completed_game_window": {"days": 2}}
+    )
+    games = [
+        _game("this_week", "college-football", "UGA", "BAMA", _day(-1), "post"),
+        _pre_game("after_bye", "college-football", "MSU", "BAMA", _day(6)),
+    ]
+    assert _frozen_filter(app, games) == {"this_week", "after_bye"}
+
+
+def test_a_whole_opening_week_from_thursday_to_monday_is_shown() -> None:
+    """Week one of a college-football season doesn't fit in a weekend: it
+    opens Thursday and runs through Sunday and Monday. Every one of those is
+    its teams' next game, and the following week's are not."""
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("thursday", "college-football", "UGA", "BAMA", _day(1)),
+        _pre_game("saturday", "college-football", "MSU", "OSU", _day(3)),
+        _pre_game("sunday", "college-football", "UW", "ORE", _day(4)),
+        _pre_game("monday", "college-football", "FSU", "MIA", _day(5)),
+        # Week two, pairing teams that all play in week one.
+        _pre_game("week_two", "college-football", "UGA", "MSU", _day(10)),
+    ]
+    assert _frozen_filter(app, games) == {"thursday", "saturday", "sunday", "monday"}
+
+
+def test_a_sunday_opener_does_not_hold_back_the_teams_that_played_saturday() -> None:
+    """Mid-week-one: Saturday is in the books, Sunday and Monday are still to
+    come. The teams already done move on to week two, the teams still playing
+    week one do not - and nobody ends up with two upcoming cards."""
+    app = _make_app(
+        {"leagues": ["college-football"], "completed_game_window": {"days": 2}}
+    )
+    games = [
+        _game("saturday", "college-football", "MSU", "OSU", _day(-1), "post"),
+        _pre_game("sunday", "college-football", "UW", "ORE", _day(0, hour=23)),
+        _pre_game("monday", "college-football", "FSU", "MIA", _day(1)),
+        # Week two: two teams that played on Saturday.
+        _pre_game("w2_played", "college-football", "MSU", "OSU", _day(6)),
+        # Week two: a team still waiting on its Monday opener.
+        _pre_game("w2_waiting", "college-football", "FSU", "MSU", _day(7)),
+    ]
+    kept = _frozen_filter(app, games)
+    assert kept == {"saturday", "sunday", "monday", "w2_played"}
+
+
+def test_a_post_season_of_scattered_bowls_all_shows() -> None:
+    """Bowl season has no weekly shape at all - games days apart, each team
+    playing once, a month either side of New Year. Every one of them is both
+    teams' next game, so no rule about weeks may clip them."""
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("bowl_a", "college-football", "UGA", "BAMA", _day(3)),
+        _pre_game("bowl_b", "college-football", "MSU", "OSU", _day(12)),
+        _pre_game("bowl_c", "college-football", "UW", "ORE", _day(20)),
+        _pre_game("bowl_d", "college-football", "FSU", "MIA", _day(26)),
+    ]
+    assert _frozen_filter(app, games) == {"bowl_a", "bowl_b", "bowl_c", "bowl_d"}
+
+
+def test_a_play_off_final_waits_on_its_semi_finals() -> None:
+    """A bracket is the strictest form of the rule: the final is not anybody's
+    next game while a semi-final still stands in front of it."""
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("semi_one", "college-football", "UGA", "BAMA", _day(3)),
+        _pre_game("semi_two", "college-football", "MSU", "OSU", _day(4)),
+        _pre_game("final", "college-football", "UGA", "MSU", _day(18)),
+    ]
+    assert _frozen_filter(app, games) == {"semi_one", "semi_two"}
+
+
+def test_each_league_is_read_on_its_own_fixtures() -> None:
+    """Leagues run on their own calendars, and none of them is consulted for
+    another: college football's Saturday neither drags in nor holds back
+    anything in the NFL."""
+    app = _make_app({"leagues": ["college-football", "nfl"]})
+    games = [
+        _pre_game("cfb_saturday", "college-football", "UGA", "BAMA", _day(2)),
+        _pre_game("cfb_next_week", "college-football", "UGA", "MSU", _day(9)),
+        _pre_game("nfl_thursday", "nfl", "DEN", "LV", _day(1)),
+        _pre_game("nfl_sunday", "nfl", "KC", "SF", _day(4)),
+        _pre_game("nfl_monday", "nfl", "NE", "MIA", _day(5)),
+        _pre_game("nfl_next_week", "nfl", "KC", "DEN", _day(11)),
+    ]
+    assert _frozen_filter(app, games) == {
+        "cfb_saturday", "nfl_thursday", "nfl_sunday", "nfl_monday"
+    }
+
+
+def test_no_team_ends_up_with_two_upcoming_cards() -> None:
+    """The invariant behind all of it, over a deliberately ragged schedule."""
+    app = _make_app({"leagues": ["college-football"]})
+    games = [
+        _pre_game("g1", "college-football", "UGA", "BAMA", _day(1)),
+        _pre_game("g2", "college-football", "MSU", "OSU", _day(3)),
+        _pre_game("g3", "college-football", "UW", "ORE", _day(4)),
+        _pre_game("g4", "college-football", "UGA", "MSU", _day(8)),
+        _pre_game("g5", "college-football", "BAMA", "UW", _day(9)),
+        _pre_game("g6", "college-football", "ORE", "OSU", _day(17)),
+    ]
+    kept = _frozen_filter(app, games)
+    seen: set[str] = set()
+    for game in games:
+        if game["id"] not in kept:
+            continue
+        for abbr in (game["home_abbr"], game["away_abbr"]):
+            assert abbr not in seen, f"{abbr} has more than one upcoming card"
+            seen.add(abbr)
+
+
+def test_a_favorite_keeps_its_next_game_whenever_it_falls() -> None:
+    """The one exemption: a favorite was picked by name, so its next game is
+    shown even while its opponent has a game to play first - a bye week, or a
+    bowl a month after everyone else's season ended."""
+    app = _make_app(
+        {"leagues": ["college-football"], "favorite_teams": ["college-football:UW"]}
+    )
+    games = [
+        _pre_game("this_week", "college-football", "UGA", "BAMA", _day(2)),
+        _pre_game("uw_bowl", "college-football", "UW", "BAMA", _day(25)),
+    ]
+    assert _frozen_filter(app, games) == {"this_week", "uw_bowl"}
+
+
+def test_a_favorite_is_exempt_through_a_league_variant() -> None:
+    """Favorites are stored against the base league (the team picker offers
+    only those), while a Top 25 or conference feed labels the same game with
+    its own id - the exemption has to see through that."""
+    app = _make_app(
+        {"leagues": ["ncaaf-top25"], "favorite_teams": ["college-football:UW"]}
+    )
+    games = [
+        _pre_game("saturday", "ncaaf-top25", "UGA", "BAMA", _day(2)),
+        _pre_game("uw_after_bye", "ncaaf-top25", "UW", "BAMA", _day(9)),
+    ]
+    assert _frozen_filter(app, games) == {"saturday", "uw_after_bye"}
+
+
+def test_one_team_across_two_league_feeds_is_still_one_team() -> None:
+    """The same fixture arrives labelled by whichever selection returned it -
+    a Top 25 game as ``ncaaf-top25``, a favorite's unranked game as
+    ``college-football``. Keyed by label, UW would read as two teams and get
+    a card for each; keyed by the underlying league, it gets one."""
+    app = _make_app(
+        {"leagues": ["ncaaf-top25"], "favorite_teams": ["college-football:UW"]}
+    )
+    games = [
+        _pre_game("uw_ranked", "ncaaf-top25", "UW", "UGA", _day(2)),
+        _pre_game("uw_unranked", "college-football", "UW", "WSU", _day(9)),
+    ]
+    assert _frozen_filter(app, games) == {"uw_ranked"}
+
+
+def test_the_fetch_reaches_past_the_longest_gap_in_a_schedule() -> None:
+    """A game the filter would keep must be a game the fetch asked for. The
+    longest real gap is a post-season one - a team's last regular-season game
+    to its bowl - not a bye week."""
+    from apps.sports.app import _NEXT_GAME_FETCH_DAYS
+
+    assert _NEXT_GAME_FETCH_DAYS >= 28
