@@ -86,6 +86,26 @@ _TRACKED_CANCELLED: dict[str, Any] = {
 
 _TRACKED_NOT_FOUND: dict[str, Any] = {"found": False, "ident": "ZZ000"}
 
+# Gate/terminal/baggage variants (AeroAPI "when known" fields). Each reuses a
+# phase's base data and adds the fields the schedule row surfaces for that phase:
+# origin terminal/gate before departure, destination terminal/gate once airborne,
+# and destination gate + baggage belt on arrival.
+_TRACKED_SCHEDULED_GATE: dict[str, Any] = {
+    **_TRACKED_SCHEDULED,
+    "terminal_origin": "4", "gate_origin": "B22",
+    "terminal_dest": "S", "gate_dest": "A7",
+}
+
+_TRACKED_AIRBORNE_GATE: dict[str, Any] = {
+    **_TRACKED_AIRBORNE,
+    "terminal_dest": "5", "gate_dest": "68A",
+}
+
+_TRACKED_LANDED_GATE_BAG: dict[str, Any] = {
+    **_TRACKED_LANDED_ONTIME,
+    "terminal_dest": "3", "gate_dest": "12", "baggage_claim": "7",
+}
+
 
 def _flights_config(
     flight_numbers: list[str], labels: dict[str, str] | None = None
@@ -165,6 +185,19 @@ def _fixtures() -> dict[str, dict[str, Any]]:
         "card_not_found": {
             "config": {"display_mode": "cards", "flights": _flights_config(["ZZ000"])},
             "seed": _seed({"ZZ000": _TRACKED_NOT_FOUND}, ["ZZ000"]),
+        },
+        # Gate/terminal/baggage on the schedule row, one per flight phase.
+        "card_scheduled_gate": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["DL699"]), "units": "imperial"},
+            "seed": _seed({"DL699": _TRACKED_SCHEDULED_GATE}, ["DL699"], logo_codes={"DL": "c8102e"}),
+        },
+        "card_airborne_gate": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["UA1542"]), "units": "imperial"},
+            "seed": _seed({"UA1542": _TRACKED_AIRBORNE_GATE}, ["UA1542"], logo_codes={"UA": "003087"}),
+        },
+        "card_landed_gate_bag": {
+            "config": {"display_mode": "cards", "flights": _flights_config(["AA100"]), "units": "imperial"},
+            "seed": _seed({"AA100": _TRACKED_LANDED_GATE_BAG}, ["AA100"], logo_codes={"AA": "0078d2"}),
         },
         "table_multi": {
             "config": {"display_mode": "table", "flights": _flights_config(["DL699", "UA1542", "AA100", "ZZ000"])},

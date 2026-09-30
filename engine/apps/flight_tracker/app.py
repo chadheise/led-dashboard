@@ -120,6 +120,51 @@ def _fmt_delay(seconds: int | None) -> str:
     return f"Delayed +{minutes}m"
 
 
+def _gate_info(tracked: dict[str, Any], kind: str, verbose: bool) -> str:
+    """Phase-appropriate terminal/gate/baggage suffix for the schedule row.
+
+    Before departure ("scheduled") the *origin* terminal/gate is what the
+    traveler needs (where to board); once airborne or landed the *destination*
+    terminal/gate — and, on landing, the baggage-claim belt — are what a person
+    meeting the flight needs. All fields are AeroAPI's "when known" strings, so
+    each part is emitted only when populated and the whole suffix is "" when
+    nothing is known (keeping cards without this data pixel-identical).
+
+    ``verbose`` spells the labels out ("Terminal 1, Gate C1, Bag 3"); the terse
+    form ("T1 GC1 Bag 3") is the fallback the caller uses when the verbose one
+    won't fit the available width.
+    """
+    if kind == "scheduled":
+        term = str(tracked.get("terminal_origin") or "")
+        gate = str(tracked.get("gate_origin") or "")
+        bag = ""
+    elif kind in ("airborne", "landed"):
+        term = str(tracked.get("terminal_dest") or "")
+        gate = str(tracked.get("gate_dest") or "")
+        bag = str(tracked.get("baggage_claim") or "") if kind == "landed" else ""
+    else:
+        return ""
+
+    parts: list[str] = []
+    if verbose:
+        if term:
+            parts.append(f"Terminal {term}")
+        if gate:
+            parts.append(f"Gate {gate}")
+        if bag:
+            parts.append(f"Bag {bag}")
+        return ", ".join(parts)
+
+    if term:
+        parts.append(f"T{term}")
+    if gate:
+        # No "G" prefix in the terse form: "T1 C1" reads as terminal 1, gate C1.
+        parts.append(gate)
+    if bag:
+        parts.append(f"Bag {bag}")
+    return " ".join(parts)
+
+
 def _phase(tracked: dict[str, Any] | None) -> str:
     """Classify a tracked flight's lifecycle phase for AeroAPI polling gates.
 
@@ -700,13 +745,17 @@ class FlightTrackerApp(DisplayApp):
         tracked: dict[str, Any],
         kind: str,
         text_color: tuple[int, int, int],
+        avail_w: int = 0,
+        font_size: int = 7,
     ) -> list[tuple[str, tuple[int, int, int]]]:
         """The two bottom card rows as (text, color) pairs.
 
-        Row 1 (departure/ETA/landing time) uses the card's base text color.
-        Row 2 is the on-time/delay/cancelled indicator, colored green when on
-        time or ahead of schedule, yellow when delayed, and red when
-        cancelled.
+        Row 1 (departure/ETA/landing time) uses the card's base text color and
+        appends phase-appropriate gate/terminal/baggage info when known (see
+        ``_gate_info``): the verbose "Terminal 1, Gate C1" form when it fits
+        ``avail_w`` at ``font_size``, else the terse "T1 GC1" fallback. Row 2 is
+        the on-time/delay/cancelled indicator, colored green when on time or
+        ahead of schedule, yellow when delayed, and red when cancelled.
         """
         tz, time_format = self._tz_and_time_format()
 
@@ -726,6 +775,19 @@ class FlightTrackerApp(DisplayApp):
             delay_key = "arrival_delay"
         else:
             return []
+
+        # Gate/terminal/baggage: spell it out when the row has room, else abbreviate.
+        # Suppressed for cancelled flights, where a stale gate would just mislead.
+        if not tracked.get("cancelled"):
+            terse = _gate_info(tracked, kind, verbose=False)
+            if terse:
+                info = terse
+                verbose = _gate_info(tracked, kind, verbose=True)
+                if avail_w > 0 and render_text(
+                    f"{schedule} {verbose}", text_color, font_size
+                ).width <= avail_w:
+                    info = verbose
+                schedule = f"{schedule} {info}"
 
         if tracked.get("cancelled"):
             return [(schedule, text_color), ("Cancelled", _STATUS_RED)]
@@ -877,7 +939,8 @@ class FlightTrackerApp(DisplayApp):
         # the status indicator colored by on-time/delayed/cancelled state.
         if n_rows == 5:
             bottom_w = inner_w - stats_w - (stats_gap if stats_w else 0)
-            for i, (line, color) in enumerate(self._status_rows(tracked, kind, text_color)[:2]):
+            status_rows = self._status_rows(tracked, kind, text_color, bottom_w, font_size)
+            for i, (line, color) in enumerate(status_rows[:2]):
                 if line and bottom_w > 0:
                     clipped = _clip_text(line, font_size, bottom_w)
                     line_img = render_text(clipped, color, font_size)

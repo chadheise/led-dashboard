@@ -1219,6 +1219,14 @@ def _extract_tracking_fields(flight: dict[str, Any]) -> dict[str, Any]:
         "progress_percent": flight.get("progress_percent"),
         "live": live,
         "icao24": (last_position.get("icao24") or "").lower(),
+        # Gate/terminal/baggage — populated by AeroAPI "when known" (all nullable).
+        # Normalized to origin/dest naming to match the rest of the tracking dict;
+        # the flight-tracker card renders these rows only when non-empty.
+        "gate_origin": flight.get("gate_origin") or "",
+        "gate_dest": flight.get("gate_destination") or "",
+        "terminal_origin": flight.get("terminal_origin") or "",
+        "terminal_dest": flight.get("terminal_destination") or "",
+        "baggage_claim": flight.get("baggage_claim") or "",
     })
     return fields
 
