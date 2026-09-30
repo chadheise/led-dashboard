@@ -64,6 +64,15 @@ Optionally commit real PNGs to `apps/sports/tests/logos/{league}/{ABBR}.png`
 (run `python -m tests.framework.fetch_fixture_logos` on a machine with
 network access); they take precedence and tests must then be re-blessed.
 
+Tests never hit the network and never use captured personal data. Libraries that
+parse a binary third-party format build their input synthetically in the test
+rather than committing a real capture — e.g. `libraries/flighty/tests/test_flighty.py`
+hand-encodes a tiny Flighty `SyncResponseProto` (see its `_encode` helpers) to
+exercise the reverse-engineered parser in `libraries/flighty/sync_parser.py`. The
+Flight Tracker's Flighty source is snapshot-covered by the `flighty_own` /
+`flighty_friend` / `flighty_table` fixtures, which seed `_tracked` +
+`_flighty_order` directly (no live sync).
+
 ## Adding snapshot coverage for another app
 
 1. Create `apps/{app}/tests/__init__.py` (empty) and `apps/{app}/tests/fixtures.py`

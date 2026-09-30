@@ -62,7 +62,7 @@ def _airline_obj() -> bytes:
 
 def _flight(uuid: str, owner: str, number: str, sched_off: int, est_off: int,
             sched_on: int, est_on: int, *, dep_gate="", dep_term="",
-            arr_term="", arr_gate="", arr_bag="") -> bytes:
+            arr_term="", arr_gate="", arr_bag="", cancelled=False) -> bytes:
     dep = (
         _s(2, dep_term) + _s(3, dep_gate)
         + _ld(4, _time(1, sched_off) + _time(2, est_off))
@@ -75,6 +75,7 @@ def _flight(uuid: str, owner: str, number: str, sched_off: int, est_off: int,
     )
     detail = (
         _ld(2, dep) + _ld(3, arr)
+        + (_vint(5, 1) if cancelled else b"")                     # cancelled flag
         + _ld(6, _s(2, number) + _vint(3, 1) + _s(4, AIRLINE))   # primary number
         + _ld(7, _s(6, "B739"))                                   # aircraft
         + _ld(10, _ld(4, _airline_obj()))                        # embedded airline (leg)
@@ -148,6 +149,20 @@ def test_parser_extracts_flights_airports_airlines_and_cursor() -> None:
 
 def test_parser_tolerates_garbage() -> None:
     assert parse_sync_response(b"\xff\xff\xff").flights == {}
+
+
+def test_cancelled_flag_parsed_and_normalized() -> None:
+    body = _sync_body(
+        "C",
+        [_flight_entity("f-x", ME, "99", NOW + 3600, NOW + 3600,
+                        NOW + 7200, NOW + 7200, cancelled=True)],
+        [],
+    )
+    parsed = parse_sync_response(body)
+    assert parsed.flights["f-x"]["cancelled"] is True
+    lib = FlightyLibrary({"auth_token": _jwt(ME)})
+    normalized = lib._normalize(parsed.flights["f-x"], time.time())
+    assert normalized["cancelled"] is True
 
 
 # ── library normalization / fetch ───────────────────────────────────────────

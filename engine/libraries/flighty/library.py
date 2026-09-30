@@ -298,7 +298,7 @@ class FlightyLibrary(Library):
             "operator_iata": iata,
             "aircraft_type": fl.get("aircraft_icao", ""),
             "status": "",
-            "cancelled": False,
+            "cancelled": bool(fl.get("cancelled")),
             "scheduled_off": _iso(sched_off),
             "estimated_off": _iso(est_off),
             "actual_off": actual_off,

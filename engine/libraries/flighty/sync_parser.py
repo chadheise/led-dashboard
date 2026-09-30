@@ -27,6 +27,7 @@ are decoded; everything else is skipped. The response is a delta-sync:
     FlightDetail (Flight#2) {
       2:  Departure { 2: terminal, 3: gate, 4: TimeBlock, 11: airport_uuid }
       3:  Arrival   { 3: terminal, 4: gate, 5: baggage, 7: TimeBlock, 13/14: airport_uuid }
+      5:  cancelled flag (varint, present/1 only on cancelled flights)
       6:  repeated FlightNumber { 2: number, 3: is_primary, 4: airline_uuid }
       7:  Aircraft  { 1: tail, 2: type_name, 6: icao_type }
       16: primary flight number (string, digits)
@@ -211,6 +212,8 @@ def _parse_flight_entity(entity_body: bytes, airlines: dict[str, str]) -> dict[s
         "owner": _str(fl, 9),
         "number": number,
         "airline_uuid": airline_uuid,
+        # FlightDetail #5 is a cancelled flag (present/1 only on cancelled flights).
+        "cancelled": bool(_first(det, 5)),
         "origin_uuid": _str(dep, 11),
         "dest_uuid": _str(arr, 13) or _str(arr, 14),
         "dep_terminal": _str(dep, 2),
