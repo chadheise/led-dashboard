@@ -95,6 +95,51 @@ def _fmt_time(value: str | None, tz: tzinfo | None = None, time_format: str = "2
     return f"{dt.hour:02d}:{dt.minute:02d}"
 
 
+_FAR_FUTURE = timedelta(hours=24)
+
+
+def _fmt_date(dt: datetime, date_format: str = "month_day") -> str:
+    """Numeric date string honoring the month/day vs day/month setting."""
+    if date_format == "day_month":
+        return f"{dt.day}/{dt.month}"
+    return f"{dt.month}/{dt.day}"
+
+
+def _is_far_future(value: str | None, now: datetime) -> bool:
+    """Whether a UTC ISO timestamp is more than 24h ahead of ``now``."""
+    dt = _parse_dt(value)
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt - now > _FAR_FUTURE
+
+
+def _fmt_when(
+    value: str | None,
+    tz: tzinfo | None,
+    time_format: str,
+    date_format: str,
+    now: datetime,
+) -> str:
+    """Time-of-day, prefixed with the date when the flight is >24h in the future.
+
+    Near-term flights show just the time (as before); a flight more than a day out
+    also shows its date so, e.g., a departure two weeks away isn't mistaken for
+    today. The date is formatted in the user's timezone.
+    """
+    time_str = _fmt_time(value, tz, time_format)
+    dt = _parse_dt(value)
+    if dt is None:
+        return time_str
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt - now > _FAR_FUTURE:
+        local = dt.astimezone(tz) if tz is not None else dt
+        return f"{_fmt_date(local, date_format)} {time_str}"
+    return time_str
+
+
 def _within_lookup_window(date_str: str | None, today: date) -> bool:
     """Whether a flight's configured date is near enough to track/display.
 
@@ -427,6 +472,16 @@ class FlightTrackerApp(DisplayApp):
                 "title": "Units",
                 "enum": ["metric", "imperial", "metric+imperial"],
                 "default": "metric+imperial",
+            },
+            "date_format": {
+                "type": "string",
+                "title": "Date format",
+                "description": (
+                    "How to write dates on flights more than 24 hours away."
+                ),
+                "enum": ["month_day", "day_month"],
+                "x-enum-labels": ["Month/Day (6/18)", "Day/Month (18/6)"],
+                "default": "month_day",
             },
             "debug": {
                 "type": "boolean",
@@ -815,6 +870,9 @@ class FlightTrackerApp(DisplayApp):
         tz = resolve_zone(tz_str) if tz_str else None
         return tz, self._location.get_time_format()
 
+    def _date_format(self) -> str:
+        return str(self.config.get("date_format", "month_day") or "month_day")
+
     async def render_frame(self) -> None:
         if not self._flight_numbers():
             msg = "Loading..." if not self._fetched_once else "No flights configured"
@@ -855,20 +913,25 @@ class FlightTrackerApp(DisplayApp):
         ahead of schedule, yellow when delayed, and red when cancelled.
         """
         tz, time_format = self._tz_and_time_format()
+        date_format = self._date_format()
+        now = datetime.now(timezone.utc)
 
         def delay_cell(delay_seconds: int | None) -> tuple[str, tuple[int, int, int]]:
             text = _fmt_delay(delay_seconds)
             return (text, _STATUS_YELLOW) if text else ("On time", _STATUS_GREEN)
 
+        def when(value: str | None) -> str:
+            return _fmt_when(value, tz, time_format, date_format, now)
+
         if kind == "scheduled":
-            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'), tz, time_format)}"
+            schedule = f"Dep {when(tracked.get('scheduled_off'))}"
             delay_key = "departure_delay"
         elif kind == "airborne":
             eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
-            schedule = f"ETA {_fmt_time(eta, tz, time_format)}"
+            schedule = f"ETA {when(eta)}"
             delay_key = "arrival_delay"
         elif kind == "landed":
-            schedule = f"Landed {_fmt_time(tracked.get('actual_on'), tz, time_format)}"
+            schedule = f"Landed {when(tracked.get('actual_on'))}"
             delay_key = "arrival_delay"
         else:
             return []
@@ -1070,6 +1133,8 @@ class FlightTrackerApp(DisplayApp):
 
         labels = self._labels()
         tz, time_format = self._tz_and_time_format()
+        date_format = self._date_format()
+        now = datetime.now(timezone.utc)
 
         def _rows() -> list[tuple[str, str, tuple[int, int, int]]]:
             """Per-flight (prefix, status, status_color) rows.
@@ -1077,7 +1142,8 @@ class FlightTrackerApp(DisplayApp):
             ``prefix`` (ident + schedule/ETA/landed info) uses the card's base
             text color; ``status`` is colored like the card's status indicator
             -- green on time/ahead, yellow delayed, red cancelled -- so the
-            table matches the cards' color coding.
+            table matches the cards' color coding. Flights more than 24h out get
+            their date shown (e.g. "Sched 6/18") so far-off flights are legible.
             """
             rows = []
             for fn in flight_numbers:
@@ -1087,11 +1153,15 @@ class FlightTrackerApp(DisplayApp):
                     prefix, status, color = "not avail", "", text_color
                 else:
                     if kind == "scheduled":
-                        info = "Scheduled"
+                        if _is_far_future(tracked.get("scheduled_off"), now):
+                            dep = _fmt_when(tracked.get("scheduled_off"), tz, time_format, date_format, now)
+                            info = f"Sched {dep}"
+                        else:
+                            info = "Scheduled"
                         delay_key = "departure_delay"
                     elif kind == "airborne":
                         eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
-                        info = f"ETA {_fmt_time(eta, tz, time_format)}"
+                        info = f"ETA {_fmt_when(eta, tz, time_format, date_format, now)}"
                         delay_key = "departure_delay"
                     else:
                         info = "Landed"

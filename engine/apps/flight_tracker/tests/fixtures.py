@@ -29,9 +29,10 @@ _TRACKED_AIRBORNE: dict[str, Any] = {
     "origin_name": "Chicago O'Hare Intl", "dest_name": "Los Angeles Intl",
     "airline": "United Airlines", "operator_iata": "UA", "aircraft_type": "Boeing 737-900",
     "status": "En Route",
-    "scheduled_off": "2026-06-18T10:00:00Z", "estimated_off": "2026-06-18T10:05:00Z",
-    "actual_off": "2026-06-18T10:07:00Z",
-    "scheduled_on": "2026-06-18T12:30:00Z", "estimated_on": "2026-06-18T12:42:00Z",
+    # Near FIXED_NOW (2026-06-10 12:00Z) so this airborne flight shows time only.
+    "scheduled_off": "2026-06-10T10:00:00Z", "estimated_off": "2026-06-10T10:05:00Z",
+    "actual_off": "2026-06-10T10:07:00Z",
+    "scheduled_on": "2026-06-10T12:30:00Z", "estimated_on": "2026-06-10T12:42:00Z",
     "actual_on": None,
     "departure_delay": 420, "arrival_delay": 720, "progress_percent": 62,
     "live": {
@@ -48,10 +49,11 @@ _TRACKED_LANDED_ONTIME: dict[str, Any] = {
     "origin_name": "JFK Intl", "dest_name": "London Heathrow",
     "airline": "American Airlines", "operator_iata": "AA", "aircraft_type": "Boeing 777-300ER",
     "status": "Landed",
-    "scheduled_off": "2026-06-17T22:00:00Z", "estimated_off": "2026-06-17T22:00:00Z",
-    "actual_off": "2026-06-17T22:01:00Z",
-    "scheduled_on": "2026-06-18T09:50:00Z", "estimated_on": "2026-06-18T09:50:00Z",
-    "actual_on": "2026-06-18T09:48:00Z",
+    # Just before FIXED_NOW so this landed flight shows time only.
+    "scheduled_off": "2026-06-09T22:00:00Z", "estimated_off": "2026-06-09T22:00:00Z",
+    "actual_off": "2026-06-09T22:01:00Z",
+    "scheduled_on": "2026-06-10T09:50:00Z", "estimated_on": "2026-06-10T09:50:00Z",
+    "actual_on": "2026-06-10T09:48:00Z",
     "departure_delay": 60, "arrival_delay": 0, "progress_percent": 100,
     "live": None, "icao24": "",
 }
@@ -63,10 +65,11 @@ _TRACKED_LANDED_DELAYED: dict[str, Any] = {
     "origin_name": "London Heathrow", "dest_name": "JFK Intl",
     "airline": "British Airways", "operator_iata": "BA", "aircraft_type": "Boeing 777-200",
     "status": "Landed",
-    "scheduled_off": "2026-06-18T11:00:00Z", "estimated_off": "2026-06-18T11:35:00Z",
-    "actual_off": "2026-06-18T11:38:00Z",
-    "scheduled_on": "2026-06-18T13:50:00Z", "estimated_on": "2026-06-18T14:25:00Z",
-    "actual_on": "2026-06-18T14:22:00Z",
+    # Day before FIXED_NOW so this landed flight shows time only.
+    "scheduled_off": "2026-06-09T11:00:00Z", "estimated_off": "2026-06-09T11:35:00Z",
+    "actual_off": "2026-06-09T11:38:00Z",
+    "scheduled_on": "2026-06-09T13:50:00Z", "estimated_on": "2026-06-09T14:25:00Z",
+    "actual_on": "2026-06-09T14:22:00Z",
     "departure_delay": 2280, "arrival_delay": 1920, "progress_percent": 100,
     "live": None, "icao24": "",
 }
@@ -304,7 +307,12 @@ def _register() -> None:
             app_id="flight_tracker",
             fixtures=_fixtures(),
             sizes=harness.CORE_SIZES,
-            render=harness.app_case_render(FlightTrackerApp),
+            # Freeze the clock so the ">24h in the future -> show date" logic is
+            # deterministic. Fixtures dated after FIXED_NOW render with a date;
+            # airborne/landed fixtures sit near FIXED_NOW so they show only a time.
+            render=harness.app_case_render(
+                FlightTrackerApp, freeze_datetime="apps.flight_tracker.app.datetime"
+            ),
         )
     )
 

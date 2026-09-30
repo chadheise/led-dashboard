@@ -18,7 +18,9 @@ from zoneinfo import ZoneInfo
 
 from apps.flight_tracker.app import (
     FlightTrackerApp,
+    _fmt_date,
     _fmt_time,
+    _fmt_when,
     _phase,
     _within_lookup_window,
 )
@@ -422,3 +424,29 @@ def test_should_display_true_for_in_range_active_flight():
     app._tracked = {"DL1": {"found": True, "scheduled_off": _iso(_hours(1))}}
     assert app._flights_in_range() == ["DL1"]
     assert _should_display(app) is True
+
+
+# ── Date on far-future flights + month/day vs day/month format ────────────────
+
+_REF = datetime.datetime(2026, 6, 10, 12, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_fmt_date_formats():
+    d = datetime.datetime(2026, 6, 18, 14, 0)
+    assert _fmt_date(d, "month_day") == "6/18"
+    assert _fmt_date(d, "day_month") == "18/6"
+
+
+def test_fmt_when_adds_date_only_beyond_24h():
+    # Same day / within 24h -> time only.
+    soon = "2026-06-11T09:30:00Z"
+    assert _fmt_when(soon, None, "24h", "month_day", _REF) == "09:30"
+    # More than 24h out -> date prefix in the chosen format.
+    far = "2026-06-18T14:00:00Z"
+    assert _fmt_when(far, None, "24h", "month_day", _REF) == "6/18 14:00"
+    assert _fmt_when(far, None, "24h", "day_month", _REF) == "18/6 14:00"
+
+
+def test_fmt_when_exactly_24h_is_time_only():
+    # Boundary: 24h ahead is not "beyond" 24h.
+    assert _fmt_when("2026-06-11T12:00:00Z", None, "24h", "month_day", _REF) == "12:00"
