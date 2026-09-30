@@ -37,14 +37,24 @@ _STATE_PATH = Path("data/flighty_state.json")
 _DEFAULT_API_BASE = "https://api.flightyapp.com"
 _DEFAULT_CACHE_TTL_MINUTES = 10.0
 # Sync schema version + the entity keys the app sends in its cursor. On first run
-# every entity is requested from 0 (full sync); afterwards we echo the server's
-# next cursor, so this constant only seeds the very first request.
+# we request the account's own data from 0 (all flights + friends + connections)
+# but mark the bulk/global reference tables (airports, airlines, aircraft types)
+# as already-current — requesting those from 0 makes the server try to dump the
+# entire global reference DB, which returns an empty page then HTTP 500. Airline
+# and airport codes still resolve from objects embedded in the flight records, so
+# skipping the reference dump costs nothing. After the first sync we echo the
+# server's next cursor.
 _SCHEMA_VERSION = "V_2026_07_10"
-_CURSOR_ENTITIES = (
+# Requested in full (timestamp 0) — the account's own records:
+_CURSOR_FULL = (
+    "flight", "connection", "connection_steps", "ticketInfo",
+    "profile", "connected-friends", "userDetails",
+)
+# Marked current (skipped) — global reference + settings that must not be dumped:
+_CURSOR_SKIP = (
     "user", "usersubscription", "airport", "cfv2", "airline", "pushsetting",
-    "metro", "flight", "connection", "connection_steps", "ticketInfo", "hdyhau",
-    "profile", "connected-friends", "connected-friends-push", "laSettings",
-    "custom", "userDetails", "aircraft_type",
+    "metro", "hdyhau", "connected-friends-push", "laSettings", "custom",
+    "aircraft_type",
 )
 # Only flights whose scheduled departure is within this past window are considered
 # "recent enough" to still show (matches the tracker's active-window behaviour).
@@ -216,9 +226,13 @@ class FlightyLibrary(Library):
     # ── sync ────────────────────────────────────────────────────────────────
 
     def _initial_cursor(self) -> str:
-        cursor = {"$sv": _SCHEMA_VERSION}
-        for key in _CURSOR_ENTITIES:
-            cursor[key] = {} if key == "p-flight" else 0
+        now = int(time.time())
+        cursor: dict[str, Any] = {"$sv": _SCHEMA_VERSION}
+        for key in _CURSOR_FULL:
+            cursor[key] = 0
+        for key in _CURSOR_SKIP:
+            cursor[key] = now
+        cursor["p-flight"] = {}
         raw = json.dumps(cursor, separators=(",", ":")).encode()
         return base64.b64encode(raw).decode()
 
@@ -253,8 +267,14 @@ class FlightyLibrary(Library):
             self._state["flights"][uuid] = fl
         self._state["airports"].update(parsed.airports)
         self._state["airlines"].update(parsed.airlines)
-        if parsed.next_cursor:
+        if parsed.next_cursor and self._state["flights"]:
+            # Only persist the advanced cursor once we actually hold flights, so a
+            # transient empty/500 first response can't strand us on a "caught up"
+            # cursor with an empty store — the next sync then re-runs the initial
+            # full request instead.
             self._state["cursor"] = parsed.next_cursor
+        elif not self._state["flights"]:
+            self._state["cursor"] = None
         self._last_sync = time.time()
         self._save_state()
         logger.info(
