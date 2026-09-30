@@ -31,6 +31,7 @@ EDGE_FIXTURES: list[str] = [
     "nba_in_progress",
     "nhl_in_progress",
     "epl_in_progress",
+    "uswnt_friendly_live",
 ]
 
 
@@ -356,6 +357,50 @@ def _extra_fixtures() -> dict[str, dict[str, Any]]:
             away_rank=23, home_rank=14,
             away_record="19-4", home_record="21-2",
             logo_slug=("77", "344"),
+        ),
+        # National teams: the USMNT and USWNT share a flag and "USA", so the
+        # footer must say which side is playing at every width.
+        "uswnt_friendly_pre": _game(
+            "intl-women", "soccer",
+            ("BRA", "Brazil", "Brazil"), ("USA", "United States", "United States"),
+            away_color="ffdf00", home_color="0a3161",
+            away_alt_color="009c3b", home_alt_color="b31942",
+            status="Sat 7/11 7:00 PM",
+            logo_slug=(None, None),
+            away_logo_url="https://flagcdn.com/w80/br.png",
+            home_logo_url="https://flagcdn.com/w80/us.png",
+            competition="fifa.friendly.w", gender="women",
+        ),
+        "uswnt_friendly_live": _game(
+            "intl-women", "soccer",
+            ("USA", "United States", "United States"), ("JPN", "Japan", "Japan"),
+            away_score="2", home_score="1",
+            away_color="0a3161", home_color="000080",
+            away_alt_color="b31942", home_alt_color="bc002d",
+            status="67'", state="in",
+            logo_slug=(None, None),
+            away_logo_url="https://flagcdn.com/w80/us.png",
+            home_logo_url="https://flagcdn.com/w80/jp.png",
+            away_goals=["12'", "58'"], home_goals=["40'"],
+            away_points=None, home_points=None,
+            away_id="usa", home_id="jpn",
+            competition="fifa.shebelieves", gender="women",
+        ),
+        "usmnt_gold_cup_final": _game(
+            "intl-men", "soccer",
+            ("MEX", "Mexico", "Mexico"), ("USA", "United States", "United States"),
+            away_score="1", home_score="2",
+            away_color="006847", home_color="0a3161",
+            away_alt_color="ce1126", home_alt_color="b31942",
+            status="FT", state="post",
+            match_note="Quarterfinal",
+            logo_slug=(None, None),
+            away_logo_url="https://flagcdn.com/w80/mx.png",
+            home_logo_url="https://flagcdn.com/w80/us.png",
+            away_goals=["30'"], home_goals=["22'", "81'"],
+            away_points=None, home_points=None,
+            away_id="mex", home_id="usa",
+            competition="concacaf.gold", gender="men",
         ),
     }
 

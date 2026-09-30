@@ -90,6 +90,7 @@ def test_composite_fetches_every_competition_and_labels_games() -> None:
     assert by_id["f1"]["league"] == "intl-women"
     assert by_id["f1"]["competition"] == "fifa.friendly.w"
     assert by_id["s1"]["competition"] == "fifa.shebelieves"
+    assert by_id["f1"]["gender"] == "women"
     # National flags, not ESPN's crest.
     assert by_id["f1"]["home_logo_url"] == "https://flagcdn.com/w80/us.png"
     assert by_id["f1"]["away_logo_url"] == "https://flagcdn.com/w80/br.png"

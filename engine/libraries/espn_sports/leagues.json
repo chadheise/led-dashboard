@@ -24,9 +24,9 @@
   {"id": "ger.1",                   "sport": "soccer",     "league": "ger.1",                   "label": "Bundesliga"},
   {"id": "uefa.champions",          "sport": "soccer",     "league": "uefa.champions",          "label": "Champions League"},
   {"id": "fifa.world",              "sport": "soccer",     "league": "fifa.world",              "label": "FIFA World Cup", "use_flags": true},
-  {"id": "intl-men",                "sport": "soccer",     "league": "intl-men",                "label": "Men's National Teams", "use_flags": true,
+  {"id": "intl-men",                "sport": "soccer",     "league": "intl-men",                "label": "Men's National Teams", "use_flags": true, "gender": "men",
    "competitions": ["fifa.world", "fifa.worldq.concacaf", "fifa.worldq.conmebol", "fifa.worldq.uefa", "fifa.worldq.afc", "fifa.worldq.caf", "fifa.worldq.ofc",
                     "fifa.friendly", "concacaf.nations.league", "concacaf.gold", "uefa.nations", "uefa.euro", "uefa.euroq", "conmebol.america", "caf.nations", "afc.asian.cup"]},
-  {"id": "intl-women",              "sport": "soccer",     "league": "intl-women",              "label": "Women's National Teams", "use_flags": true,
+  {"id": "intl-women",              "sport": "soccer",     "league": "intl-women",              "label": "Women's National Teams", "use_flags": true, "gender": "women",
    "competitions": ["fifa.wwc", "fifa.friendly.w", "fifa.shebelieves", "concacaf.w.gold", "concacaf.womens.championship", "uefa.weuro", "conmebol.america.femenina", "fifa.w.olympics"]}
 ]

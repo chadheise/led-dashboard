@@ -72,6 +72,8 @@ class GameView:
     is_live_shootout: bool     # live game currently in shootout phase
     league: str = ""           # ESPN league identifier, e.g. "fifa.world" - for a
                                # composite (intl-men) the competition played in
+    gender: str = ""           # national teams: "men" | "women" - the flags and
+                               # abbreviation are the same for both sides
     celebration: CelebrationView | None = None
     pk_flash: PkFlashView | None = None   # freshly landed shootout dots, blinking
 
@@ -286,6 +288,7 @@ def build_game_view(
         sport=sport,
         state=state,
         league=str(game.get("competition") or game.get("league") or ""),
+        gender=str(game.get("gender") or ""),
         status=_compose_status(game, tz=tz, time_format=time_format, now=now),
         match_note=str(game.get("match_note") or "") if sport == "soccer" else "",
         situation=dict(game.get("situation") or {}),

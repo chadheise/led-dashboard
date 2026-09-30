@@ -28,7 +28,9 @@ _LEAGUE_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in _LEAGUES}
 # A league entry with ``competitions`` (``intl-men``, ``intl-women``) is a
 # composite over those scoreboards, so one favorite (``intl-women:USA``)
 # follows a team through every competition it plays in. Men's and women's
-# sides share abbreviations, which is why they are separate composites.
+# sides share abbreviations, which is why they are separate composites - and
+# why their games carry the composite's ``gender``, so the card can say which
+# side is playing when the flags and "USA" alone can't.
 #
 # How many competitions of one composite are fetched at once. Each runs up to
 # ``_MAX_CONCURRENT_WINDOWS`` requests of its own, so this bounds the total.
@@ -1210,6 +1212,7 @@ class ESPNSportsLibrary(Library):
                         "id": str(event.get("id") or ""),
                         "league": league,
                         "competition": league_path,
+                        "gender": entry.get("gender"),
                         "sport": sport,
                         "home_abbr": home_team.get("abbreviation", "???"),
                         "away_abbr": away_team.get("abbreviation", "???"),

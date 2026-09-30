@@ -184,6 +184,48 @@ def _abbreviate_note(note: str) -> str:
     )
 
 
+_GENDER_TAGS: dict[str, tuple[str, str]] = {
+    "men": ("Men's", "M"),
+    "women": ("Women's", "W"),
+}
+
+
+def _tagged_to_fit(
+    text: str, color: RGB, tag: str, font: int, max_w: int
+) -> Image.Image:
+    """``text`` followed by a gender ``tag``, cutting ``text`` - never the
+    tag - down to fit."""
+    for size in (font, 7):
+        img = _baseline_hstack([(text, color), (" ", GRAY), (tag, GRAY)], size)
+        if img.width <= max_w:
+            return img
+    while text:
+        text = text[:-1].rstrip()
+        img = _baseline_hstack([(text, color), (" ", GRAY), (tag, GRAY)], 7)
+        if img.width <= max_w:
+            return img
+    return truncate_to_fit(tag, GRAY, 7, max_w)
+
+
+def _soccer_labels(view: GameView) -> list[str]:
+    """Gray footer labels to try after the minute, widest first.
+
+    A national-team game's gender is the one thing on the card that tells the
+    USMNT from the USWNT - same flag, same "USA" - so every label carries it,
+    shrinking from "Women's" to "W" before it is ever dropped, and the match
+    note is what gives way first. Other games offer the note alone, and the
+    caller falls back to no label at all.
+    """
+    notes = [n for n in (view.match_note, _abbreviate_note(view.match_note)) if n]
+    tags = _GENDER_TAGS.get(view.gender)
+    if not tags:
+        return notes
+    labels: list[str] = []
+    for tag in tags:
+        labels += [f"{tag} {n}" for n in notes] + [tag]
+    return labels
+
+
 def soccer_status_img(view: GameView, font: int, max_w: int) -> Image.Image:
     """Footer centre for soccer: yellow minute + gray match note, degrading to
     an abbreviated note and finally the minute alone.
@@ -223,26 +265,33 @@ def soccer_status_img(view: GameView, font: int, max_w: int) -> Image.Image:
     # Degradation ladder.  Priority: show pk score > use long minute label >
     # show note.  "Fnl/PK" is tried before "Final/PK" alone so narrower
     # screens still get the score even at the cost of a shorter label.
+    # A national team's gender tag outranks the pk score and the note: it is
+    # the last thing dropped, shrinking to "W"/"M" on the way.
     minutes = [minute] + ([short_minute] if short_minute else [])
-    notes = [n for n in (view.match_note, _abbreviate_note(view.match_note)) if n]
+    labels = _soccer_labels(view)
+    gender_tag = _GENDER_TAGS.get(view.gender)
 
     candidates: list[list[tuple[str, RGB]]] = []
     if pk_parts:
         # pk score present: try long and short labels, each with/without note
         for m in minutes:
-            for note in notes:
-                candidates.append([(m, YELLOW)] + pk_parts + [(" | ", GRAY), (note, GRAY)])
-            candidates.append([(m, YELLOW)] + pk_parts)
+            for label in labels:
+                candidates.append([(m, YELLOW)] + pk_parts + [(" | ", GRAY), (label, GRAY)])
+            if not gender_tag:
+                candidates.append([(m, YELLOW)] + pk_parts)
     # no pk score (or it didn't fit above): label + note, then label alone
     for m in minutes:
-        for note in notes:
-            candidates.append([(m, YELLOW), (" | ", GRAY), (note, GRAY)])
-        candidates.append([(m, YELLOW)])
+        for label in labels:
+            candidates.append([(m, YELLOW), (" | ", GRAY), (label, GRAY)])
+        if not gender_tag:
+            candidates.append([(m, YELLOW)])
 
     for parts in candidates:
         img = _baseline_hstack(parts, font)
         if img.width <= max_w:
             return img
+    if gender_tag:
+        return _tagged_to_fit(minutes[-1], YELLOW, gender_tag[1], font, max_w)
     return truncate_to_fit(minute, YELLOW, font, max_w)
 
 
@@ -570,9 +619,13 @@ def status_img(
         return baseball_status_img(view, font, max_w, with_diamond=diamond_in_footer)
     if view.is_soccer and view.state in ("in", "post"):
         return soccer_status_img(view, font, max_w)
-    if view.is_soccer and view.match_note:
-        for note in (view.match_note, _abbreviate_note(view.match_note)):
-            img = render_text(f"{view.status} | {note}", GRAY, font)
+    if view.is_soccer:
+        for label in _soccer_labels(view):
+            img = render_text(f"{view.status} | {label}", GRAY, font)
             if img.width <= max_w:
                 return img
+        if view.gender in _GENDER_TAGS:
+            return _tagged_to_fit(
+                view.status, GRAY, _GENDER_TAGS[view.gender][1], font, max_w
+            )
     return plain_status_img(view.status, font, max_w)
