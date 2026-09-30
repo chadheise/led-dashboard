@@ -41,6 +41,12 @@ _STATUS_GREEN: tuple[int, int, int] = (72, 200, 76)
 _STATUS_YELLOW: tuple[int, int, int] = (230, 196, 0)
 _STATUS_RED: tuple[int, int, int] = (224, 52, 44)
 
+# What a Flighty-imported flight of the user's own is called on its card. A
+# friend's flight is labeled with their name; the user's own has no name to
+# show, and falling back to the airline just repeats the code already in the
+# ident line below it.
+_OWN_FLIGHT_LABEL = "My flight"
+
 # Auto-hide window: a flight counts as "active" from 2h before its (estimated)
 # departure, while airborne, and until 2h after it lands.
 _ACTIVE_WINDOW = timedelta(hours=2)
@@ -974,6 +980,10 @@ class FlightTrackerApp(DisplayApp):
         kind = _card_kind(tracked)
         text_color = parse_color(str(self.config.get("text_color", "#C8C8C8")))
         label = self._labels().get(fn, "")
+        # Flighty labels a friend's flight with their name and leaves the
+        # user's own blank; name it rather than repeating the airline code.
+        if not label and self._source() == "flighty":
+            label = _OWN_FLIGHT_LABEL
 
         if kind == "not_found":
             if tracked is None and not self._flightaware.has_api_key:

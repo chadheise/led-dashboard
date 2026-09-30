@@ -450,3 +450,66 @@ def test_fmt_when_adds_date_only_beyond_24h():
 def test_fmt_when_exactly_24h_is_time_only():
     # Boundary: 24h ahead is not "beyond" 24h.
     assert _fmt_when("2026-06-11T12:00:00Z", None, "24h", "month_day", _REF) == "12:00"
+
+
+# ── Flighty card naming ────────────────────────────────────────────────────────
+
+def _flighty_app(labels: dict[str, str], tracked: dict[str, dict[str, Any]]) -> FlightTrackerApp:
+    app = _app({"source": "flighty", "display_mode": "cards"})
+    app._tracked = tracked
+    app._flighty_order = list(tracked)
+    app._flighty_labels = labels
+    return app
+
+
+def _card_label(app: FlightTrackerApp) -> str:
+    """The name ``_draw_card`` puts on the card's top line."""
+    seen: list[str] = []
+    app._render_flight_card = (  # type: ignore[method-assign]
+        lambda _fn, _tracked, _kind, label, _color: seen.append(label)
+    )
+    app._draw_card(app._flight_numbers())
+    return seen[0]
+
+
+def test_flighty_own_flight_card_says_my_flight():
+    """Own flights carry no owner name, and the airline would just repeat the
+    ident line below it."""
+    key = "DL2543|me|2026-06-18"
+    app = _flighty_app(
+        {key: ""},
+        {key: {"found": True, "ident": "DL2543", "airline": "DL",
+               "origin": "SEA", "dest": "JFK"}},
+    )
+    assert _card_label(app) == "My flight"
+
+
+def test_flighty_friend_flight_card_keeps_their_name():
+    key = "DL2437|friend|2026-06-18"
+    app = _flighty_app(
+        {key: "Sam"},
+        {key: {"found": True, "ident": "DL2437", "airline": "DL",
+               "origin": "SEA", "dest": "JFK"}},
+    )
+    assert _card_label(app) == "Sam"
+
+
+def test_manual_flight_without_label_keeps_the_airline():
+    """Only the Flighty source names own flights - a manual entry the user
+    left unlabeled still falls back to the airline."""
+    app = _app({"display_mode": "cards", "flights": [{"number": "DL2543", "label": ""}]})
+    app._tracked = {"DL2543": {"found": True, "ident": "DL2543", "airline": "DL",
+                               "origin": "SEA", "dest": "JFK"}}
+    assert _card_label(app) == ""
+
+
+def test_flighty_table_still_leads_own_flights_with_the_ident():
+    """The table has one short column for the lead: a column of "My flight"
+    would hide which flight each row is."""
+    key = "DL2543|me|2026-06-18"
+    app = _flighty_app(
+        {key: ""},
+        {key: {"found": True, "ident": "DL2543", "airline": "DL",
+               "origin": "SEA", "dest": "JFK"}},
+    )
+    assert app._labels() == {key: ""}

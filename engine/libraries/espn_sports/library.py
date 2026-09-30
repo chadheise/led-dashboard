@@ -36,6 +36,13 @@ _LEAGUE_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in _LEAGUES}
 # ``_MAX_CONCURRENT_WINDOWS`` requests of its own, so this bounds the total.
 _MAX_CONCURRENT_COMPETITIONS = 2
 
+# Team-list paging. ESPN's ``/teams`` honours ``page`` for the US leagues but
+# ignores it for the soccer competitions, where it serves the whole list every
+# time (``fifa.friendly`` returns ~190 sides at any ``limit``). The cap is a
+# backstop only - ``_fetch_espn_teams`` stops as soon as a page adds nothing.
+_TEAM_PAGE_SIZE = 50
+_MAX_TEAM_PAGES = 20
+
 # ESPN/FIFA abbreviation → ISO 3166-1 alpha-2 code for flagcdn.com
 _FIFA_FLAGS: dict[str, str] = {
     k: v for k, v in json.loads(
@@ -395,11 +402,14 @@ class ESPNSportsLibrary(Library):
             f"/{sport}/{league_path}/teams"
         )
         teams: list[dict[str, Any]] = []
+        seen: set[str] = set()
         page = 1
         async with httpx.AsyncClient(timeout=10.0) as client:
-            while True:
+            while page <= _MAX_TEAM_PAGES:
                 try:
-                    resp = await client.get(base_url, params={"limit": 50, "page": page})
+                    resp = await client.get(
+                        base_url, params={"limit": _TEAM_PAGE_SIZE, "page": page}
+                    )
                     data = resp.json()
                 except Exception:
                     break
@@ -410,8 +420,14 @@ class ESPNSportsLibrary(Library):
                 )
                 if not page_teams:
                     break
+                added = 0
                 for item in page_teams:
                     t = item.get("team", {})
+                    key = t.get("id", "") or t.get("abbreviation", "")
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    added += 1
                     logos = t.get("logos", [])
                     teams.append(
                         {
@@ -423,7 +439,11 @@ class ESPNSportsLibrary(Library):
                             "conference": None,
                         }
                     )
-                if len(page_teams) < 50:
+                # A short page is the last one. No new teams means the endpoint
+                # ignored ``page`` and served the same list again (the soccer
+                # competition endpoints do this) - asking again would loop
+                # forever, which is what hung the national-team pickers.
+                if len(page_teams) < _TEAM_PAGE_SIZE or not added:
                     break
                 page += 1
         return sorted(teams, key=lambda t: t["display_name"])
