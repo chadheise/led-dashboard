@@ -20,11 +20,21 @@ logger = logging.getLogger(__name__)
 
 
 _LEAGUES_FILE = Path(__file__).parent / "leagues.json"
-_LEAGUES: list[dict[str, str]] = json.loads(_LEAGUES_FILE.read_text())
-_LEAGUE_BY_ID: dict[str, dict[str, str]] = {e["id"]: e for e in _LEAGUES}
+_LEAGUES: list[dict[str, Any]] = json.loads(_LEAGUES_FILE.read_text())
+_LEAGUE_BY_ID: dict[str, dict[str, Any]] = {e["id"]: e for e in _LEAGUES}
 
-# Leagues where team logos are replaced with national flags
-_FLAG_LEAGUES: set[str] = {e["id"] for e in _LEAGUES if e.get("use_flags")}
+# National teams don't belong to one ESPN league: a side's year is spread over
+# friendlies, qualifiers and a handful of tournaments, each its own scoreboard.
+# A league entry with ``competitions`` (``intl-men``, ``intl-women``) is a
+# composite over those scoreboards, so one favorite (``intl-women:USA``)
+# follows a team through every competition it plays in. Men's and women's
+# sides share abbreviations, which is why they are separate composites - and
+# why their games carry the composite's ``gender``, so the card can say which
+# side is playing when the flags and "USA" alone can't.
+#
+# How many competitions of one composite are fetched at once. Each runs up to
+# ``_MAX_CONCURRENT_WINDOWS`` requests of its own, so this bounds the total.
+_MAX_CONCURRENT_COMPETITIONS = 2
 
 # ESPN/FIFA abbreviation → ISO 3166-1 alpha-2 code for flagcdn.com
 _FIFA_FLAGS: dict[str, str] = {
@@ -354,9 +364,35 @@ class ESPNSportsLibrary(Library):
         if league == "college-football":
             return await self._fetch_ncaaf_teams()
         entry = _LEAGUE_BY_ID.get(league, {"sport": "football", "league": league})
+        if entry.get("competitions"):
+            return await self._fetch_national_teams(entry)
+        return await self._fetch_espn_teams(entry["sport"], entry["league"])
+
+    async def _fetch_national_teams(self, entry: dict[str, Any]) -> list[dict[str, Any]]:
+        """Every team that appears in any of a composite's competitions.
+
+        No single ESPN endpoint lists all national teams, so the teams of each
+        competition are merged, one entry per abbreviation. Logos are the
+        national flags the scoreboard shows for them.
+        """
+        results = await asyncio.gather(
+            *[self._fetch_espn_teams(entry["sport"], comp) for comp in entry["competitions"]],
+            return_exceptions=True,
+        )
+        by_abbr: dict[str, dict[str, Any]] = {}
+        for result in results:
+            if not isinstance(result, list):
+                continue
+            for team in result:
+                abbr = team.get("abbreviation", "")
+                if abbr and abbr not in by_abbr:
+                    by_abbr[abbr] = {**team, "logo_url": _flag_url(abbr) or team.get("logo_url")}
+        return sorted(by_abbr.values(), key=lambda t: t["display_name"])
+
+    async def _fetch_espn_teams(self, sport: str, league_path: str) -> list[dict[str, Any]]:
         base_url = (
             f"https://site.api.espn.com/apis/site/v2/sports"
-            f"/{entry['sport']}/{entry['league']}/teams"
+            f"/{sport}/{league_path}/teams"
         )
         teams: list[dict[str, Any]] = []
         page = 1
@@ -745,14 +781,23 @@ class ESPNSportsLibrary(Library):
         e.g. ``college-football:UGA``) still matches its own game when that
         game arrives via a variant of the same league (``ncaaf-top25``,
         ``ncaaf-sec``, ...).
+
+        A national-team favorite (``intl-men:USA``) likewise matches its
+        team's game when that game arrives via one of the composite's own
+        competitions selected on its own (``fifa.world``).
         """
         league = _league_path(game.get("league", ""))
+        competition = game.get("competition")
         for fav in favorites:
             parts = fav.split(":", 1)
             if len(parts) != 2:
                 continue
             fav_league, fav_abbr = parts
-            if _league_path(fav_league) == league and fav_abbr in (
+            same_league = _league_path(fav_league) == league or (
+                competition is not None
+                and competition in _LEAGUE_BY_ID.get(fav_league, {}).get("competitions", ())
+            )
+            if same_league and fav_abbr in (
                 game.get("home_abbr", ""),
                 game.get("away_abbr", ""),
             ):
@@ -767,9 +812,74 @@ class ESPNSportsLibrary(Library):
         days_behind: int = 1,
     ) -> list[dict[str, Any]]:
         entry = _LEAGUE_BY_ID.get(league, {"sport": "football", "league": league})
+        if entry.get("competitions"):
+            return await self._fetch_competitions(
+                client, league, entry, days_ahead, days_behind
+            )
+        return await self._fetch_scoreboard(
+            client, league, entry, days_ahead, days_behind
+        )
+
+    async def _fetch_competitions(
+        self,
+        client: httpx.AsyncClient,
+        league: str,
+        entry: dict[str, Any],
+        days_ahead: int,
+        days_behind: int,
+    ) -> list[dict[str, Any]]:
+        """Games of every competition in a composite league (see ``intl-men``).
+
+        Games are labelled with the composite's id, so favorites and "next
+        game" follow a team across competitions, and carry the ESPN league
+        they came from in ``competition``. Off-season tournaments simply have
+        no games; a competition that can't be fetched is skipped, and the
+        composite counts as unavailable only when none of them could be.
+        """
+        sem = asyncio.Semaphore(_MAX_CONCURRENT_COMPETITIONS)
+
+        async def one(comp: str) -> list[dict[str, Any]]:
+            async with sem:
+                return await self._fetch_scoreboard(
+                    client, league, {**entry, "league": comp},
+                    days_ahead, days_behind, cache_key=f"{league}/{comp}",
+                )
+
+        competitions: list[str] = list(entry["competitions"])
+        results = await asyncio.gather(
+            *[one(comp) for comp in competitions], return_exceptions=True
+        )
+        games: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        failures: list[BaseException] = []
+        for comp, result in zip(competitions, results):
+            if not isinstance(result, list):
+                logger.debug("No scores for %s competition %s (%r)", league, comp, result)
+                failures.append(result)
+                continue
+            for game in result:
+                if game["id"] and game["id"] in seen:
+                    continue
+                seen.add(game["id"])
+                games.append(game)
+        if failures and len(failures) == len(competitions):
+            raise ScoresUnavailable(f"{league}: {failures[0]}") from failures[0]
+        return games
+
+    async def _fetch_scoreboard(
+        self,
+        client: httpx.AsyncClient,
+        league: str,
+        entry: dict[str, Any],
+        days_ahead: int = 1,
+        days_behind: int = 1,
+        cache_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Games of one ESPN scoreboard, labelled with the configured ``league``."""
+        cache_key = cache_key or league
         sport = entry["sport"]
         league_path = entry["league"]
-        use_flags: bool = league in _FLAG_LEAGUES
+        use_flags: bool = bool(entry.get("use_flags"))
         filter_mode: str | None = entry.get("filter")  # e.g. "top25"
         url = (
             f"https://site.api.espn.com/apis/site/v2/sports"
@@ -845,7 +955,7 @@ class ESPNSportsLibrary(Library):
             )
             # A transient API failure must not blank the display: serve the
             # last successful fetch for this league while it is still fresh.
-            cached = self._scores_cache.get(league)
+            cached = self._scores_cache.get(cache_key)
             if cached is not None and time.time() - cached[0] < _SCORES_FALLBACK_TTL_SECONDS:
                 logger.warning(
                     "Scoreboard fetch failed for %s (%s); serving cached games", league, exc
@@ -1101,6 +1211,8 @@ class ESPNSportsLibrary(Library):
                     {
                         "id": str(event.get("id") or ""),
                         "league": league,
+                        "competition": league_path,
+                        "gender": entry.get("gender"),
                         "sport": sport,
                         "home_abbr": home_team.get("abbreviation", "???"),
                         "away_abbr": away_team.get("abbreviation", "???"),
@@ -1173,5 +1285,5 @@ class ESPNSportsLibrary(Library):
                         game["home_pks"] = home_shots
                     if away_shots is not None:
                         game["away_pks"] = away_shots
-        self._scores_cache[league] = (time.time(), games)
+        self._scores_cache[cache_key] = (time.time(), games)
         return games

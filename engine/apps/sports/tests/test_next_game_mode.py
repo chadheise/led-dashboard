@@ -374,12 +374,16 @@ def test_another_teams_newer_game_leaves_a_final_alone() -> None:
 
 def test_doubleheader_day_shows_finished_live_and_next_game() -> None:
     """The shape of a real doubleheader day: game one's final and game two in
-    progress both stay up, alongside the team's next scheduled game."""
-    now = datetime.datetime.now(datetime.timezone.utc)
+    progress both stay up, alongside the team's next scheduled game.
+
+    Runs on the frozen clock (see ``_frozen_filter`` below): with a wall-clock
+    "now" shortly after midnight, "an hour ago" is yesterday and game one
+    lands on a different calendar day from game two.
+    """
     app = _make_app(
         {"favorite_teams": ["mlb:SEA"], "completed_game_window": {"days": 7}}
     )
-    live_start = now - datetime.timedelta(hours=1)
+    live_start = _NOON - datetime.timedelta(hours=1)
     # Midnight on the live game's own day: same calendar day, already played.
     game_one = _utc_day(live_start.date(), 0)
     games = [
@@ -387,8 +391,7 @@ def test_doubleheader_day_shows_finished_live_and_next_game() -> None:
         _game("dh_2", "mlb", "SEA", "OAK", live_start, "in"),
         _pre_game("tomorrow", "mlb", "SEA", "TEX", live_start + datetime.timedelta(days=1)),
     ]
-    kept = {g["id"] for g in app._filter_by_time_window(games)}
-    assert kept == {"dh_1", "dh_2", "tomorrow"}
+    assert _frozen_filter(app, games) == {"dh_1", "dh_2", "tomorrow"}
 
 
 # ── A final is only ever retired by a game that is on screen too ──────────
