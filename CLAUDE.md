@@ -40,7 +40,10 @@ engine/              Python backend (FastAPI + async render loop)
         test_snapshots.py
         test_*.py      Other app-specific tests
   libraries/           Shared integrations + rendering (text_renderer, layout,
-                       espn_sports, open_meteo, yahoo_finance, opensky, …)
+                       espn_sports, open_meteo, yahoo_finance, opensky, flighty, …)
+                       flighty/ imports own+friends' flights from the Flighty app's
+                       private protobuf API (see libraries/flighty/README.md); it
+                       feeds flight_tracker's "flighty" source (config `source`).
     {lib}/
       library.py
       icon.svg

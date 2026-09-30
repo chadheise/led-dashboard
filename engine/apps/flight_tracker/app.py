@@ -18,6 +18,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
+from libraries.flighty.library import FlightyLibrary
 from libraries.location.library import LocationLibrary
 from libraries.timezones.library import resolve_zone
 from apps.flights_overhead.icons import render_category_icon
@@ -322,7 +323,7 @@ class FlightTrackerApp(DisplayApp):
         "status, and live position via FlightAware AeroAPI + OpenSky Network"
     )
     icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
-    libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location"]
+    libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location", "flighty"]
     global_config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Flight Tracker",
@@ -363,10 +364,30 @@ class FlightTrackerApp(DisplayApp):
         "type": "object",
         "title": "Flight Tracker",
         "properties": {
+            "source": {
+                "type": "string",
+                "title": "Flight source",
+                "description": (
+                    "Manual: type flight numbers below (tracked via FlightAware). "
+                    "Flighty: import your upcoming flights automatically from the "
+                    "Flighty app (configure the Flighty library first)."
+                ),
+                "enum": ["manual", "flighty"],
+                "x-enum-labels": ["Manual entry", "Flighty import"],
+                "default": "manual",
+            },
+            "include_friends": {
+                "type": "boolean",
+                "title": "Include friends' flights",
+                "description": "Also show flights of friends connected in Flighty.",
+                "default": True,
+                "x-show-if": {"field": "source", "equals": "flighty"},
+            },
             "flights": {
                 "type": "array",
                 "title": "Flights",
                 "x-input-type": "flight-list",
+                "x-show-if": {"field": "source", "equals": "manual"},
                 "items": {
                     "type": "object",
                     "properties": {
@@ -413,7 +434,6 @@ class FlightTrackerApp(DisplayApp):
                 "default": False,
             },
         },
-        "required": ["flights"],
     }
 
     def __init__(
@@ -427,6 +447,11 @@ class FlightTrackerApp(DisplayApp):
         self._flightaware = FlightAwareLibrary(self.library_configs.get("flightaware", {}))
         self._opensky = OpenSkyLibrary(self.library_configs.get("opensky", {}))
         self._location = LocationLibrary(self.library_configs.get("location", {}))
+        self._flighty = FlightyLibrary(self.library_configs.get("flighty", {}))
+        # Flighty-source state: ordered card keys + key->friend-name labels,
+        # rebuilt each fetch from the imported flight list.
+        self._flighty_order: list[str] = []
+        self._flighty_labels: dict[str, str] = {}
         self._tracked: dict[str, dict[str, Any]] = {}
         self._live_overrides: dict[str, dict[str, Any]] = {}
         self._logos: dict[str, Image.Image | None] = {}
@@ -451,7 +476,12 @@ class FlightTrackerApp(DisplayApp):
         shared by ``render_frame`` (its "No flights in range" fallback) and
         ``should_display`` (the playlist auto-hide gate), so the two never
         disagree. Flights dated beyond the lookup window are excluded.
+
+        Flighty-sourced flights are already limited to the upcoming set by the
+        library, so all of them are in range (no FlightAware lookup window).
         """
+        if self._source() == "flighty":
+            return list(self._flighty_order)
         today = datetime.now(timezone.utc).date()
         return [
             f["number"] for f in self._flights()
@@ -471,6 +501,11 @@ class FlightTrackerApp(DisplayApp):
         """
         if not self._fetched_once:
             return False
+        # Flighty modules show whenever there are upcoming flights (the library
+        # already scopes to the upcoming set), not only within the 2h active
+        # window, so a wall of upcoming trips stays visible.
+        if self._source() == "flighty":
+            return bool(self._flighty_order)
         now = datetime.now(timezone.utc)
         return any(
             _is_active_flight(self._tracked.get(fn), now)
@@ -485,8 +520,15 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Config helpers ─────────────────────────────────────────────────────────
 
+    def _source(self) -> str:
+        return str(self.config.get("source", "manual") or "manual")
+
     def _flights(self) -> list[dict[str, str]]:
         """Ordered, normalized list of {number, label, date} for each configured flight.
+
+        For the Flighty source these come from the imported flight list (keyed by
+        a synthesized unique id, labeled with the owner's name); for the manual
+        source they come from the ``flights`` config as described below.
 
         Reads the current ``flights`` array-of-objects, falling back to the
         legacy ``flight_numbers`` (list[str]) + ``label`` (str) config so module
@@ -495,6 +537,16 @@ class FlightTrackerApp(DisplayApp):
         the legacy global ``date`` field is migrated as a fallback for
         per-flight dates not yet set.
         """
+        if self._source() == "flighty":
+            return [
+                {
+                    "number": key,
+                    "label": self._flighty_labels.get(key, ""),
+                    "date": (self._tracked.get(key) or {}).get("date", ""),
+                }
+                for key in self._flighty_order
+            ]
+
         raw = self.config.get("flights")
         if not isinstance(raw, list) or not raw:
             # Legacy fallback: flight_numbers[] + single shared label.
@@ -559,6 +611,10 @@ class FlightTrackerApp(DisplayApp):
     async def fetch_data(self) -> None:
         if self.config.get("debug", False):
             self._seed_debug()
+            return
+
+        if self._source() == "flighty":
+            await self._fetch_flighty()
             return
 
         flights = self._flights()
@@ -658,6 +714,47 @@ class FlightTrackerApp(DisplayApp):
             self._card_last_ts = now_mono
         else:
             self._card_idx = min(self._card_idx, max(0, len(flight_numbers) - 1))
+
+    async def _fetch_flighty(self) -> None:
+        """Import upcoming flights (own + friends') from the Flighty library.
+
+        Rebuilds ``_tracked`` keyed by a synthesized unique id (ident|owner|date)
+        so two people on the same flight don't collide, records the per-key owner
+        label, and pulls airline logos. On a failed sync the previous set is kept
+        (the library returns ``None``), so the wall never blanks on a hiccup.
+        """
+        include_friends = bool(self.config.get("include_friends", True))
+        flights = await self._flighty.fetch_flights(include_friends)
+        self._fetched_once = True
+        if flights is None:
+            return
+
+        me = self._flighty.account_uuid()
+        names = self._flighty.friend_names()
+        tracked: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        labels: dict[str, str] = {}
+        for f in flights:
+            owner = f.get("owner", "")
+            key = f"{f.get('ident','')}|{owner}|{f.get('date','')}"
+            if key in tracked:
+                continue
+            tracked[key] = f
+            order.append(key)
+            labels[key] = "" if owner == me else (names.get(owner) or "")
+        self._tracked = tracked
+        self._flighty_order = order
+        self._flighty_labels = labels
+
+        await self._fetch_logos()
+
+        now_mono = time.monotonic()
+        min_card_s = float(self.config.get("min_card_seconds", 5.0))
+        if now_mono - self._card_last_ts >= min_card_s or not order:
+            self._card_idx = 0
+            self._card_last_ts = now_mono
+        else:
+            self._card_idx = min(self._card_idx, max(0, len(order) - 1))
 
     def _operator_iata(self, fn: str, tracked: dict[str, Any] | None) -> str:
         """Airline IATA code for a tracked flight, for logo lookup.
@@ -928,8 +1025,10 @@ class FlightTrackerApp(DisplayApp):
         origin = tracked.get("origin", "") or ""
         dest = tracked.get("dest", "") or ""
         route = f"{origin}->{dest}" if origin and dest else ""
+        # ``fn`` may be a synthesized key (Flighty source); show the real ident.
+        ident = tracked.get("ident") or fn
 
-        for i, line in enumerate([airline, fn, route][: min(3, n_rows)]):
+        for i, line in enumerate([airline, ident, route][: min(3, n_rows)]):
             if line and mid_w > 0:
                 clipped = _clip_text(line, font_size, mid_w)
                 line_img = render_text(clipped, text_color, font_size)
@@ -1004,9 +1103,10 @@ class FlightTrackerApp(DisplayApp):
                         delay_text = _fmt_delay(tracked.get(delay_key))
                         status, color = (delay_text, _STATUS_YELLOW) if delay_text else ("On time", _STATUS_GREEN)
                     prefix = info
-                # Lead each row with the user's label when set, else the number.
-                ident = labels.get(fn) or fn
-                rows.append((f"{ident:<8}{prefix:<13} ", status, color))
+                # Lead each row with the user's label when set, else the real
+                # ident (``fn`` may be a synthesized key for the Flighty source).
+                lead = labels.get(fn) or (tracked or {}).get("ident") or fn
+                rows.append((f"{lead:<8}{prefix:<13} ", status, color))
             return rows
 
         rows = _rows()

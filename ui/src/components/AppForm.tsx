@@ -41,8 +41,13 @@ interface SchemaProperty {
    *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
    *   'duration'     Number + unit selector ({value, unit}); units from x-duration-units
    *   'team-picker'  Dynamic league + team selector (string[] of "league:abbr")
+   *   'password'     Masked text input for secrets (API keys / tokens)
+   *   'kv-list'      Repeatable {uuid,name} rows; labels from x-kv-key-label/x-kv-value-label
    */
   'x-input-type'?: string
+  /** Column labels for a kv-list input. */
+  'x-kv-key-label'?: string
+  'x-kv-value-label'?: string
   /** Labels for multi-select options — map from option value to display label */
   'x-enum-labels'?: Record<string, string>
   /** Allowed time units for duration inputs */
@@ -78,6 +83,55 @@ const selectStyle: React.CSSProperties = { ...fieldStyle, appearance: 'none' }
 const row2: React.CSSProperties = { display: 'flex', gap: 10 }
 
 // ── Specialised input renderers ────────────────────────────────────────────────
+
+function KeyValueList({ title, description, keyLabel, valueLabel, value, onChange }: {
+  title: string
+  description?: string
+  keyLabel: string
+  valueLabel: string
+  value: unknown
+  onChange: (v: Array<{ uuid: string; name: string }>) => void
+}) {
+  const rows = (Array.isArray(value) ? value : []) as Array<{ uuid?: string; name?: string }>
+  const list = rows.map(r => ({ uuid: String(r.uuid ?? ''), name: String(r.name ?? '') }))
+  const update = (next: Array<{ uuid: string; name: string }>) => onChange(next)
+  return (
+    <label style={labelStyle}>
+      {title}
+      {description && (
+        <span style={{ color: C.textDim, fontSize: F.size.xs }}>{description}</span>
+      )}
+      {list.map((r, i) => (
+        <div key={i} style={row2}>
+          <input
+            type="text"
+            placeholder={keyLabel}
+            value={r.uuid}
+            onChange={e => update(list.map((x, j) => j === i ? { ...x, uuid: e.target.value } : x))}
+            style={{ ...fieldStyle, flex: 2 }}
+          />
+          <input
+            type="text"
+            placeholder={valueLabel}
+            value={r.name}
+            onChange={e => update(list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+            style={{ ...fieldStyle, flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={() => update(list.filter((_, j) => j !== i))}
+            style={{ ...selectStyle, width: 34, cursor: 'pointer' }}
+          >×</button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => update([...list, { uuid: '', name: '' }])}
+        style={{ ...selectStyle, cursor: 'pointer', color: C.textSecondary }}
+      >+ Add</button>
+    </label>
+  )
+}
 
 function ColorInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: string) => void }) {
   const hex = String(value || '#000000')
@@ -248,6 +302,38 @@ export default function AppForm({ schema, value, onChange }: Props) {
               title={title}
               value={v}
               onChange={d => onChange({ ...value, [key]: d })}
+            />
+          )
+        }
+
+        if (xType === 'password') {
+          return (
+            <label key={key} style={labelStyle}>
+              {title}
+              {prop.description && (
+                <span style={{ color: C.textDim, fontSize: F.size.xs }}>{prop.description}</span>
+              )}
+              <input
+                type="password"
+                autoComplete="off"
+                value={typeof v === 'string' ? v : ''}
+                onChange={e => onChange({ ...value, [key]: e.target.value })}
+                style={fieldStyle}
+              />
+            </label>
+          )
+        }
+
+        if (xType === 'kv-list') {
+          return (
+            <KeyValueList
+              key={key}
+              title={title}
+              description={prop.description}
+              keyLabel={prop['x-kv-key-label'] ?? 'Key'}
+              valueLabel={prop['x-kv-value-label'] ?? 'Value'}
+              value={v}
+              onChange={rows => onChange({ ...value, [key]: rows })}
             />
           )
         }

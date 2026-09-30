@@ -107,6 +107,59 @@ _TRACKED_LANDED_GATE_BAG: dict[str, Any] = {
 }
 
 
+# ── Flighty-source records (already in normalized _tracked shape, keyed by the
+# synthesized "ident|owner|date" the app builds) ─────────────────────────────
+_FLIGHTY_OWN: dict[str, Any] = {
+    "found": True, "ident": "DL2543", "number": "DL2543", "owner": "me",
+    "origin": "DEN", "dest": "SEA", "airline": "DL", "operator_iata": "DL",
+    "aircraft_type": "BCS3", "status": "", "cancelled": False,
+    "scheduled_off": "2026-06-18T00:42:00Z", "estimated_off": "2026-06-18T00:42:00Z",
+    "actual_off": None,
+    "scheduled_on": "2026-06-18T03:30:00Z", "estimated_on": "2026-06-18T03:30:00Z",
+    "actual_on": None,
+    "departure_delay": 0, "arrival_delay": 0, "progress_percent": None,
+    "live": None, "icao24": "",
+    "gate_origin": "", "gate_dest": "", "terminal_origin": "Main",
+    "terminal_dest": "Main", "baggage_claim": "", "date": "2026-06-18",
+}
+
+_FLIGHTY_FRIEND: dict[str, Any] = {
+    "found": True, "ident": "DL2437", "number": "DL2437", "owner": "friend",
+    "origin": "JFK", "dest": "MSP", "airline": "DL", "operator_iata": "DL",
+    "aircraft_type": "B739", "status": "", "cancelled": False,
+    "scheduled_off": "2026-06-18T21:05:00Z", "estimated_off": "2026-06-18T21:17:00Z",
+    "actual_off": None,
+    "scheduled_on": "2026-06-19T00:40:00Z", "estimated_on": "2026-06-19T00:52:00Z",
+    "actual_on": None,
+    "departure_delay": 720, "arrival_delay": 720, "progress_percent": None,
+    "live": None, "icao24": "",
+    "gate_origin": "B6", "gate_dest": "F6", "terminal_origin": "4",
+    "terminal_dest": "1", "baggage_claim": "10", "date": "2026-06-18",
+}
+
+
+def _seed_flighty(order_labels: list[tuple[str, dict[str, Any], str]]):
+    """Seed the app as if the Flighty source imported these flights.
+
+    ``order_labels`` is a list of (key, tracked, owner_label); own flights use an
+    empty label (card shows the airline/ident), friends use their name.
+    """
+    def seed(app: Any) -> None:
+        app.config["source"] = "flighty"
+        app._tracked = {k: dict(t) for k, t, _ in order_labels}
+        app._flighty_order = [k for k, _, _ in order_labels]
+        app._flighty_labels = {k: lbl for k, _, lbl in order_labels}
+        app._live_overrides = {}
+        app._logos = {"DL": make_fixture_logo("DL", "c8102e")}
+        app._logos_fetched = {"DL"}
+        app._fetched_once = True
+        app._card_idx = 0
+        app._card_last_ts = time.monotonic()
+        app._unit_ts = time.monotonic()
+
+    return seed
+
+
 def _flights_config(
     flight_numbers: list[str], labels: dict[str, str] | None = None
 ) -> list[dict[str, str]]:
@@ -198,6 +251,23 @@ def _fixtures() -> dict[str, dict[str, Any]]:
         "card_landed_gate_bag": {
             "config": {"display_mode": "cards", "flights": _flights_config(["AA100"]), "units": "imperial"},
             "seed": _seed({"AA100": _TRACKED_LANDED_GATE_BAG}, ["AA100"], logo_codes={"AA": "0078d2"}),
+        },
+        # Flighty source: an own flight (no owner label) and a friend's flight
+        # (labeled with the friend's name), the latter with full gate/terminal/bag.
+        "flighty_own": {
+            "config": {"display_mode": "cards", "source": "flighty", "units": "imperial"},
+            "seed": _seed_flighty([("DL2543|me|2026-06-18", _FLIGHTY_OWN, "")]),
+        },
+        "flighty_friend": {
+            "config": {"display_mode": "cards", "source": "flighty", "units": "imperial"},
+            "seed": _seed_flighty([("DL2437|friend|2026-06-18", _FLIGHTY_FRIEND, "Sam")]),
+        },
+        "flighty_table": {
+            "config": {"display_mode": "table", "source": "flighty"},
+            "seed": _seed_flighty([
+                ("DL2543|me|2026-06-18", _FLIGHTY_OWN, ""),
+                ("DL2437|friend|2026-06-18", _FLIGHTY_FRIEND, "Sam"),
+            ]),
         },
         "table_multi": {
             "config": {"display_mode": "table", "flights": _flights_config(["DL699", "UA1542", "AA100", "ZZ000"])},
