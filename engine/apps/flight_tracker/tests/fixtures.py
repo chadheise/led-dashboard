@@ -145,7 +145,7 @@ def _seed_flighty(order_labels: list[tuple[str, dict[str, Any], str]]):
     """Seed the app as if the Flighty source imported these flights.
 
     ``order_labels`` is a list of (key, tracked, owner_label); own flights use an
-    empty label (card shows the airline/ident), friends use their name.
+    empty label (the card names them "My flight"), friends use their name.
     """
     def seed(app: Any) -> None:
         app.config["source"] = "flighty"
