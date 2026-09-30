@@ -81,6 +81,12 @@ const checkRow: React.CSSProperties = {
 }
 const selectStyle: React.CSSProperties = { ...fieldStyle, appearance: 'none' }
 const row2: React.CSSProperties = { display: 'flex', gap: 10 }
+const descStyle: React.CSSProperties = { color: C.textDim, fontSize: F.size.xs, fontWeight: 'normal' }
+
+/** Small helper text under a field label, shown when the schema has a description. */
+function FieldDesc({ text }: { text?: string }) {
+  return text ? <span style={descStyle}>{text}</span> : null
+}
 
 // ── Specialised input renderers ────────────────────────────────────────────────
 
@@ -481,17 +487,20 @@ export default function AppForm({ schema, value, onChange }: Props) {
 
         if (prop.type === 'boolean' || xType === 'boolean') {
           return (
-            <label key={key} style={checkRow}>
-              <input
-                type="checkbox"
-                checked={!!v}
-                onChange={e => onChange({ ...value, [key]: e.target.checked })}
-                style={{ accentColor: C.positive }}
-              />
-              <span style={{ color: C.textSecondary, fontFamily: F.family, fontSize: F.size.label }}>
-                {title}
-              </span>
-            </label>
+            <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={checkRow}>
+                <input
+                  type="checkbox"
+                  checked={!!v}
+                  onChange={e => onChange({ ...value, [key]: e.target.checked })}
+                  style={{ accentColor: C.positive }}
+                />
+                <span style={{ color: C.textSecondary, fontFamily: F.family, fontSize: F.size.label }}>
+                  {title}
+                </span>
+              </label>
+              <FieldDesc text={prop.description} />
+            </div>
           )
         }
 
@@ -500,6 +509,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
           return (
             <label key={key} style={labelStyle}>
               {title}
+              <FieldDesc text={prop.description} />
               <select
                 value={String(v)}
                 onChange={e => onChange({ ...value, [key]: e.target.value })}
@@ -517,6 +527,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
           return (
             <label key={key} style={labelStyle}>
               {title}
+              <FieldDesc text={prop.description} />
               <span style={{ color: C.textDim, fontSize: F.size.xs }}>(comma-separated)</span>
               <input
                 type="text"
@@ -536,6 +547,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
         return (
           <label key={key} style={labelStyle}>
             {title}
+            <FieldDesc text={prop.description} />
             <input
               type={isNumeric ? 'number' : 'text'}
               value={String(v)}

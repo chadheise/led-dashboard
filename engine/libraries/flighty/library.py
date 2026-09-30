@@ -86,8 +86,13 @@ class FlightyLibrary(Library):
                 "type": "string",
                 "title": "Authorization token",
                 "description": (
-                    "The Flighty 'Authorization: Bearer' token captured from the app "
-                    "(see README). Long-lived; identifies your account."
+                    "How to get it: run an HTTPS-inspecting proxy (e.g. Proxyman, "
+                    "mitmproxy or Charles) in front of a device running the Flighty "
+                    "app, open Flighty and let it sync, then find the request "
+                    "POST api.flightyapp.com/v1/sync/full. Copy its "
+                    "'Authorization' header value WITHOUT the leading 'Bearer ' "
+                    "(the long token that starts with 'eyJ'). It is long-lived and "
+                    "identifies your account."
                 ),
                 "x-input-type": "password",
                 "x-no-reset": True,
@@ -96,7 +101,11 @@ class FlightyLibrary(Library):
             "build_token": {
                 "type": "string",
                 "title": "Build token",
-                "description": "The captured 'X-Flighty-Build-Token' header value.",
+                "description": (
+                    "From the same POST /v1/sync/full request, copy the value of "
+                    "the 'X-Flighty-Build-Token' header (also starts with 'eyJ'). "
+                    "It is tied to the app version and stays valid for years."
+                ),
                 "x-input-type": "password",
                 "x-no-reset": True,
                 "default": "",
@@ -104,7 +113,10 @@ class FlightyLibrary(Library):
             "device_id": {
                 "type": "string",
                 "title": "Device ID",
-                "description": "The captured 'Device' header UUID.",
+                "description": (
+                    "From the same request, copy the 'Device' header value "
+                    "(a UUID like 86E414FF-A71E-4300-BF75-AF9F7D768CBD)."
+                ),
                 "x-no-reset": True,
                 "default": "",
             },
