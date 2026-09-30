@@ -27,7 +27,7 @@ def _item(status: dict, section_label: str, item_label: str):
 
 def test_only_flight_libraries_advertise_status() -> None:
     flagged = {lid for lid, cls in LIBRARY_REGISTRY.items() if cls.has_status}
-    assert flagged == {"opensky", "flightaware"}
+    assert flagged == {"opensky", "flightaware", "flighty"}
 
 
 def test_flightaware_status_reports_cost_and_cache(tmp_path, monkeypatch) -> None:

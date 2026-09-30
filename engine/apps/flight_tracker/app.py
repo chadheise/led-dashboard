@@ -18,6 +18,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
+from libraries.flighty.library import FlightyLibrary
 from libraries.location.library import LocationLibrary
 from libraries.timezones.library import resolve_zone
 from apps.flights_overhead.icons import render_category_icon
@@ -94,6 +95,51 @@ def _fmt_time(value: str | None, tz: tzinfo | None = None, time_format: str = "2
     return f"{dt.hour:02d}:{dt.minute:02d}"
 
 
+_FAR_FUTURE = timedelta(hours=24)
+
+
+def _fmt_date(dt: datetime, date_format: str = "month_day") -> str:
+    """Numeric date string honoring the month/day vs day/month setting."""
+    if date_format == "day_month":
+        return f"{dt.day}/{dt.month}"
+    return f"{dt.month}/{dt.day}"
+
+
+def _is_far_future(value: str | None, now: datetime) -> bool:
+    """Whether a UTC ISO timestamp is more than 24h ahead of ``now``."""
+    dt = _parse_dt(value)
+    if dt is None:
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt - now > _FAR_FUTURE
+
+
+def _fmt_when(
+    value: str | None,
+    tz: tzinfo | None,
+    time_format: str,
+    date_format: str,
+    now: datetime,
+) -> str:
+    """Time-of-day, prefixed with the date when the flight is >24h in the future.
+
+    Near-term flights show just the time (as before); a flight more than a day out
+    also shows its date so, e.g., a departure two weeks away isn't mistaken for
+    today. The date is formatted in the user's timezone.
+    """
+    time_str = _fmt_time(value, tz, time_format)
+    dt = _parse_dt(value)
+    if dt is None:
+        return time_str
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt - now > _FAR_FUTURE:
+        local = dt.astimezone(tz) if tz is not None else dt
+        return f"{_fmt_date(local, date_format)} {time_str}"
+    return time_str
+
+
 def _within_lookup_window(date_str: str | None, today: date) -> bool:
     """Whether a flight's configured date is near enough to track/display.
 
@@ -118,6 +164,51 @@ def _fmt_delay(seconds: int | None) -> str:
     if minutes <= 0:
         return ""
     return f"Delayed +{minutes}m"
+
+
+def _gate_info(tracked: dict[str, Any], kind: str, verbose: bool) -> str:
+    """Phase-appropriate terminal/gate/baggage suffix for the schedule row.
+
+    Before departure ("scheduled") the *origin* terminal/gate is what the
+    traveler needs (where to board); once airborne or landed the *destination*
+    terminal/gate — and, on landing, the baggage-claim belt — are what a person
+    meeting the flight needs. All fields are AeroAPI's "when known" strings, so
+    each part is emitted only when populated and the whole suffix is "" when
+    nothing is known (keeping cards without this data pixel-identical).
+
+    ``verbose`` spells the labels out ("Terminal 1, Gate C1, Bag 3"); the terse
+    form ("T1 GC1 Bag 3") is the fallback the caller uses when the verbose one
+    won't fit the available width.
+    """
+    if kind == "scheduled":
+        term = str(tracked.get("terminal_origin") or "")
+        gate = str(tracked.get("gate_origin") or "")
+        bag = ""
+    elif kind in ("airborne", "landed"):
+        term = str(tracked.get("terminal_dest") or "")
+        gate = str(tracked.get("gate_dest") or "")
+        bag = str(tracked.get("baggage_claim") or "") if kind == "landed" else ""
+    else:
+        return ""
+
+    parts: list[str] = []
+    if verbose:
+        if term:
+            parts.append(f"Terminal {term}")
+        if gate:
+            parts.append(f"Gate {gate}")
+        if bag:
+            parts.append(f"Bag {bag}")
+        return ", ".join(parts)
+
+    if term:
+        parts.append(f"T{term}")
+    if gate:
+        # No "G" prefix in the terse form: "T1 C1" reads as terminal 1, gate C1.
+        parts.append(gate)
+    if bag:
+        parts.append(f"Bag {bag}")
+    return " ".join(parts)
 
 
 def _phase(tracked: dict[str, Any] | None) -> str:
@@ -277,7 +368,7 @@ class FlightTrackerApp(DisplayApp):
         "status, and live position via FlightAware AeroAPI + OpenSky Network"
     )
     icon: ClassVar[str] = (Path(__file__).parent / "icon.svg").read_text()
-    libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location"]
+    libraries: ClassVar[list[str]] = ["flightaware", "opensky", "location", "flighty"]
     global_config_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "title": "Flight Tracker",
@@ -318,10 +409,30 @@ class FlightTrackerApp(DisplayApp):
         "type": "object",
         "title": "Flight Tracker",
         "properties": {
+            "source": {
+                "type": "string",
+                "title": "Flight source",
+                "description": (
+                    "Manual: type flight numbers below (tracked via FlightAware). "
+                    "Flighty: import your upcoming flights automatically from the "
+                    "Flighty app (configure the Flighty library first)."
+                ),
+                "enum": ["manual", "flighty"],
+                "x-enum-labels": ["Manual entry", "Flighty import"],
+                "default": "manual",
+            },
+            "include_friends": {
+                "type": "boolean",
+                "title": "Include friends' flights",
+                "description": "Also show flights of friends connected in Flighty.",
+                "default": True,
+                "x-show-if": {"field": "source", "equals": "flighty"},
+            },
             "flights": {
                 "type": "array",
                 "title": "Flights",
                 "x-input-type": "flight-list",
+                "x-show-if": {"field": "source", "equals": "manual"},
                 "items": {
                     "type": "object",
                     "properties": {
@@ -362,13 +473,22 @@ class FlightTrackerApp(DisplayApp):
                 "enum": ["metric", "imperial", "metric+imperial"],
                 "default": "metric+imperial",
             },
+            "date_format": {
+                "type": "string",
+                "title": "Date format",
+                "description": (
+                    "How to write dates on flights more than 24 hours away."
+                ),
+                "enum": ["month_day", "day_month"],
+                "x-enum-labels": ["Month/Day (6/18)", "Day/Month (18/6)"],
+                "default": "month_day",
+            },
             "debug": {
                 "type": "boolean",
                 "title": "Debug mode (static data)",
                 "default": False,
             },
         },
-        "required": ["flights"],
     }
 
     def __init__(
@@ -382,6 +502,11 @@ class FlightTrackerApp(DisplayApp):
         self._flightaware = FlightAwareLibrary(self.library_configs.get("flightaware", {}))
         self._opensky = OpenSkyLibrary(self.library_configs.get("opensky", {}))
         self._location = LocationLibrary(self.library_configs.get("location", {}))
+        self._flighty = FlightyLibrary(self.library_configs.get("flighty", {}))
+        # Flighty-source state: ordered card keys + key->friend-name labels,
+        # rebuilt each fetch from the imported flight list.
+        self._flighty_order: list[str] = []
+        self._flighty_labels: dict[str, str] = {}
         self._tracked: dict[str, dict[str, Any]] = {}
         self._live_overrides: dict[str, dict[str, Any]] = {}
         self._logos: dict[str, Image.Image | None] = {}
@@ -406,7 +531,12 @@ class FlightTrackerApp(DisplayApp):
         shared by ``render_frame`` (its "No flights in range" fallback) and
         ``should_display`` (the playlist auto-hide gate), so the two never
         disagree. Flights dated beyond the lookup window are excluded.
+
+        Flighty-sourced flights are already limited to the upcoming set by the
+        library, so all of them are in range (no FlightAware lookup window).
         """
+        if self._source() == "flighty":
+            return list(self._flighty_order)
         today = datetime.now(timezone.utc).date()
         return [
             f["number"] for f in self._flights()
@@ -426,6 +556,11 @@ class FlightTrackerApp(DisplayApp):
         """
         if not self._fetched_once:
             return False
+        # Flighty modules show whenever there are upcoming flights (the library
+        # already scopes to the upcoming set), not only within the 2h active
+        # window, so a wall of upcoming trips stays visible.
+        if self._source() == "flighty":
+            return bool(self._flighty_order)
         now = datetime.now(timezone.utc)
         return any(
             _is_active_flight(self._tracked.get(fn), now)
@@ -440,8 +575,15 @@ class FlightTrackerApp(DisplayApp):
 
     # ── Config helpers ─────────────────────────────────────────────────────────
 
+    def _source(self) -> str:
+        return str(self.config.get("source", "manual") or "manual")
+
     def _flights(self) -> list[dict[str, str]]:
         """Ordered, normalized list of {number, label, date} for each configured flight.
+
+        For the Flighty source these come from the imported flight list (keyed by
+        a synthesized unique id, labeled with the owner's name); for the manual
+        source they come from the ``flights`` config as described below.
 
         Reads the current ``flights`` array-of-objects, falling back to the
         legacy ``flight_numbers`` (list[str]) + ``label`` (str) config so module
@@ -450,6 +592,16 @@ class FlightTrackerApp(DisplayApp):
         the legacy global ``date`` field is migrated as a fallback for
         per-flight dates not yet set.
         """
+        if self._source() == "flighty":
+            return [
+                {
+                    "number": key,
+                    "label": self._flighty_labels.get(key, ""),
+                    "date": (self._tracked.get(key) or {}).get("date", ""),
+                }
+                for key in self._flighty_order
+            ]
+
         raw = self.config.get("flights")
         if not isinstance(raw, list) or not raw:
             # Legacy fallback: flight_numbers[] + single shared label.
@@ -514,6 +666,10 @@ class FlightTrackerApp(DisplayApp):
     async def fetch_data(self) -> None:
         if self.config.get("debug", False):
             self._seed_debug()
+            return
+
+        if self._source() == "flighty":
+            await self._fetch_flighty()
             return
 
         flights = self._flights()
@@ -614,6 +770,47 @@ class FlightTrackerApp(DisplayApp):
         else:
             self._card_idx = min(self._card_idx, max(0, len(flight_numbers) - 1))
 
+    async def _fetch_flighty(self) -> None:
+        """Import upcoming flights (own + friends') from the Flighty library.
+
+        Rebuilds ``_tracked`` keyed by a synthesized unique id (ident|owner|date)
+        so two people on the same flight don't collide, records the per-key owner
+        label, and pulls airline logos. On a failed sync the previous set is kept
+        (the library returns ``None``), so the wall never blanks on a hiccup.
+        """
+        include_friends = bool(self.config.get("include_friends", True))
+        flights = await self._flighty.fetch_flights(include_friends)
+        self._fetched_once = True
+        if flights is None:
+            return
+
+        me = self._flighty.account_uuid()
+        names = self._flighty.friend_names()
+        tracked: dict[str, dict[str, Any]] = {}
+        order: list[str] = []
+        labels: dict[str, str] = {}
+        for f in flights:
+            owner = f.get("owner", "")
+            key = f"{f.get('ident','')}|{owner}|{f.get('date','')}"
+            if key in tracked:
+                continue
+            tracked[key] = f
+            order.append(key)
+            labels[key] = "" if owner == me else (names.get(owner) or "")
+        self._tracked = tracked
+        self._flighty_order = order
+        self._flighty_labels = labels
+
+        await self._fetch_logos()
+
+        now_mono = time.monotonic()
+        min_card_s = float(self.config.get("min_card_seconds", 5.0))
+        if now_mono - self._card_last_ts >= min_card_s or not order:
+            self._card_idx = 0
+            self._card_last_ts = now_mono
+        else:
+            self._card_idx = min(self._card_idx, max(0, len(order) - 1))
+
     def _operator_iata(self, fn: str, tracked: dict[str, Any] | None) -> str:
         """Airline IATA code for a tracked flight, for logo lookup.
 
@@ -673,6 +870,9 @@ class FlightTrackerApp(DisplayApp):
         tz = resolve_zone(tz_str) if tz_str else None
         return tz, self._location.get_time_format()
 
+    def _date_format(self) -> str:
+        return str(self.config.get("date_format", "month_day") or "month_day")
+
     async def render_frame(self) -> None:
         if not self._flight_numbers():
             msg = "Loading..." if not self._fetched_once else "No flights configured"
@@ -700,32 +900,54 @@ class FlightTrackerApp(DisplayApp):
         tracked: dict[str, Any],
         kind: str,
         text_color: tuple[int, int, int],
+        avail_w: int = 0,
+        font_size: int = 7,
     ) -> list[tuple[str, tuple[int, int, int]]]:
         """The two bottom card rows as (text, color) pairs.
 
-        Row 1 (departure/ETA/landing time) uses the card's base text color.
-        Row 2 is the on-time/delay/cancelled indicator, colored green when on
-        time or ahead of schedule, yellow when delayed, and red when
-        cancelled.
+        Row 1 (departure/ETA/landing time) uses the card's base text color and
+        appends phase-appropriate gate/terminal/baggage info when known (see
+        ``_gate_info``): the verbose "Terminal 1, Gate C1" form when it fits
+        ``avail_w`` at ``font_size``, else the terse "T1 GC1" fallback. Row 2 is
+        the on-time/delay/cancelled indicator, colored green when on time or
+        ahead of schedule, yellow when delayed, and red when cancelled.
         """
         tz, time_format = self._tz_and_time_format()
+        date_format = self._date_format()
+        now = datetime.now(timezone.utc)
 
         def delay_cell(delay_seconds: int | None) -> tuple[str, tuple[int, int, int]]:
             text = _fmt_delay(delay_seconds)
             return (text, _STATUS_YELLOW) if text else ("On time", _STATUS_GREEN)
 
+        def when(value: str | None) -> str:
+            return _fmt_when(value, tz, time_format, date_format, now)
+
         if kind == "scheduled":
-            schedule = f"Dep {_fmt_time(tracked.get('scheduled_off'), tz, time_format)}"
+            schedule = f"Dep {when(tracked.get('scheduled_off'))}"
             delay_key = "departure_delay"
         elif kind == "airborne":
             eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
-            schedule = f"ETA {_fmt_time(eta, tz, time_format)}"
+            schedule = f"ETA {when(eta)}"
             delay_key = "arrival_delay"
         elif kind == "landed":
-            schedule = f"Landed {_fmt_time(tracked.get('actual_on'), tz, time_format)}"
+            schedule = f"Landed {when(tracked.get('actual_on'))}"
             delay_key = "arrival_delay"
         else:
             return []
+
+        # Gate/terminal/baggage: spell it out when the row has room, else abbreviate.
+        # Suppressed for cancelled flights, where a stale gate would just mislead.
+        if not tracked.get("cancelled"):
+            terse = _gate_info(tracked, kind, verbose=False)
+            if terse:
+                info = terse
+                verbose = _gate_info(tracked, kind, verbose=True)
+                if avail_w > 0 and render_text(
+                    f"{schedule} {verbose}", text_color, font_size
+                ).width <= avail_w:
+                    info = verbose
+                schedule = f"{schedule} {info}"
 
         if tracked.get("cancelled"):
             return [(schedule, text_color), ("Cancelled", _STATUS_RED)]
@@ -866,8 +1088,10 @@ class FlightTrackerApp(DisplayApp):
         origin = tracked.get("origin", "") or ""
         dest = tracked.get("dest", "") or ""
         route = f"{origin}->{dest}" if origin and dest else ""
+        # ``fn`` may be a synthesized key (Flighty source); show the real ident.
+        ident = tracked.get("ident") or fn
 
-        for i, line in enumerate([airline, fn, route][: min(3, n_rows)]):
+        for i, line in enumerate([airline, ident, route][: min(3, n_rows)]):
             if line and mid_w > 0:
                 clipped = _clip_text(line, font_size, mid_w)
                 line_img = render_text(clipped, text_color, font_size)
@@ -877,7 +1101,8 @@ class FlightTrackerApp(DisplayApp):
         # the status indicator colored by on-time/delayed/cancelled state.
         if n_rows == 5:
             bottom_w = inner_w - stats_w - (stats_gap if stats_w else 0)
-            for i, (line, color) in enumerate(self._status_rows(tracked, kind, text_color)[:2]):
+            status_rows = self._status_rows(tracked, kind, text_color, bottom_w, font_size)
+            for i, (line, color) in enumerate(status_rows[:2]):
                 if line and bottom_w > 0:
                     clipped = _clip_text(line, font_size, bottom_w)
                     line_img = render_text(clipped, color, font_size)
@@ -908,6 +1133,8 @@ class FlightTrackerApp(DisplayApp):
 
         labels = self._labels()
         tz, time_format = self._tz_and_time_format()
+        date_format = self._date_format()
+        now = datetime.now(timezone.utc)
 
         def _rows() -> list[tuple[str, str, tuple[int, int, int]]]:
             """Per-flight (prefix, status, status_color) rows.
@@ -915,7 +1142,8 @@ class FlightTrackerApp(DisplayApp):
             ``prefix`` (ident + schedule/ETA/landed info) uses the card's base
             text color; ``status`` is colored like the card's status indicator
             -- green on time/ahead, yellow delayed, red cancelled -- so the
-            table matches the cards' color coding.
+            table matches the cards' color coding. Flights more than 24h out get
+            their date shown (e.g. "Sched 6/18") so far-off flights are legible.
             """
             rows = []
             for fn in flight_numbers:
@@ -925,11 +1153,15 @@ class FlightTrackerApp(DisplayApp):
                     prefix, status, color = "not avail", "", text_color
                 else:
                     if kind == "scheduled":
-                        info = "Scheduled"
+                        if _is_far_future(tracked.get("scheduled_off"), now):
+                            dep = _fmt_when(tracked.get("scheduled_off"), tz, time_format, date_format, now)
+                            info = f"Sched {dep}"
+                        else:
+                            info = "Scheduled"
                         delay_key = "departure_delay"
                     elif kind == "airborne":
                         eta = tracked.get("estimated_on") or tracked.get("scheduled_on")
-                        info = f"ETA {_fmt_time(eta, tz, time_format)}"
+                        info = f"ETA {_fmt_when(eta, tz, time_format, date_format, now)}"
                         delay_key = "departure_delay"
                     else:
                         info = "Landed"
@@ -941,9 +1173,10 @@ class FlightTrackerApp(DisplayApp):
                         delay_text = _fmt_delay(tracked.get(delay_key))
                         status, color = (delay_text, _STATUS_YELLOW) if delay_text else ("On time", _STATUS_GREEN)
                     prefix = info
-                # Lead each row with the user's label when set, else the number.
-                ident = labels.get(fn) or fn
-                rows.append((f"{ident:<8}{prefix:<13} ", status, color))
+                # Lead each row with the user's label when set, else the real
+                # ident (``fn`` may be a synthesized key for the Flighty source).
+                lead = labels.get(fn) or (tracked or {}).get("ident") or fn
+                rows.append((f"{lead:<8}{prefix:<13} ", status, color))
             return rows
 
         rows = _rows()

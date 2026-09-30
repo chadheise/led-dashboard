@@ -41,8 +41,13 @@ interface SchemaProperty {
    *   'multi-picker' Dropdown + pills selector for string arrays (uses x-enum-labels)
    *   'duration'     Number + unit selector ({value, unit}); units from x-duration-units
    *   'team-picker'  Dynamic league + team selector (string[] of "league:abbr")
+   *   'password'     Masked text input for secrets (API keys / tokens)
+   *   'kv-list'      Repeatable {uuid,name} rows; labels from x-kv-key-label/x-kv-value-label
    */
   'x-input-type'?: string
+  /** Column labels for a kv-list input. */
+  'x-kv-key-label'?: string
+  'x-kv-value-label'?: string
   /** Labels for multi-select options — map from option value to display label */
   'x-enum-labels'?: Record<string, string>
   /** Allowed time units for duration inputs */
@@ -76,8 +81,63 @@ const checkRow: React.CSSProperties = {
 }
 const selectStyle: React.CSSProperties = { ...fieldStyle, appearance: 'none' }
 const row2: React.CSSProperties = { display: 'flex', gap: 10 }
+const descStyle: React.CSSProperties = { color: C.textDim, fontSize: F.size.xs, fontWeight: 'normal' }
+
+/** Small helper text under a field label, shown when the schema has a description. */
+function FieldDesc({ text }: { text?: string }) {
+  return text ? <span style={descStyle}>{text}</span> : null
+}
 
 // ── Specialised input renderers ────────────────────────────────────────────────
+
+function KeyValueList({ title, description, keyLabel, valueLabel, value, onChange }: {
+  title: string
+  description?: string
+  keyLabel: string
+  valueLabel: string
+  value: unknown
+  onChange: (v: Array<{ uuid: string; name: string }>) => void
+}) {
+  const rows = (Array.isArray(value) ? value : []) as Array<{ uuid?: string; name?: string }>
+  const list = rows.map(r => ({ uuid: String(r.uuid ?? ''), name: String(r.name ?? '') }))
+  const update = (next: Array<{ uuid: string; name: string }>) => onChange(next)
+  return (
+    <label style={labelStyle}>
+      {title}
+      {description && (
+        <span style={{ color: C.textDim, fontSize: F.size.xs }}>{description}</span>
+      )}
+      {list.map((r, i) => (
+        <div key={i} style={row2}>
+          <input
+            type="text"
+            placeholder={keyLabel}
+            value={r.uuid}
+            onChange={e => update(list.map((x, j) => j === i ? { ...x, uuid: e.target.value } : x))}
+            style={{ ...fieldStyle, flex: 2 }}
+          />
+          <input
+            type="text"
+            placeholder={valueLabel}
+            value={r.name}
+            onChange={e => update(list.map((x, j) => j === i ? { ...x, name: e.target.value } : x))}
+            style={{ ...fieldStyle, flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={() => update(list.filter((_, j) => j !== i))}
+            style={{ ...selectStyle, width: 34, cursor: 'pointer' }}
+          >×</button>
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() => update([...list, { uuid: '', name: '' }])}
+        style={{ ...selectStyle, cursor: 'pointer', color: C.textSecondary }}
+      >+ Add</button>
+    </label>
+  )
+}
 
 function ColorInput({ title, value, onChange }: { title: string; value: unknown; onChange: (v: string) => void }) {
   const hex = String(value || '#000000')
@@ -252,6 +312,38 @@ export default function AppForm({ schema, value, onChange }: Props) {
           )
         }
 
+        if (xType === 'password') {
+          return (
+            <label key={key} style={labelStyle}>
+              {title}
+              {prop.description && (
+                <span style={{ color: C.textDim, fontSize: F.size.xs }}>{prop.description}</span>
+              )}
+              <input
+                type="password"
+                autoComplete="off"
+                value={typeof v === 'string' ? v : ''}
+                onChange={e => onChange({ ...value, [key]: e.target.value })}
+                style={fieldStyle}
+              />
+            </label>
+          )
+        }
+
+        if (xType === 'kv-list') {
+          return (
+            <KeyValueList
+              key={key}
+              title={title}
+              description={prop.description}
+              keyLabel={prop['x-kv-key-label'] ?? 'Key'}
+              valueLabel={prop['x-kv-value-label'] ?? 'Value'}
+              value={v}
+              onChange={rows => onChange({ ...value, [key]: rows })}
+            />
+          )
+        }
+
         if (xType === 'flight-list') {
           // Migrate legacy {flight_numbers[], label} configs for display so an
           // instance saved before per-flight labels still shows its flights.
@@ -395,17 +487,20 @@ export default function AppForm({ schema, value, onChange }: Props) {
 
         if (prop.type === 'boolean' || xType === 'boolean') {
           return (
-            <label key={key} style={checkRow}>
-              <input
-                type="checkbox"
-                checked={!!v}
-                onChange={e => onChange({ ...value, [key]: e.target.checked })}
-                style={{ accentColor: C.positive }}
-              />
-              <span style={{ color: C.textSecondary, fontFamily: F.family, fontSize: F.size.label }}>
-                {title}
-              </span>
-            </label>
+            <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <label style={checkRow}>
+                <input
+                  type="checkbox"
+                  checked={!!v}
+                  onChange={e => onChange({ ...value, [key]: e.target.checked })}
+                  style={{ accentColor: C.positive }}
+                />
+                <span style={{ color: C.textSecondary, fontFamily: F.family, fontSize: F.size.label }}>
+                  {title}
+                </span>
+              </label>
+              <FieldDesc text={prop.description} />
+            </div>
           )
         }
 
@@ -414,6 +509,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
           return (
             <label key={key} style={labelStyle}>
               {title}
+              <FieldDesc text={prop.description} />
               <select
                 value={String(v)}
                 onChange={e => onChange({ ...value, [key]: e.target.value })}
@@ -431,6 +527,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
           return (
             <label key={key} style={labelStyle}>
               {title}
+              <FieldDesc text={prop.description} />
               <span style={{ color: C.textDim, fontSize: F.size.xs }}>(comma-separated)</span>
               <input
                 type="text"
@@ -450,6 +547,7 @@ export default function AppForm({ schema, value, onChange }: Props) {
         return (
           <label key={key} style={labelStyle}>
             {title}
+            <FieldDesc text={prop.description} />
             <input
               type={isNumeric ? 'number' : 'text'}
               value={String(v)}
