@@ -1255,7 +1255,9 @@ class SportsApp(DisplayApp):
         does not apply — single-slot layouts included, since the card renderer
         handles the logo internally at full card width.
         """
-        if not all(g.get("league") == "fifa.world" for g in games):
+        if not all(
+            (g.get("competition") or g.get("league")) == "fifa.world" for g in games
+        ):
             return None, 0, 0
         from .cards import wc_panel
         panel = wc_panel(w, h, self._wc_reveal())
