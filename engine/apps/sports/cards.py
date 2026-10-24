@@ -211,6 +211,15 @@ def _ranked_nickname(team: TeamView, side: str) -> str:
     )
 
 
+def _stacked_abbr(team: TeamView) -> str:
+    """Rank-decorated abbreviation for layouts that stack the teams in rows.
+
+    ``team.abbr`` mirrors the rank outward for side-by-side layouts ("#3 UGA"
+    vs "BAMA #5"); stacked rows read top to bottom, so the rank always leads.
+    """
+    return f"#{team.rank} {team.plain_abbr}" if team.rank is not None else team.plain_abbr
+
+
 def _shared_choice(
     away_candidates: list[TextSpec],
     home_candidates: list[TextSpec],
@@ -388,12 +397,12 @@ def _render_compact(frame: Frame, view: GameView) -> None:
     away_spec, home_spec = _shared_choice(
         [
             TextSpec(_possessed(view.away.nickname, view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.abbr, view.away, "away"), name_font),
+            TextSpec(_possessed(_stacked_abbr(view.away), view.away, "away"), name_font),
             TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 7),
         ],
         [
             TextSpec(_possessed(view.home.nickname, view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.abbr, view.home, "home"), name_font),
+            TextSpec(_possessed(_stacked_abbr(view.home), view.home, "home"), name_font),
             TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 7),
         ],
         name_w[0],
@@ -612,19 +621,19 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
     two_rows = all(
         team.nickname
         and measure(TextSpec(team.nickname, sub_font))[0] <= _name_budget(i, side)
-        and measure(TextSpec(team.abbr, sub_font))[0] <= _name_budget(i, side)
+        and measure(TextSpec(_stacked_abbr(team), sub_font))[0] <= _name_budget(i, side)
         for i, (side, team) in enumerate((("away", view.away), ("home", view.home)))
     )
     name_font = fit_font_size("Ag", min(rows[0].h, 15)) or 9
     away_spec, home_spec = _shared_choice(
         [
             TextSpec(_possessed(view.away.nickname, view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.abbr, view.away, "away"), name_font),
+            TextSpec(_possessed(_stacked_abbr(view.away), view.away, "away"), name_font),
             TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 7),
         ],
         [
             TextSpec(_possessed(view.home.nickname, view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.abbr, view.home, "home"), name_font),
+            TextSpec(_possessed(_stacked_abbr(view.home), view.home, "home"), name_font),
             TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 7),
         ],
         _name_budget(0, "away"),
@@ -656,7 +665,7 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
             top, bottom = region.take_top(region.h // 2)
             frame.place(
                 f"{side}.abbr",
-                _name_img(TextSpec(team.abbr, sub_font), team.accent, region.w),
+                _name_img(TextSpec(_stacked_abbr(team), sub_font), team.accent, region.w),
                 top, anchor="lm", priority=1,
             )
             frame.place(
