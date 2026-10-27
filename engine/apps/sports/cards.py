@@ -26,6 +26,7 @@ import cairosvg
 from PIL import Image
 
 from libraries.layout.library import (
+    PIXEL_SIZES,
     Frame,
     PlacedBox,
     Region,
@@ -221,19 +222,30 @@ def _stacked_abbr(team: TeamView) -> str:
 
 
 def _shared_choice(
-    away_candidates: list[TextSpec],
-    home_candidates: list[TextSpec],
+    away_forms: list[str],
+    home_forms: list[str],
     away_max_w: int,
     home_max_w: int,
+    max_size: int,
 ) -> tuple[TextSpec, TextSpec]:
-    """Pick the first candidate index that fits *both* teams, so the two sides
-    of a card always use the same form (mixed abbr/nickname looks broken)."""
-    for away_spec, home_spec in zip(away_candidates, home_candidates):
-        if not away_spec.text or not home_spec.text:
-            continue
-        if measure(away_spec)[0] <= away_max_w and measure(home_spec)[0] <= home_max_w:
-            return away_spec, home_spec
-    return away_candidates[-1], home_candidates[-1]
+    """Largest shared font (<= ``max_size``) at which some name form fits
+    *both* teams; within a size, the earliest (richest) form wins.
+
+    Both sides always share one form and one size — mixed abbr/nickname or
+    mismatched sizes look broken. Stepping down one size at a time (rather
+    than jumping straight to the smallest font) keeps a name that is just
+    slightly too wide — e.g. a rank-decorated abbr — from collapsing to a
+    tiny fallback while a size or two smaller would still fit.
+    """
+    sizes = [s for s in PIXEL_SIZES if s <= max_size] or [PIXEL_SIZES[-1]]
+    for size in sizes:
+        for away_text, home_text in zip(away_forms, home_forms):
+            if not away_text or not home_text:
+                continue
+            away_spec, home_spec = TextSpec(away_text, size), TextSpec(home_text, size)
+            if measure(away_spec)[0] <= away_max_w and measure(home_spec)[0] <= home_max_w:
+                return away_spec, home_spec
+    return TextSpec(away_forms[-1], sizes[-1]), TextSpec(home_forms[-1], sizes[-1])
 
 
 def _name_img(spec: TextSpec, color, max_w: int) -> Image.Image:
@@ -396,17 +408,18 @@ def _render_compact(frame: Frame, view: GameView) -> None:
     name_font = fit_font_size("Ag", name_max_h) or 7
     away_spec, home_spec = _shared_choice(
         [
-            TextSpec(_possessed(view.away.nickname, view.away, "away"), name_font),
-            TextSpec(_possessed(_stacked_abbr(view.away), view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 7),
+            _possessed(view.away.nickname, view.away, "away"),
+            _possessed(_stacked_abbr(view.away), view.away, "away"),
+            _possessed(view.away.plain_abbr, view.away, "away"),
         ],
         [
-            TextSpec(_possessed(view.home.nickname, view.home, "home"), name_font),
-            TextSpec(_possessed(_stacked_abbr(view.home), view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 7),
+            _possessed(view.home.nickname, view.home, "home"),
+            _possessed(_stacked_abbr(view.home), view.home, "home"),
+            _possessed(view.home.plain_abbr, view.home, "home"),
         ],
         name_w[0],
         name_w[1],
+        name_font,
     )
 
     for i, (side, team, spec) in enumerate(
@@ -526,17 +539,18 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
     name_font = fit_font_size("Ag", min(content.h, 12)) or 9
     away_spec, home_spec = _shared_choice(
         [
-            TextSpec(_possessed(view.away.nickname, view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.abbr, view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 7),
+            _possessed(view.away.nickname, view.away, "away"),
+            _possessed(view.away.abbr, view.away, "away"),
+            _possessed(view.away.plain_abbr, view.away, "away"),
         ],
         [
-            TextSpec(_possessed(view.home.nickname, view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.abbr, view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 7),
+            _possessed(view.home.nickname, view.home, "home"),
+            _possessed(view.home.abbr, view.home, "home"),
+            _possessed(view.home.plain_abbr, view.home, "home"),
         ],
         _name_budget("away"),
         _name_budget("home"),
+        name_font,
     )
     single_specs = {"away": away_spec, "home": home_spec}
 
@@ -627,17 +641,18 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
     name_font = fit_font_size("Ag", min(rows[0].h, 15)) or 9
     away_spec, home_spec = _shared_choice(
         [
-            TextSpec(_possessed(view.away.nickname, view.away, "away"), name_font),
-            TextSpec(_possessed(_stacked_abbr(view.away), view.away, "away"), name_font),
-            TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 7),
+            _possessed(view.away.nickname, view.away, "away"),
+            _possessed(_stacked_abbr(view.away), view.away, "away"),
+            _possessed(view.away.plain_abbr, view.away, "away"),
         ],
         [
-            TextSpec(_possessed(view.home.nickname, view.home, "home"), name_font),
-            TextSpec(_possessed(_stacked_abbr(view.home), view.home, "home"), name_font),
-            TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 7),
+            _possessed(view.home.nickname, view.home, "home"),
+            _possessed(_stacked_abbr(view.home), view.home, "home"),
+            _possessed(view.home.plain_abbr, view.home, "home"),
         ],
         _name_budget(0, "away"),
         _name_budget(1, "home"),
+        name_font,
     )
     single_specs = {"away": away_spec, "home": home_spec}
 
@@ -798,19 +813,18 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     if not three_lines:
         away_spec, home_spec = _shared_choice(
             [
-                TextSpec(_possessed(_ranked_nickname(view.away, "away"), view.away, "away"), name_font),
-                TextSpec(_possessed(view.away.abbr, view.away, "away"), name_font),
-                TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), name_font),
-                TextSpec(_possessed(view.away.plain_abbr, view.away, "away"), 9),
+                _possessed(_ranked_nickname(view.away, "away"), view.away, "away"),
+                _possessed(view.away.abbr, view.away, "away"),
+                _possessed(view.away.plain_abbr, view.away, "away"),
             ],
             [
-                TextSpec(_possessed(_ranked_nickname(view.home, "home"), view.home, "home"), name_font),
-                TextSpec(_possessed(view.home.abbr, view.home, "home"), name_font),
-                TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), name_font),
-                TextSpec(_possessed(view.home.plain_abbr, view.home, "home"), 9),
+                _possessed(_ranked_nickname(view.home, "home"), view.home, "home"),
+                _possessed(view.home.abbr, view.home, "home"),
+                _possessed(view.home.plain_abbr, view.home, "home"),
             ],
             text_regions["away"].w,
             text_regions["home"].w,
+            name_font,
         )
         single_specs = {"away": away_spec, "home": home_spec}
 
@@ -824,6 +838,15 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
         team.nickname and measure(TextSpec(team.nickname, 9))[0] <= text_regions[side].w
         for side, team in (("away", view.away), ("home", view.home))
     )
+    if pre_block:
+        pre_away, pre_home = _shared_choice(
+            [view.away.abbr, view.away.plain_abbr],
+            [view.home.abbr, view.home.plain_abbr],
+            text_regions["away"].w,
+            text_regions["home"].w,
+            15,
+        )
+        pre_specs = {"away": pre_away, "home": pre_home}
 
     lines: dict[str, list[tuple[str, Image.Image]]] = {}
     for side, team in (("away", view.away), ("home", view.home)):
@@ -834,7 +857,7 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
             nick_img = _name_img(TextSpec(nick_text, name_font), team.color, region.w)
             lines[side] = [(f"{side}.city", city_img), (f"{side}.name", nick_img)]
         elif pre_block:
-            abbr_img = _name_img(TextSpec(team.abbr, 15), team.color, region.w)
+            abbr_img = _name_img(pre_specs[side], team.color, region.w)
             lines[side] = [(f"{side}.name", abbr_img)]
             if pre_nicknames:
                 nick_img = _name_img(TextSpec(team.nickname, 9), team.accent, region.w)
