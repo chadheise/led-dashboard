@@ -15,7 +15,8 @@ def _rendered_names(monkeypatch, w: int, h: int) -> list[str]:
     orig = cards._name_img
 
     def record(spec, color, max_w):
-        seen.append(spec.text)
+        # NameSpec (single-line names) carries the rank separately.
+        seen.append(spec.joined if isinstance(spec, cards.NameSpec) else spec.text)
         return orig(spec, color, max_w)
 
     monkeypatch.setattr(cards, "_name_img", record)
