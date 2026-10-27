@@ -18,9 +18,10 @@ Tier map (w x h):
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from pathlib import Path
+from typing import Callable
 
 import cairosvg
 from PIL import Image
@@ -221,44 +222,165 @@ def _stacked_abbr(team: TeamView) -> str:
     return f"#{team.rank} {team.plain_abbr}" if team.rank is not None else team.plain_abbr
 
 
+_RANK_GAP = 2  # px between a compact rank and the name beside it
+_COMPACT_RANK_SIZE = 7
+
+
+@dataclass(frozen=True)
+class NameSpec:
+    """One line of team name: ``text`` plus an optional ``rank`` ("#3") and
+    football possession marker, rendered at ``size``.
+
+    ``rank_size`` 0 joins the rank into the text at full size ("#3 UGA");
+    a smaller ``rank_size`` draws a compact rank beside full-size text, so a
+    tight slot keeps both the rank and a large name.
+    """
+
+    text: str
+    rank: str = ""
+    rank_first: bool = True
+    possession: str = ""  # "away" / "home": side of the marker; "" for none
+    size: int = 0
+    rank_size: int = 0
+
+    def _runs(self) -> list[TextSpec]:
+        """Consecutive same-size tokens, each run joined by spaces."""
+        tokens: list[tuple[str, int]] = [(self.text, self.size)]
+        if self.rank:
+            rank = (self.rank, self.rank_size or self.size)
+            tokens.insert(0 if self.rank_first else 1, rank)
+        if self.possession == "away":
+            tokens.append(("<", self.size))
+        elif self.possession == "home":
+            tokens.insert(0, (">", self.size))
+        runs: list[TextSpec] = []
+        for text, size in tokens:
+            if runs and runs[-1].size == size:
+                runs[-1] = TextSpec(f"{runs[-1].text} {text}", size)
+            else:
+                runs.append(TextSpec(text, size))
+        return runs
+
+    @property
+    def joined(self) -> str:
+        return " ".join(run.text for run in self._runs())
+
+    def measure(self) -> tuple[int, int]:
+        sizes = [measure(run) for run in self._runs()]
+        width = sum(w for w, _ in sizes) + _RANK_GAP * (len(sizes) - 1)
+        return width, max(h for _, h in sizes)
+
+    def image(self, color) -> Image.Image:
+        runs = [text_img(run, color) for run in self._runs()]
+        if len(runs) == 1:
+            return runs[0]
+        w, h = self.measure()
+        img = Image.new("RGB", (w, h))
+        x = 0
+        for run in runs:  # bottom-aligned: abbr and rank share a baseline
+            img.paste(run, (x, h - run.height))
+            x += run.width + _RANK_GAP
+        return img
+
+
+def _name_form(
+    text: str, team: TeamView, side: str, *, rank_first: bool, possession: bool = True
+) -> NameSpec:
+    return NameSpec(
+        text,
+        rank=f"#{team.rank}" if team.rank is not None and text else "",
+        rank_first=rank_first,
+        possession=side if possession and team.has_possession else "",
+    )
+
+
 def _shared_choice(
-    away_forms: list[str],
-    home_forms: list[str],
+    away_forms: list[NameSpec],
+    home_forms: list[NameSpec],
     away_max_w: int,
     home_max_w: int,
     max_size: int,
-) -> tuple[TextSpec, TextSpec]:
+) -> tuple[NameSpec, NameSpec]:
     """Largest shared font (<= ``max_size``) at which some name form fits
     *both* teams; within a size, the earliest (richest) form wins.
 
     Both sides always share one form and one size — mixed abbr/nickname or
-    mismatched sizes look broken. Stepping down one size at a time (rather
-    than jumping straight to the smallest font) keeps a name that is just
-    slightly too wide — e.g. a rank-decorated abbr — from collapsing to a
-    tiny fallback while a size or two smaller would still fit.
+    mismatched sizes look broken. Each size first tries every form with its
+    rank at full size, then with a compact rank, before stepping down one
+    size — so a rank is never dropped, and never drags the names down to a
+    tiny font while a smaller rank beside a large name would fit.
     """
     sizes = [s for s in PIXEL_SIZES if s <= max_size] or [PIXEL_SIZES[-1]]
     for size in sizes:
-        for away_text, home_text in zip(away_forms, home_forms):
-            if not away_text or not home_text:
-                continue
-            away_spec, home_spec = TextSpec(away_text, size), TextSpec(home_text, size)
-            if measure(away_spec)[0] <= away_max_w and measure(home_spec)[0] <= home_max_w:
-                return away_spec, home_spec
-    return TextSpec(away_forms[-1], sizes[-1]), TextSpec(home_forms[-1], sizes[-1])
+        rank_sizes = [0] + ([_COMPACT_RANK_SIZE] if size > _COMPACT_RANK_SIZE else [])
+        for rank_size in rank_sizes:
+            for away_form, home_form in zip(away_forms, home_forms):
+                if not away_form.text or not home_form.text:
+                    continue
+                away_spec = replace(away_form, size=size, rank_size=rank_size)
+                home_spec = replace(home_form, size=size, rank_size=rank_size)
+                if (
+                    away_spec.measure()[0] <= away_max_w
+                    and home_spec.measure()[0] <= home_max_w
+                ):
+                    return away_spec, home_spec
+    smallest = sizes[-1]
+    return (
+        replace(away_forms[-1], size=smallest, rank_size=_COMPACT_RANK_SIZE),
+        replace(home_forms[-1], size=smallest, rank_size=_COMPACT_RANK_SIZE),
+    )
 
 
-def _name_img(spec: TextSpec, color, max_w: int) -> Image.Image:
-    img = text_img(spec, color)
+def _name_img(spec: TextSpec | NameSpec, color, max_w: int) -> Image.Image:
+    if isinstance(spec, NameSpec):
+        img = spec.image(color)
+        text = spec.joined
+    else:
+        img = text_img(spec, color)
+        text = spec.text
     if img.width > max_w:
-        img = widgets.truncate_to_fit(spec.text, color, spec.size, max_w)
+        img = widgets.truncate_to_fit(text, color, spec.size, max_w)
     return img
 
 
-def _min_name_w(team: TeamView) -> int:
-    """Width the smallest acceptable name form needs — reserved before the
-    score is fitted, so a wide score can never starve the team name out."""
-    return measure(TextSpec(team.plain_abbr, 7))[0]
+def _min_name_w(view: GameView, size: int) -> int:
+    """Width the abbr at ``size`` (plus a compact rank and the possession
+    marker, when present) needs —
+    reserved before the score is fitted, so a wide score can never starve a
+    team name or its rank out. The reserved name size is the same whether or
+    not the teams are ranked, so ranked and unranked cards match. One shared
+    value: both rows share the score column, so the wider name sets it."""
+    return max(
+        replace(
+            _name_form(team.plain_abbr, team, side, rank_first=True),
+            size=size,
+            rank_size=min(size, _COMPACT_RANK_SIZE),
+        ).measure()[0]
+        for side, team in (("away", view.away), ("home", view.home))
+    )
+
+
+# Abbr sizes to reserve beside the score in the row layouts (INLINE,
+# STACKED), largest first: names never shrink to a sliver just because the
+# score could be drawn bigger, but step down when the reservation would leave
+# the score less than twice the name's height. (12 and 9 are skipped: as wide
+# as 15 for capitals but shorter, they never buy the score any room.)
+_RESERVED_NAME_SIZES = (15, 8, 7)
+
+RowFit = tuple[dict[str, Image.Image | None], dict[str, Image.Image]]
+
+
+def _fit_rows(view: GameView, fit: Callable[[int], RowFit]) -> RowFit:
+    """Run ``fit(min_name_w)`` (-> logos, score images) with the largest name
+    reservation that keeps every score at least twice the name's height."""
+    for size in _RESERVED_NAME_SIZES:
+        logos, score_imgs = fit(_min_name_w(view, size))
+        name_h = max(
+            measure(TextSpec(team.plain_abbr, size))[1] for team in (view.away, view.home)
+        )
+        if all(img.height >= 2 * name_h for img in score_imgs.values()):
+            break
+    return logos, score_imgs
 
 
 _MIN_LOGO_W = 10
@@ -268,15 +390,15 @@ _SCORE_MARGIN = 2  # breathing room above/below the big score digits
 
 
 def _fit_score_and_logo(
-    team: TeamView, row_w: int, row_h: int, logo_cap: int
+    team: TeamView, row_w: int, row_h: int, logo_cap: int, min_name: int
 ) -> tuple[Image.Image | None, Image.Image | None]:
     """Budget one team row: score at its ideal size first, logo from what's left.
 
     The degradation order is explicit — the logo shrinks (and finally drops)
-    before the score gives up any size, and the smallest name form is always
-    reserved. Returns (logo, score_img), either of which may be None.
+    before the score gives up any size, and the smallest name form
+    (``min_name`` wide) is always reserved. Returns (logo, score_img), either
+    of which may be None.
     """
-    min_name = _min_name_w(team)
     if not team.score:
         return _scaled_logo(team, row_h, logo_cap), None
 
@@ -394,7 +516,7 @@ def _render_compact(frame: Frame, view: GameView) -> None:
     score_col = 0
     if view.state != "pre":
         longest = max((view.away.score, view.home.score), key=len)
-        score_max_w = rows[0].w - max(_min_name_w(view.away), _min_name_w(view.home)) - _GAP
+        score_max_w = rows[0].w - _min_name_w(view, PIXEL_SIZES[-1]) - _GAP
         score_font = fit_font_size(longest, rows[0].h, max(1, score_max_w), bold=True) or 7
         for side, team in (("away", view.away), ("home", view.home)):
             img = text_img(TextSpec(team.score, score_font, bold=True), team.color)
@@ -408,14 +530,12 @@ def _render_compact(frame: Frame, view: GameView) -> None:
     name_font = fit_font_size("Ag", name_max_h) or 7
     away_spec, home_spec = _shared_choice(
         [
-            _possessed(view.away.nickname, view.away, "away"),
-            _possessed(_stacked_abbr(view.away), view.away, "away"),
-            _possessed(view.away.plain_abbr, view.away, "away"),
+            _name_form(view.away.nickname, view.away, "away", rank_first=True),
+            _name_form(view.away.plain_abbr, view.away, "away", rank_first=True),
         ],
         [
-            _possessed(view.home.nickname, view.home, "home"),
-            _possessed(_stacked_abbr(view.home), view.home, "home"),
-            _possessed(view.home.plain_abbr, view.home, "home"),
+            _name_form(view.home.nickname, view.home, "home", rank_first=True),
+            _name_form(view.home.plain_abbr, view.home, "home", rank_first=True),
         ],
         name_w[0],
         name_w[1],
@@ -509,15 +629,19 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
         frame.place(widget_name, widget, content, anchor="mm", priority=2)
 
     # Score at ideal size first, logo from the remainder, name budget last.
-    logos: dict[str, Image.Image | None] = {}
-    score_imgs: dict[str, Image.Image] = {}
-    for side, team in (("away", view.away), ("home", view.home)):
-        logo, score_img = _fit_score_and_logo(
-            team, halves[side].w, content.h, content.h * 3 // 2
-        )
-        logos[side] = logo
-        if score_img is not None:
-            score_imgs[side] = score_img
+    def _fit(min_name: int) -> RowFit:
+        logos: dict[str, Image.Image | None] = {}
+        score_imgs: dict[str, Image.Image] = {}
+        for side, team in (("away", view.away), ("home", view.home)):
+            logo, score_img = _fit_score_and_logo(
+                team, halves[side].w, content.h, content.h * 3 // 2, min_name
+            )
+            logos[side] = logo
+            if score_img is not None:
+                score_imgs[side] = score_img
+        return logos, score_imgs
+
+    logos, score_imgs = _fit_rows(view, _fit)
 
     def _name_budget(side: str) -> int:
         used = halves[side].w
@@ -539,14 +663,12 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
     name_font = fit_font_size("Ag", min(content.h, 12)) or 9
     away_spec, home_spec = _shared_choice(
         [
-            _possessed(view.away.nickname, view.away, "away"),
-            _possessed(view.away.abbr, view.away, "away"),
-            _possessed(view.away.plain_abbr, view.away, "away"),
+            _name_form(view.away.nickname, view.away, "away", rank_first=True),
+            _name_form(view.away.plain_abbr, view.away, "away", rank_first=True),
         ],
         [
-            _possessed(view.home.nickname, view.home, "home"),
-            _possessed(view.home.abbr, view.home, "home"),
-            _possessed(view.home.plain_abbr, view.home, "home"),
+            _name_form(view.home.nickname, view.home, "home", rank_first=False),
+            _name_form(view.home.plain_abbr, view.home, "home", rank_first=False),
         ],
         _name_budget("away"),
         _name_budget("home"),
@@ -612,18 +734,23 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
     rows = [r.inset(2, 1) for r in content.split_rows(2)]
     show_logo = w >= 64
 
-    logos: dict[str, Image.Image | None] = {"away": None, "home": None}
-    score_imgs: dict[str, Image.Image] = {}
-    score_col = 0
-    for i, (side, team) in enumerate((("away", view.away), ("home", view.home))):
-        # Cap the logo at a third of the row so wide logos (flags) can't
-        # squeeze the name and score out of a narrow card.
-        logo_cap = min(rows[i].h * 3 // 2, rows[i].w // 3) if show_logo else 0
-        logo, score_img = _fit_score_and_logo(team, rows[i].w, rows[i].h, logo_cap)
-        logos[side] = logo if show_logo else None
-        if score_img is not None:
-            score_imgs[side] = score_img
-            score_col = max(score_col, score_img.width)
+    def _fit(min_name: int) -> RowFit:
+        logos: dict[str, Image.Image | None] = {"away": None, "home": None}
+        score_imgs: dict[str, Image.Image] = {}
+        for i, (side, team) in enumerate((("away", view.away), ("home", view.home))):
+            # Cap the logo at a third of the row so wide logos (flags) can't
+            # squeeze the name and score out of a narrow card.
+            logo_cap = min(rows[i].h * 3 // 2, rows[i].w // 3) if show_logo else 0
+            logo, score_img = _fit_score_and_logo(
+                team, rows[i].w, rows[i].h, logo_cap, min_name
+            )
+            logos[side] = logo if show_logo else None
+            if score_img is not None:
+                score_imgs[side] = score_img
+        return logos, score_imgs
+
+    logos, score_imgs = _fit_rows(view, _fit)
+    score_col = max((img.width for img in score_imgs.values()), default=0)
 
     def _name_budget(i: int, side: str) -> int:
         used = rows[i].w - score_col - (_GAP if score_col else 0)
@@ -641,14 +768,12 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
     name_font = fit_font_size("Ag", min(rows[0].h, 15)) or 9
     away_spec, home_spec = _shared_choice(
         [
-            _possessed(view.away.nickname, view.away, "away"),
-            _possessed(_stacked_abbr(view.away), view.away, "away"),
-            _possessed(view.away.plain_abbr, view.away, "away"),
+            _name_form(view.away.nickname, view.away, "away", rank_first=True),
+            _name_form(view.away.plain_abbr, view.away, "away", rank_first=True),
         ],
         [
-            _possessed(view.home.nickname, view.home, "home"),
-            _possessed(_stacked_abbr(view.home), view.home, "home"),
-            _possessed(view.home.plain_abbr, view.home, "home"),
+            _name_form(view.home.nickname, view.home, "home", rank_first=True),
+            _name_form(view.home.plain_abbr, view.home, "home", rank_first=True),
         ],
         _name_budget(0, "away"),
         _name_budget(1, "home"),
@@ -774,23 +899,29 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     }
 
     # Logos at the outer edges; text budget is the remainder of each half.
+    # Logos are placed only once the names are settled: a name that needs
+    # more room than the default logo cap leaves may shrink both logos.
+    logo_regions = {side: halves[side].inset(1, 0) for side in ("away", "home")}
     logos: dict[str, Image.Image | None] = {}
     text_regions: dict[str, Region] = {}
-    for side, team in (("away", view.away), ("home", view.home)):
-        region = halves[side].inset(1, 0)
-        logo = _scaled_logo(team, region.h, max(12, region.w // 2))
-        logos[side] = logo
-        if logo is not None:
-            outer = "lm" if side == "away" else "rm"
-            box = frame.place(f"{side}.logo", logo, region, anchor=outer, priority=2)
-            if side == "away":
-                region = Region(box.right + _GAP, region.y, region.right - box.right - _GAP, region.h)
-            else:
-                region = Region(region.x, region.y, box.x - _GAP - region.x, region.h)
-        text_regions[side] = region
+
+    def _layout_logos(min_text_w: int = 0) -> None:
+        for side, team in (("away", view.away), ("home", view.home)):
+            region = logo_regions[side]
+            cap = max(12, min(region.w // 2, region.w - min_text_w - _GAP))
+            logo = _scaled_logo(team, region.h, cap)
+            logos[side] = logo
+            if logo is not None:
+                if side == "away":
+                    region = Region(region.x + logo.width + _GAP, region.y,
+                                    region.w - logo.width - _GAP, region.h)
+                else:
+                    region = Region(region.x, region.y, region.w - logo.width - _GAP, region.h)
+            text_regions[side] = region
+
+    _layout_logos()
 
     name_font = 12
-    line_h = measure(TextSpec("Ag", name_font))[1]
 
     def _city_text(team: TeamView) -> str:
         # National teams repeat the country as both location and nickname;
@@ -801,32 +932,61 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
 
     have_scores = view.state != "pre"
     score_min_h = 14
-    three_lines = all(
-        _city_text(team)
-        and team.nickname
-        and measure(TextSpec(_city_text(team), name_font))[0] <= text_regions[side].w
-        and measure(TextSpec(_ranked_nickname(team, side) or team.nickname, name_font))[0]
-        <= text_regions[side].w
-        for side, team in (("away", view.away), ("home", view.home))
-    ) and content.h - 2 * line_h - 2 * _GAP >= (score_min_h if have_scores else 0)
+
+    def _three_lines_fit(size: int) -> bool:
+        line_h = measure(TextSpec("Ag", size))[1]
+        return all(
+            _city_text(team)
+            and team.nickname
+            and measure(TextSpec(_city_text(team), size))[0] <= text_regions[side].w
+            and measure(TextSpec(_ranked_nickname(team, side), size))[0]
+            <= text_regions[side].w
+            for side, team in (("away", view.away), ("home", view.home))
+        ) and content.h - 2 * line_h - 2 * _GAP >= (score_min_h if have_scores else 0)
+
+    # In-game, city/nickname stay at 12 so the score keeps its height. Pregame
+    # has no score, so the two lines grow to fill the card — otherwise an
+    # unranked three-line card reads smaller than a ranked one, whose wider
+    # name falls through to the 15px abbr block below.
+    three_line_font = next(
+        (size for size in ((name_font,) if have_scores else (22, 15, name_font))
+         if _three_lines_fit(size)),
+        None,
+    )
+    three_lines = three_line_font is not None
 
     if not three_lines:
-        away_spec, home_spec = _shared_choice(
-            [
-                _possessed(_ranked_nickname(view.away, "away"), view.away, "away"),
-                _possessed(view.away.abbr, view.away, "away"),
-                _possessed(view.away.plain_abbr, view.away, "away"),
-            ],
-            [
-                _possessed(_ranked_nickname(view.home, "home"), view.home, "home"),
-                _possessed(view.home.abbr, view.home, "home"),
-                _possessed(view.home.plain_abbr, view.home, "home"),
-            ],
-            text_regions["away"].w,
-            text_regions["home"].w,
-            name_font,
-        )
+        single_forms = {
+            side: [
+                _name_form(team.nickname, team, side, rank_first=side == "away"),
+                _name_form(team.plain_abbr, team, side, rank_first=side == "away"),
+            ]
+            for side, team in (("away", view.away), ("home", view.home))
+        }
+
+        def _choose_single() -> tuple[NameSpec, NameSpec]:
+            return _shared_choice(
+                single_forms["away"], single_forms["home"],
+                text_regions["away"].w, text_regions["home"].w, name_font,
+            )
+
+        away_spec, home_spec = _choose_single()
+        if away_spec.size < name_font:
+            # A rank-decorated abbr can need a few px more than the default
+            # logo cap leaves; shrink both logos (equally) rather than the
+            # names, so ranked teams match the size unranked ones get.
+            need = max(
+                replace(forms[-1], size=name_font, rank_size=_COMPACT_RANK_SIZE).measure()[0]
+                for forms in single_forms.values()
+            )
+            _layout_logos(need)
+            away_spec, home_spec = _choose_single()
         single_specs = {"away": away_spec, "home": home_spec}
+
+    for side in ("away", "home"):
+        if logos[side] is not None:
+            outer = "lm" if side == "away" else "rm"
+            frame.place(f"{side}.logo", logos[side], logo_regions[side], anchor=outer, priority=2)
 
     # Build every text line first, so both sides share one row geometry and
     # one score font — independent fits would misalign the rows and can size
@@ -840,8 +1000,8 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     )
     if pre_block:
         pre_away, pre_home = _shared_choice(
-            [view.away.abbr, view.away.plain_abbr],
-            [view.home.abbr, view.home.plain_abbr],
+            [_name_form(view.away.plain_abbr, view.away, "away", rank_first=True, possession=False)],
+            [_name_form(view.home.plain_abbr, view.home, "home", rank_first=False, possession=False)],
             text_regions["away"].w,
             text_regions["home"].w,
             15,
@@ -852,9 +1012,11 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     for side, team in (("away", view.away), ("home", view.home)):
         region = text_regions[side]
         if three_lines:
-            city_img = _name_img(TextSpec(_city_text(team), name_font), team.accent, region.w)
+            city_img = _name_img(
+                TextSpec(_city_text(team), three_line_font), team.accent, region.w
+            )
             nick_text = _possessed(_ranked_nickname(team, side), team, side)
-            nick_img = _name_img(TextSpec(nick_text, name_font), team.color, region.w)
+            nick_img = _name_img(TextSpec(nick_text, three_line_font), team.color, region.w)
             lines[side] = [(f"{side}.city", city_img), (f"{side}.name", nick_img)]
         elif pre_block:
             abbr_img = _name_img(pre_specs[side], team.color, region.w)
