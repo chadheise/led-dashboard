@@ -203,16 +203,6 @@ def _possessed(text: str, team: TeamView, side: str) -> str:
     return f"{text} <" if side == "away" else f"> {text}"
 
 
-def _ranked_nickname(team: TeamView, side: str) -> str:
-    if not team.nickname:
-        return ""
-    if team.rank is None:
-        return team.nickname
-    return (
-        f"#{team.rank} {team.nickname}" if side == "away" else f"{team.nickname} #{team.rank}"
-    )
-
-
 def _stacked_abbr(team: TeamView) -> str:
     """Rank-decorated abbreviation for layouts that stack the teams in rows.
 
@@ -329,26 +319,6 @@ def _shared_choice(
         replace(away_forms[-1], size=smallest, rank_size=_COMPACT_RANK_SIZE),
         replace(home_forms[-1], size=smallest, rank_size=_COMPACT_RANK_SIZE),
     )
-
-
-def _ranked_lines(
-    forms: dict[str, NameSpec], size: int, budgets: dict[str, int]
-) -> dict[str, NameSpec] | None:
-    """Both teams' ``forms`` at ``size`` with their ranks — full size if both
-    fit, else compact for both (one shared rank style) — or None when either
-    side still overflows its budget."""
-    for rank_size in (0, _COMPACT_RANK_SIZE):
-        specs = {
-            side: replace(form, size=size, rank_size=rank_size) for side, form in forms.items()
-        }
-        # The possession marker is left out of the fit, as it always was for
-        # these lines (it's truncated first when space runs short).
-        if all(
-            spec.text and replace(spec, possession="").measure()[0] <= budgets[side]
-            for side, spec in specs.items()
-        ):
-            return specs
-    return None
 
 
 def _name_img(spec: TextSpec | NameSpec, color, max_w: int) -> Image.Image:
@@ -671,18 +641,12 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
             used -= score_imgs[side].width + _GAP
         return max(1, used)
 
-    # Two-row name block (abbr over nickname, both ranked) when both sides fit one.
+    # Two-row name block (abbr over nickname) when both sides fit one.
     sub_font = fit_font_size("Ag", content.h // 2) or 7
-    nick_lines = _ranked_lines(
-        {
-            side: _name_form(team.nickname, team, side, rank_first=side == "away")
-            for side, team in (("away", view.away), ("home", view.home))
-        },
-        sub_font,
-        {side: _name_budget(side) for side in ("away", "home")},
-    )
-    two_rows = nick_lines is not None and all(
-        measure(TextSpec(team.abbr, sub_font))[0] <= _name_budget(side)
+    two_rows = all(
+        team.nickname
+        and measure(TextSpec(team.nickname, sub_font))[0] <= _name_budget(side)
+        and measure(TextSpec(team.abbr, sub_font))[0] <= _name_budget(side)
         for side, team in (("away", view.away), ("home", view.home))
     )
 
@@ -736,7 +700,9 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
         if two_rows:
             top, bottom = region.take_top(region.h // 2)
             abbr_img = _name_img(TextSpec(team.abbr, sub_font), team.accent, region.w)
-            nick_img = _name_img(nick_lines[side], team.color, region.w)
+            nick_img = _name_img(
+                TextSpec(_possessed(team.nickname, team, side), sub_font), team.color, region.w
+            )
             frame.place(f"{side}.abbr", abbr_img, top, anchor=outer, priority=1)
             frame.place(f"{side}.name", nick_img, bottom, anchor=outer, priority=1)
         else:
@@ -783,16 +749,10 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
         return max(1, used)
 
     sub_font = fit_font_size("Ag", rows[0].h // 2) or 7
-    nick_lines = _ranked_lines(
-        {
-            side: _name_form(team.nickname, team, side, rank_first=True)
-            for side, team in (("away", view.away), ("home", view.home))
-        },
-        sub_font,
-        {"away": _name_budget(0, "away"), "home": _name_budget(1, "home")},
-    )
-    two_rows = nick_lines is not None and all(
-        measure(TextSpec(_stacked_abbr(team), sub_font))[0] <= _name_budget(i, side)
+    two_rows = all(
+        team.nickname
+        and measure(TextSpec(team.nickname, sub_font))[0] <= _name_budget(i, side)
+        and measure(TextSpec(_stacked_abbr(team), sub_font))[0] <= _name_budget(i, side)
         for i, (side, team) in enumerate((("away", view.away), ("home", view.home)))
     )
     name_font = fit_font_size("Ag", min(rows[0].h, 15)) or 9
@@ -840,7 +800,7 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
             )
             frame.place(
                 f"{side}.name",
-                _name_img(nick_lines[side], team.color, region.w),
+                _name_img(TextSpec(_possessed(team.nickname, team, side), sub_font), team.color, region.w),
                 bottom, anchor="lm", priority=1,
             )
         else:
@@ -953,37 +913,54 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
 
     name_font = 12
 
-    def _city_text(team: TeamView) -> str:
+    def _city_form(team: TeamView, side: str) -> NameSpec:
         # National teams repeat the country as both location and nickname;
-        # show the abbreviation on the top line instead.
-        if team.location and team.location.lower() == team.nickname.lower():
-            return team.abbr
-        return team.location
+        # show the abbreviation on the top line instead. The rank rides on
+        # this top line ("#3 Georgia" over "Bulldogs"), mirrored outward.
+        national = team.location and team.location.lower() == team.nickname.lower()
+        text = team.plain_abbr if national else team.location
+        return _name_form(text, team, side, rank_first=side == "away", possession=False)
 
+    city_forms = {
+        side: _city_form(team, side) for side, team in (("away", view.away), ("home", view.home))
+    }
     have_scores = view.state != "pre"
     score_min_h = 14
 
-    def _three_lines_fit(size: int) -> bool:
+    def _three_lines_fit(size: int) -> dict[str, NameSpec] | None:
+        """City lines (ranked; compact rank if the full one won't fit) at
+        ``size`` when the three-line block fits both teams, else None."""
         line_h = measure(TextSpec("Ag", size))[1]
-        return all(
-            _city_text(team)
-            and team.nickname
-            and measure(TextSpec(_city_text(team), size))[0] <= text_regions[side].w
-            and measure(TextSpec(_ranked_nickname(team, side), size))[0]
-            <= text_regions[side].w
+        if content.h - 2 * line_h - 2 * _GAP < (score_min_h if have_scores else 0):
+            return None
+        if not all(
+            team.nickname and measure(TextSpec(team.nickname, size))[0] <= text_regions[side].w
             for side, team in (("away", view.away), ("home", view.home))
-        ) and content.h - 2 * line_h - 2 * _GAP >= (score_min_h if have_scores else 0)
+        ):
+            return None
+        for rank_size in (0, _COMPACT_RANK_SIZE):
+            specs = {
+                side: replace(form, size=size, rank_size=rank_size)
+                for side, form in city_forms.items()
+            }
+            if all(
+                spec.text and spec.measure()[0] <= text_regions[side].w
+                for side, spec in specs.items()
+            ):
+                return specs
+        return None
 
     # In-game, city/nickname stay at 12 so the score keeps its height. Pregame
     # has no score, so the two lines grow to fill the card — otherwise an
     # unranked three-line card reads smaller than a ranked one, whose wider
     # name falls through to the 15px abbr block below.
-    three_line_font = next(
-        (size for size in ((name_font,) if have_scores else (22, 15, name_font))
-         if _three_lines_fit(size)),
+    city_specs = next(
+        (specs for size in ((name_font,) if have_scores else (22, 15, name_font))
+         if (specs := _three_lines_fit(size)) is not None),
         None,
     )
-    three_lines = three_line_font is not None
+    three_lines = city_specs is not None
+    three_line_font = city_specs["away"].size if city_specs else name_font
 
     if not three_lines:
         single_forms = {
@@ -1024,18 +1001,10 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     # Without scores the card is mostly empty, so pre-game gets a larger abbr,
     # with the nickname underneath when it fits on both sides.
     pre_block = not have_scores and not three_lines
-    pre_nicknames = None
-    if pre_block:
-        pre_nicknames = _ranked_lines(
-            {
-                side: _name_form(
-                    team.nickname, team, side, rank_first=side == "away", possession=False
-                )
-                for side, team in (("away", view.away), ("home", view.home))
-            },
-            9,
-            {side: text_regions[side].w for side in ("away", "home")},
-        )
+    pre_nicknames = pre_block and all(
+        team.nickname and measure(TextSpec(team.nickname, 9))[0] <= text_regions[side].w
+        for side, team in (("away", view.away), ("home", view.home))
+    )
     if pre_block:
         pre_away, pre_home = _shared_choice(
             [_name_form(view.away.plain_abbr, view.away, "away", rank_first=True, possession=False)],
@@ -1050,17 +1019,15 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
     for side, team in (("away", view.away), ("home", view.home)):
         region = text_regions[side]
         if three_lines:
-            city_img = _name_img(
-                TextSpec(_city_text(team), three_line_font), team.accent, region.w
-            )
-            nick_text = _possessed(_ranked_nickname(team, side), team, side)
+            city_img = _name_img(city_specs[side], team.accent, region.w)
+            nick_text = _possessed(team.nickname, team, side)
             nick_img = _name_img(TextSpec(nick_text, three_line_font), team.color, region.w)
             lines[side] = [(f"{side}.city", city_img), (f"{side}.name", nick_img)]
         elif pre_block:
             abbr_img = _name_img(pre_specs[side], team.color, region.w)
             lines[side] = [(f"{side}.name", abbr_img)]
             if pre_nicknames:
-                nick_img = _name_img(pre_nicknames[side], team.accent, region.w)
+                nick_img = _name_img(TextSpec(team.nickname, 9), team.accent, region.w)
                 lines[side].append((f"{side}.nickname", nick_img))
         else:
             lines[side] = [(f"{side}.name", _name_img(single_specs[side], team.color, region.w))]
