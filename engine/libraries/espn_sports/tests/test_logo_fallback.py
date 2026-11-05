@@ -108,3 +108,11 @@ def test_scoreboard_without_team_logo_gets_default_url() -> None:
     games = asyncio.run(ESPNSportsLibrary({})._fetch_league(_FakeClient(data), "nhl"))
     assert games[0]["home_logo_url"] == SJ_DEFAULT
     assert games[0]["away_logo_url"] == "https://a.espncdn.com/i/teamlogos/nhl/500/scoreboard/vgk.png"
+
+
+def test_houston_rockets_falls_back_to_default(tmp_path, monkeypatch) -> None:
+    hou_default = "https://a.espncdn.com/i/teamlogos/nba/500/hou.png"
+    espn, calls = _make_lib(tmp_path, monkeypatch, {hou_default})
+    url = "https://a.espncdn.com/i/teamlogos/nba/500/scoreboard/hou.png"
+    assert asyncio.run(espn.fetch_logo(url, (64, 64), "nba", "HOU")) is not None
+    assert calls[-1] == hou_default

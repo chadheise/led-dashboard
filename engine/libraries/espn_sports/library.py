@@ -830,10 +830,12 @@ class ESPNSportsLibrary(Library):
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as client:
                 resp = await client.get(url)
-                if resp.status_code == 200:
-                    return Image.open(BytesIO(resp.content)).convert("RGBA")
-        except Exception:
-            pass
+                if resp.status_code != 200:
+                    logger.warning("Logo download failed (HTTP %s): %s", resp.status_code, url)
+                    return None
+                return Image.open(BytesIO(resp.content)).convert("RGBA")
+        except Exception as exc:
+            logger.warning("Logo download failed (%s: %s): %s", type(exc).__name__, exc, url)
         return None
 
     @staticmethod
