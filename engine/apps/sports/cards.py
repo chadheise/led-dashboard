@@ -742,8 +742,21 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
     logos, score_imgs = _fit_rows(view, _fit)
     score_col = max((img.width for img in score_imgs.values()), default=0)
 
+    # Scores share one right-aligned column when they can. But each row was
+    # fitted against its *own* score: a row whose logo shrank its score (101
+    # beside a logo vs 98 with none) can't also give up the wider shared column
+    # without starving its name to nothing, so that row keeps its own width.
+    min_name = _min_name_w(view, min(_RESERVED_NAME_SIZES))
+
+    def _row_col(i: int, side: str) -> int:
+        if side not in score_imgs:
+            return 0
+        room = rows[i].w - (logos[side].width + _GAP if logos[side] is not None else 0)
+        return score_col if room - score_col - _GAP >= min_name else score_imgs[side].width
+
     def _name_budget(i: int, side: str) -> int:
-        used = rows[i].w - score_col - (_GAP if score_col else 0)
+        col = _row_col(i, side)
+        used = rows[i].w - col - (_GAP if col else 0)
         if logos[side] is not None:
             used -= logos[side].width + _GAP
         return max(1, used)
@@ -780,7 +793,7 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
 
         if side in score_imgs:
             score_img = score_imgs[side]
-            col = min(score_col, region.w)
+            col = min(_row_col(i, side), region.w)
             if score_img.width > col:  # degraded space — refit the score
                 score_img = _score_img(team, region.h, col)
             score_region, region = region.take_right(col)

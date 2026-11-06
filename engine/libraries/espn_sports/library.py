@@ -54,6 +54,15 @@ _FIFA_FLAGS: dict[str, str] = {
 _FLAGCDN_BASE = "https://flagcdn.com/w80/{code}.png"
 
 _LOGO_TTL_SECONDS: float = 30 * 24 * 3600   # 30 days
+# A logo that could not be fetched from any candidate URL is retried after
+# this long, so one failed download doesn't blank a team until restart.
+_LOGO_RETRY_SECONDS: float = 15 * 60
+
+_ESPN_LOGO_BASE = "https://a.espncdn.com/i/teamlogos"
+# Leagues whose ESPN logos live at {base}/{league}/500/{abbr}.png. Used when
+# the scoreboard omits a team's logo or its URL is dead (seen with the San
+# Jose Sharks), so the team still gets a crest.
+_ABBR_LOGO_LEAGUES = frozenset({"nfl", "nba", "wnba", "mlb", "nhl"})
 _TEAMS_TTL_SECONDS: float = 30 * 24 * 3600  # 30 days
 
 # How long the last successful scoreboard fetch may stand in for a failed one.
@@ -151,6 +160,32 @@ def _day_windows(month: str, start: date, end: date) -> list[str]:
         windows.append(day.strftime("%Y%m%d"))
         day += timedelta(days=1)
     return windows
+
+
+def _default_logo_url(league_path: str, abbr: str) -> str | None:
+    """ESPN's canonical abbreviation-based logo URL, for leagues that have one."""
+    if league_path not in _ABBR_LOGO_LEAGUES or not abbr or abbr == "???":
+        return None
+    return f"{_ESPN_LOGO_BASE}/{league_path}/500/{abbr.lower()}.png"
+
+
+def _logo_candidates(url: str, league: str, abbr: str) -> list[str]:
+    """URLs to try, in order, for a team logo whose primary URL is ``url``.
+
+    ESPN serves the same crest at several paths (``.../500/x.png`` and the
+    ``.../500/scoreboard/x.png`` variant, plus the abbreviation-keyed default),
+    and individual teams' scoreboard URLs are occasionally dead. Trying the
+    alternates keeps one bad URL from leaving a team without a logo.
+    """
+    candidates = [url]
+    if "/500/scoreboard/" in url:
+        candidates.append(url.replace("/500/scoreboard/", "/500/"))
+    elif _ESPN_LOGO_BASE in url and "/500/" in url:
+        candidates.append(url.replace("/500/", "/500/scoreboard/", 1))
+    default = _default_logo_url(_league_path(league), abbr)
+    if default:
+        candidates.append(default)
+    return list(dict.fromkeys(candidates))
 
 
 def _flag_url(abbr: str) -> str | None:
@@ -255,7 +290,10 @@ class ESPNSportsLibrary(Library):
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._logo_cache: dict[str, Image.Image | None] = {}
+        self._logo_cache: dict[str, Image.Image] = {}
+        # url -> time every candidate for it last failed (retried after
+        # _LOGO_RETRY_SECONDS instead of staying blank forever)
+        self._logo_failed_at: dict[str, float] = {}
         # league id → (fetched_at, games): fallback when a fetch fails
         self._scores_cache: dict[str, tuple[float, list[dict[str, Any]]]] = {}
         # event id → team id → per-shot results from the summary endpoint's
@@ -609,10 +647,10 @@ class ESPNSportsLibrary(Library):
         team_abbr: str = "",
     ) -> Image.Image | None:
         if url in self._logo_cache:
-            img = self._logo_cache[url]
-            if img is None:
-                return None
-            return self._scale_down(img, target_size)
+            return self._scale_down(self._logo_cache[url], target_size)
+        failed_at = self._logo_failed_at.get(url)
+        if failed_at is not None and time.time() - failed_at < _LOGO_RETRY_SECONDS:
+            return None
 
         safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", team_abbr) if team_abbr else None
         if not safe_name:
@@ -628,17 +666,23 @@ class ESPNSportsLibrary(Library):
                 try:
                     img = Image.open(cache_path).convert("RGBA")
                     self._logo_cache[url] = img
+                    self._logo_failed_at.pop(url, None)
                     return self._scale_down(img, target_size)
                 except Exception:
                     pass  # fall through to re-download
 
-        downloaded = await self._download_logo(url)
+        downloaded = None
+        for candidate in _logo_candidates(url, league, team_abbr):
+            downloaded = await self._download_logo(candidate)
+            if downloaded is not None:
+                break
         if downloaded is not None:
             try:
                 downloaded.save(cache_path, format="PNG")
             except Exception:
                 pass
             self._logo_cache[url] = downloaded
+            self._logo_failed_at.pop(url, None)
             return self._scale_down(downloaded, target_size)
 
         # Download failed — use stale disk file as fallback
@@ -650,7 +694,7 @@ class ESPNSportsLibrary(Library):
             except Exception:
                 pass
 
-        self._logo_cache[url] = None
+        self._logo_failed_at[url] = time.time()
         return None
 
     @staticmethod
@@ -786,10 +830,12 @@ class ESPNSportsLibrary(Library):
                 headers={"User-Agent": "Mozilla/5.0"},
             ) as client:
                 resp = await client.get(url)
-                if resp.status_code == 200:
-                    return Image.open(BytesIO(resp.content)).convert("RGBA")
-        except Exception:
-            pass
+                if resp.status_code != 200:
+                    logger.warning("Logo download failed (HTTP %s): %s", resp.status_code, url)
+                    return None
+                return Image.open(BytesIO(resp.content)).convert("RGBA")
+        except Exception as exc:
+            logger.warning("Logo download failed (%s: %s): %s", type(exc).__name__, exc, url)
         return None
 
     @staticmethod
@@ -1248,8 +1294,14 @@ class ESPNSportsLibrary(Library):
                         "away_color": away_team.get("color", "444444"),
                         "home_alt_color": home_team.get("alternateColor", "aaaaaa"),
                         "away_alt_color": away_team.get("alternateColor", "aaaaaa"),
-                        "home_logo_url": _flag_url(home_team.get("abbreviation", "")) if use_flags else home_team.get("logo"),
-                        "away_logo_url": _flag_url(away_team.get("abbreviation", "")) if use_flags else away_team.get("logo"),
+                        "home_logo_url": _flag_url(home_team.get("abbreviation", "")) if use_flags else (
+                            home_team.get("logo")
+                            or _default_logo_url(league_path, home_team.get("abbreviation", ""))
+                        ),
+                        "away_logo_url": _flag_url(away_team.get("abbreviation", "")) if use_flags else (
+                            away_team.get("logo")
+                            or _default_logo_url(league_path, away_team.get("abbreviation", ""))
+                        ),
                         "status": status_type.get("shortDetail", "Scheduled"),
                         "state": status_type.get("state", "pre"),
                         "series_summary": series_summary,
