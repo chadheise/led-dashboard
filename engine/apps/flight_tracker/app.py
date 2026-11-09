@@ -18,7 +18,7 @@ from libraries.canvas_utils.library import blit, parse_color
 from libraries.text_renderer.library import render_text, draw_status_message
 from libraries.opensky.library import OpenSkyLibrary
 from libraries.flightaware.library import FlightAwareLibrary, iata_from_callsign
-from libraries.flighty.library import FlightyLibrary
+from libraries.flighty.library import FlightyLibrary, departure_sort_key
 from libraries.location.library import LocationLibrary
 from libraries.timezones.library import resolve_zone
 from apps.flights_overhead.icons import render_category_icon
@@ -795,7 +795,9 @@ class FlightTrackerApp(DisplayApp):
         tracked: dict[str, dict[str, Any]] = {}
         order: list[str] = []
         labels: dict[str, str] = {}
-        for f in flights:
+        # One chronological rotation across everyone (own + friends'), soonest
+        # departure first.
+        for f in sorted(flights, key=departure_sort_key):
             owner = f.get("owner", "")
             key = f"{f.get('ident','')}|{owner}|{f.get('date','')}"
             if key in tracked:
@@ -803,19 +805,35 @@ class FlightTrackerApp(DisplayApp):
             tracked[key] = f
             order.append(key)
             labels[key] = "" if owner == me else (names.get(owner) or "")
+        # Keep the rotation where it is across refreshes: this runs every
+        # refresh_interval (much shorter than a full pass over many flights), so
+        # snapping back to card 0 each time made the order jump around and
+        # starved later flights. Follow the current card to its new position
+        # (or the next-soonest one if it was removed).
+        prev_order = self._flighty_order
+        cur_key = prev_order[self._card_idx] if 0 <= self._card_idx < len(prev_order) else None
+        cur_flight = self._tracked.get(cur_key) if cur_key is not None else None
+
         self._tracked = tracked
         self._flighty_order = order
         self._flighty_labels = labels
 
         await self._fetch_logos()
 
-        now_mono = time.monotonic()
-        min_card_s = float(self.config.get("min_card_seconds", 5.0))
-        if now_mono - self._card_last_ts >= min_card_s or not order:
-            self._card_idx = 0
-            self._card_last_ts = now_mono
+        if cur_key in tracked:
+            self._card_idx = order.index(cur_key)
+        elif cur_flight is not None:
+            # Current card disappeared (aged out of the window or removed in
+            # Flighty): show the next flight chronologically, wrapping to the top.
+            cur_sort = departure_sort_key(cur_flight)
+            self._card_idx = next(
+                (i for i, k in enumerate(order) if departure_sort_key(tracked[k]) > cur_sort), 0,
+            )
+            self._card_last_ts = time.monotonic()
         else:
-            self._card_idx = min(self._card_idx, max(0, len(order) - 1))
+            # First import (or nothing to show): start at the soonest flight.
+            self._card_idx = 0
+            self._card_last_ts = time.monotonic()
 
     def _operator_iata(self, fn: str, tracked: dict[str, Any] | None) -> str:
         """Airline IATA code for a tracked flight, for logo lookup.

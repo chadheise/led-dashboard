@@ -513,3 +513,75 @@ def test_flighty_table_still_leads_own_flights_with_the_ident():
                "origin": "SEA", "dest": "JFK"}},
     )
     assert app._labels() == {key: ""}
+
+
+# ── Flighty import: chronological rotation that survives refreshes ────────────
+
+def _fl(ident: str, owner: str, dep: str, est: str | None = None) -> dict[str, Any]:
+    return {"found": True, "ident": ident, "owner": owner, "date": dep[:10],
+            "scheduled_off": dep, "estimated_off": est, "airline": "DL",
+            "origin": "SEA", "dest": "JFK"}
+
+
+def _flighty_fetch_app(batches: list[list[dict[str, Any]]]) -> FlightTrackerApp:
+    app = _app({"source": "flighty", "display_mode": "cards"})
+
+    async def _fetch(_include_friends: bool = True):
+        return batches.pop(0)
+
+    async def _no_logos() -> None:
+        pass
+
+    app._flighty.fetch_flights = _fetch  # type: ignore[method-assign]
+    app._flighty.account_uuid = lambda: "me"  # type: ignore[method-assign]
+    app._fetch_logos = _no_logos  # type: ignore[method-assign]
+    return app
+
+
+def _idents(app: FlightTrackerApp) -> list[str]:
+    return [app._tracked[k]["ident"] for k in app._flighty_order]
+
+
+def test_flighty_rotation_is_chronological_across_people():
+    """Own and friends' flights interleave by departure, soonest first, even if
+    the library hands them over in another order."""
+    app = _flighty_fetch_app([[
+        _fl("DL3", "me", "2026-06-20T10:00:00Z"),
+        _fl("DL1", "friend", "2026-06-18T10:00:00Z"),
+        _fl("DL4", "me", "2026-06-19T10:00:00Z", est="2026-06-21T10:00:00Z"),
+        _fl("DL2", "friend2", "2026-06-19T09:00:00Z"),
+    ]])
+    asyncio.run(app._fetch_flighty())
+    assert _idents(app) == ["DL1", "DL2", "DL3", "DL4"]
+
+
+def test_flighty_refresh_keeps_rotation_position():
+    """A data refresh (every refresh_interval) must not snap the rotation back to
+    the first card - it stays on the current flight, following it if new flights
+    are inserted ahead of it."""
+    a = _fl("DL1", "me", "2026-06-18T10:00:00Z")
+    b = _fl("DL2", "friend", "2026-06-19T10:00:00Z")
+    c = _fl("DL3", "me", "2026-06-20T10:00:00Z")
+    new = _fl("DL9", "friend", "2026-06-17T10:00:00Z")
+    app = _flighty_fetch_app([[a, b, c], [a, b, c], [new, a, b, c]])
+    asyncio.run(app._fetch_flighty())
+    app._card_idx = 1                                  # rotation is on DL2
+    app._card_last_ts = 0.0                            # ...and has been a while
+    asyncio.run(app._fetch_flighty())
+    assert _idents(app)[app._card_idx] == "DL2"
+    asyncio.run(app._fetch_flighty())                  # DL9 added in Flighty
+    assert _idents(app) == ["DL9", "DL1", "DL2", "DL3"]
+    assert _idents(app)[app._card_idx] == "DL2"
+
+
+def test_flighty_refresh_after_current_flight_removed_moves_to_next():
+    a = _fl("DL1", "me", "2026-06-18T10:00:00Z")
+    b = _fl("DL2", "friend", "2026-06-19T10:00:00Z")
+    c = _fl("DL3", "me", "2026-06-20T10:00:00Z")
+    app = _flighty_fetch_app([[a, b, c], [a, c], [a]])
+    asyncio.run(app._fetch_flighty())
+    app._card_idx = 1                                  # on DL2
+    asyncio.run(app._fetch_flighty())                  # DL2 deleted in Flighty
+    assert _idents(app)[app._card_idx] == "DL3"
+    asyncio.run(app._fetch_flighty())                  # DL3 deleted: wrap to top
+    assert app._card_idx == 0

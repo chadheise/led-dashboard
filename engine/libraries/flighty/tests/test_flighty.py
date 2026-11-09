@@ -214,25 +214,97 @@ async def test_fetch_without_credentials_returns_none(tmp_path, monkeypatch) -> 
     assert await FlightyLibrary({}).fetch_flights() is None
 
 
-@pytest.mark.asyncio
-async def test_sync_over_http_merges_and_advances_cursor(lib, monkeypatch) -> None:
+def _fake_client(monkeypatch, bodies: list[bytes], tokens: list[str]) -> None:
+    """Patch httpx so each POST returns the next body and records the cursor sent."""
     class _Resp:
         status_code = 200
-        content = _body_two_flights()
+
+        def __init__(self, content: bytes) -> None:
+            self.content = content
 
     class _Client:
         def __init__(self, *a, **k): ...
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def post(self, url, params=None, headers=None):
-            assert params["token"]           # initial cursor sent
             assert headers["Authorization"].startswith("Bearer ")
-            return _Resp()
+            tokens.append(params["token"])
+            return _Resp(bodies.pop(0))
 
     monkeypatch.setattr(flighty_lib.httpx, "AsyncClient", _Client)
+
+
+def _cursor_json(token: str) -> dict:
+    return json.loads(base64.b64decode(token))
+
+
+@pytest.mark.asyncio
+async def test_sync_over_http_fetches_full_snapshot(lib, monkeypatch) -> None:
+    tokens: list[str] = []
+    _fake_client(monkeypatch, [_body_two_flights()], tokens)
     flights = await lib.fetch_flights(include_friends=True)
     assert [f["ident"] for f in flights] == ["DL2437", "DL2004"]
-    assert lib._state["cursor"] == "CURSOR2"     # advanced from server response
+    assert _cursor_json(tokens[0])["flight"] == 0     # own records from 0
+
+
+@pytest.mark.asyncio
+async def test_resync_picks_up_added_and_removed_flights(lib, monkeypatch) -> None:
+    """Flights added or deleted in Flighty (own or a friend's) show up / vanish
+    on the next refresh: every sync is a full snapshot that replaces the store,
+    never a server delta cursor that can miss additions and can't see deletions."""
+    first = _body_two_flights()
+    second = _sync_body(
+        "CURSOR3",
+        [
+            # f-mine kept; f-friend deleted; a new friend flight added
+            _flight_entity("f-mine", ME, "2437", NOW + 3600, NOW + 3600,
+                           NOW + 3600 * 4, NOW + 3600 * 4),
+            _flight_entity("f-new", FRIEND, "77", NOW + 1800, NOW + 1800,
+                           NOW + 5400, NOW + 5400),
+            _flight_entity("f-old", ME, "1", NOW - 3600 * 24, NOW - 3600 * 24,
+                           NOW - 3600 * 20, NOW - 3600 * 20),
+        ],
+        [],
+    )
+    tokens: list[str] = []
+    _fake_client(monkeypatch, [first, second], tokens)
+
+    assert [f["ident"] for f in await lib.fetch_flights()] == ["DL2437", "DL2004"]
+    lib._last_sync = 0.0                              # refresh interval elapsed
+    assert [f["ident"] for f in await lib.fetch_flights()] == ["DL77", "DL2437"]
+    assert set(lib._state["flights"]) == {"f-mine", "f-new", "f-old"}
+    # Second request is a full snapshot again, not the server's "CURSOR2".
+    assert tokens[1] != "CURSOR2" and _cursor_json(tokens[1])["flight"] == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_snapshot_keeps_last_good_flights(lib, monkeypatch) -> None:
+    _preload(lib)
+    lib._last_sync = 0.0
+    _fake_client(monkeypatch, [_sync_body("C", [], [])], [])
+    flights = await lib.fetch_flights()
+    assert [f["ident"] for f in flights] == ["DL2437", "DL2004"]
+
+
+@pytest.mark.asyncio
+async def test_flights_sorted_by_departure_across_owners(lib) -> None:
+    """One chronological list across people, by best-known (estimated) departure."""
+    body = _sync_body(
+        "C",
+        [
+            _flight_entity("a", ME, "1", NOW + 3 * 3600, NOW + 3 * 3600, NOW + 9 * 3600, NOW + 9 * 3600),
+            _flight_entity("b", FRIEND, "2", NOW + 1 * 3600, NOW + 1 * 3600, NOW + 9 * 3600, NOW + 9 * 3600),
+            # scheduled first but delayed past "a"
+            _flight_entity("c", FRIEND, "3", NOW + 2 * 3600, NOW + 4 * 3600, NOW + 9 * 3600, NOW + 9 * 3600),
+            _flight_entity("d", ME, "4", NOW + 2 * 3600, NOW + 2 * 3600, NOW + 9 * 3600, NOW + 9 * 3600),
+        ],
+        [_airport_entity(JFK, "JFK"), _airport_entity(LAX, "LAX")],
+    )
+    parsed = parse_sync_response(body)
+    lib._loaded = True
+    lib._state = {"flights": parsed.flights, "airports": parsed.airports, "airlines": parsed.airlines}
+    lib._last_sync = time.time()
+    assert [f["ident"] for f in await lib.fetch_flights()] == ["DL2", "DL4", "DL1", "DL3"]
 
 
 def test_owner_summary_labels_me_and_friends(lib) -> None:
