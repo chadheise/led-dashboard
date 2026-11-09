@@ -9,8 +9,9 @@ connected friends' flights, each tagged with an owner UUID. See
 ``sync_parser.py`` for the reverse-engineered message format and
 ``README.md`` for how to obtain the tokens.
 
-The library keeps a small on-disk store (the sync cursor + accumulated flight and
-reference records) so each refresh is an incremental delta, and exposes
+Each refresh pulls a full snapshot of the account's flights and replaces the
+small on-disk store (flight + airport/airline reference records) with it, so
+flights added or removed in Flighty show up on the next refresh. It exposes
 ``fetch_flights()`` returning records already shaped like the Flight Tracker's
 ``_tracked`` dict (schedule/status/gate/terminal/baggage + an ``owner`` field).
 """
@@ -36,14 +37,14 @@ logger = logging.getLogger(__name__)
 _STATE_PATH = Path("data/flighty_state.json")
 _DEFAULT_API_BASE = "https://api.flightyapp.com"
 _DEFAULT_CACHE_TTL_MINUTES = 10.0
-# Sync schema version + the entity keys the app sends in its cursor. On first run
-# we request the account's own data from 0 (all flights + friends + connections)
-# but mark the bulk/global reference tables (airports, airlines, aircraft types)
+# Sync schema version + the entity keys the app sends in its cursor. Every sync
+# requests the account's own data from 0 (all flights + friends + connections)
+# but marks the bulk/global reference tables (airports, airlines, aircraft types)
 # as already-current — requesting those from 0 makes the server try to dump the
 # entire global reference DB, which returns an empty page then HTTP 500. Airline
 # and airport codes still resolve from objects embedded in the flight records, so
-# skipping the reference dump costs nothing. After the first sync we echo the
-# server's next cursor.
+# skipping the reference dump costs nothing. The server's returned "next" cursor
+# (for incremental deltas) is deliberately not used -- see ``_sync``.
 _SCHEMA_VERSION = "V_2026_07_10"
 # Requested in full (timestamp 0) — the account's own records:
 _CURSOR_FULL = (
@@ -65,6 +66,17 @@ def _iso(epoch: int | None) -> str | None:
     if not epoch:
         return None
     return datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def departure_sort_key(flight: dict[str, Any]) -> tuple[str, str, str]:
+    """Chronological sort key for normalized flights: soonest departure first.
+
+    Uses the best-known departure (estimated, else scheduled) so a delayed
+    flight sorts where it will actually leave. ISO-8601 UTC ("...Z") strings
+    compare chronologically. Ties break on owner + ident for a stable order.
+    """
+    dep = flight.get("estimated_off") or flight.get("scheduled_off") or "9999"
+    return (str(dep), str(flight.get("owner", "")), str(flight.get("ident", "")))
 
 
 def _account_uuid(auth_token: str) -> str:
@@ -248,13 +260,23 @@ class FlightyLibrary(Library):
         }
 
     async def _sync(self) -> bool:
-        """Run one delta-sync, merging results into the local store. Returns success."""
-        cursor = self._state.get("cursor") or self._initial_cursor()
+        """Run one full snapshot sync and replace the local flight store. Returns success.
+
+        Every sync re-requests the account's own records from 0 (the validated
+        initial cursor) rather than replaying the server's incremental cursor:
+        the delta path never reliably delivered newly added flights, and merging
+        deltas can't see deletions. A full snapshot is the account's complete
+        current flight set (own + connected friends'), so replacing the store
+        with it picks up flights added *and* removed in Flighty -- including a
+        friend disconnecting -- on the next refresh.
+        """
         base = str(self.config.get("api_base") or _DEFAULT_API_BASE).rstrip("/")
         url = f"{base}/v1/sync/full"
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(url, params={"token": cursor}, headers=self._headers())
+                resp = await client.post(
+                    url, params={"token": self._initial_cursor()}, headers=self._headers(),
+                )
             if resp.status_code != 200:
                 logger.warning("Flighty sync HTTP %d: %s", resp.status_code, resp.text[:200])
                 return False
@@ -263,23 +285,28 @@ class FlightyLibrary(Library):
             logger.warning("Flighty sync failed: %s", exc)
             return False
 
-        for uuid, fl in parsed.flights.items():
-            self._state["flights"][uuid] = fl
         self._state["airports"].update(parsed.airports)
         self._state["airlines"].update(parsed.airlines)
-        if parsed.next_cursor and self._state["flights"]:
-            # Only persist the advanced cursor once we actually hold flights, so a
-            # transient empty/500 first response can't strand us on a "caught up"
-            # cursor with an empty store — the next sync then re-runs the initial
-            # full request instead.
-            self._state["cursor"] = parsed.next_cursor
-        elif not self._state["flights"]:
-            self._state["cursor"] = None
+        if parsed.flights:
+            prev = set(self._state["flights"])
+            self._state["flights"] = dict(parsed.flights)
+            added = len(set(parsed.flights) - prev)
+            removed = len(prev - set(parsed.flights))
+        elif self._state["flights"]:
+            # A full snapshot always includes the account's past flights too, so
+            # an empty one is a bad page, not "every flight was deleted": keep the
+            # last good set (and retry next time) rather than blanking the wall.
+            logger.warning("Flighty sync returned no flights; keeping %d cached",
+                           len(self._state["flights"]))
+            return False
+        else:
+            added = removed = 0
+        self._state["cursor"] = None  # legacy delta cursor; no longer used
         self._last_sync = time.time()
         self._save_state()
         logger.info(
-            "Flighty sync: +%d flights (store=%d), %d airports, %d airlines",
-            len(parsed.flights), len(self._state["flights"]),
+            "Flighty sync: %d flights (+%d/-%d), %d airports, %d airlines",
+            len(self._state["flights"]), added, removed,
             len(self._state["airports"]), len(self._state["airlines"]),
         )
         return True
@@ -339,7 +366,7 @@ class FlightyLibrary(Library):
         }
 
     async def fetch_flights(self, include_friends: bool = True) -> list[dict[str, Any]] | None:
-        """Return upcoming flights (normalized) sorted by departure, or None on failure.
+        """Return upcoming flights (normalized), soonest departure first, or None on failure.
 
         Own flights always included; friends' flights only when ``include_friends``.
         ``None`` means the sync failed and there is no cached data (callers keep
@@ -363,7 +390,7 @@ class FlightyLibrary(Library):
             if not sched or sched < now - _PAST_WINDOW_S:
                 continue
             out.append(self._normalize(fl, now))
-        out.sort(key=lambda f: f.get("scheduled_off") or "")
+        out.sort(key=departure_sort_key)
         return out
 
     def owner_summary(self) -> list[dict[str, Any]]:

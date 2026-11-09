@@ -18,9 +18,14 @@ the token replays off-device (from the Raspberry Pi) indefinitely.
   [`sync_parser.py`](sync_parser.py) with a dependency-free wire-format reader (no
   `protoc`/`protobuf` needed).
 - The `token` is a JSON map of entity → last-synced epoch; the response's field 1
-  carries the next cursor to persist, so subsequent syncs are incremental. The
-  library keeps `data/flighty_state.json` (cursor + accumulated flight and
-  reference records).
+  carries a next cursor for incremental deltas. The library does **not** use it:
+  every refresh (default every 10 minutes) re-requests the account's own records
+  from 0 and *replaces* the stored flight set with that snapshot, so flights added
+  or removed in Flighty (yours or friends') appear/disappear on the next refresh.
+  Deltas never reliably delivered new flights and can't express deletions. An
+  empty snapshot is treated as a bad page (a real one always includes past
+  flights) and the last good set is kept. The library keeps
+  `data/flighty_state.json` (flight + airport/airline reference records).
 - Flights (own **and** friends') arrive as `Flight` entities tagged with an owner
   UUID (`Flight` field 9). The user's own UUID is the bearer token's `sub` claim.
 
