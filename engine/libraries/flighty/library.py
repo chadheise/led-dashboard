@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 _STATE_PATH = Path("data/flighty_state.json")
 _DEFAULT_API_BASE = "https://api.flightyapp.com"
-_DEFAULT_CACHE_TTL_MINUTES = 10.0
+_DEFAULT_CACHE_TTL_MINUTES = 60.0
 # Sync schema version + the entity keys the app sends in its cursor. Every sync
 # requests the account's own data from 0 (all flights + friends + connections)
 # but marks the bulk/global reference tables (airports, airlines, aircraft types)
