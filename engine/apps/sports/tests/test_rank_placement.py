@@ -41,3 +41,15 @@ def test_side_by_side_mirrors_home_rank(monkeypatch, w, h):
     names = _rendered_names(monkeypatch, w, h)
     assert "#3 UGA" in names
     assert "TENN #14" in names
+
+
+@pytest.mark.parametrize("w,h", [(64, 64), (128, 64), (192, 64)])
+def test_tall_slot_splits_rank_onto_own_line(w, h):
+    """Where a single line would need the condensed compact rank, a slot tall
+    enough lifts the rank onto its own line above the name at a readable size."""
+    render = _render_card(all_fixtures()["long_everything"], w, h)
+    boxes = {box.name: box for box in render.boxes}
+    for side in ("away", "home"):
+        rank, name = boxes[f"{side}.rank"], boxes[f"{side}.name"]
+        assert rank.bottom <= name.y, f"{side}: rank not above name"
+        assert rank.h > cards.measure(cards.TextSpec("#14", cards._COMPACT_RANK_SIZE))[1]
