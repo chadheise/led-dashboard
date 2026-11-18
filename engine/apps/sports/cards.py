@@ -321,6 +321,82 @@ def _shared_choice(
     )
 
 
+_SPLIT_GAP = 1  # px between a split rank line and the name line below it
+
+
+@dataclass(frozen=True)
+class SplitNames:
+    """Both teams' names with the rank lifted onto its own line above.
+
+    Used instead of a compact (condensed 7px) rank beside the name when the
+    slot is tall enough: the rank then gets a readable font of its own.
+    ``ranks[side]`` is ``None`` for an unranked team; ``rank_h`` is the shared
+    rank-line height, so both sides' name lines sit at the same y.
+    """
+
+    names: dict[str, NameSpec]
+    ranks: dict[str, TextSpec | None]
+    rank_h: int
+    name_h: int
+
+    @property
+    def block_h(self) -> int:
+        return self.rank_h + _SPLIT_GAP + self.name_h
+
+
+def _split_rank(
+    specs: dict[str, NameSpec], budgets: dict[str, int], max_h: int, max_size: int
+) -> SplitNames | None:
+    """Split the rank onto its own line when the chosen single-line ``specs``
+    had to fall back to the compact rank and a two-line block (rank over name)
+    fits ``max_h``. The name never shrinks below the single-line size — it may
+    grow, now that the rank no longer shares its line — and the rank takes the
+    largest size (never the compact one, never larger than the name) that fits.
+    """
+    if not any(
+        spec.rank and spec.rank_size and spec.rank_size < spec.size for spec in specs.values()
+    ):
+        return None
+    base = min(spec.size for spec in specs.values())
+    for size in (s for s in PIXEL_SIZES if base <= s <= max_size):
+        names = {side: replace(spec, rank="", size=size, rank_size=0) for side, spec in specs.items()}
+        if any(names[side].measure()[0] > budgets[side] for side in names):
+            continue
+        name_h = max(names[side].measure()[1] for side in names)
+        for rank_size in (s for s in PIXEL_SIZES if _COMPACT_RANK_SIZE < s <= size):
+            ranks = {
+                side: TextSpec(spec.rank, rank_size) if spec.rank else None
+                for side, spec in specs.items()
+            }
+            dims = {side: measure(r) for side, r in ranks.items() if r is not None}
+            rank_h = max(h for _, h in dims.values())
+            if rank_h + _SPLIT_GAP + name_h > max_h:
+                continue
+            if any(w > budgets[side] for side, (w, _) in dims.items()):
+                continue
+            return SplitNames(names, ranks, rank_h, name_h)
+    return None
+
+
+def _place_split(
+    frame: Frame, split: SplitNames, side: str, team: TeamView, region: Region, align: str
+) -> None:
+    """Place one side's rank line and name line, centred as a block in
+    ``region`` (``align`` "l"/"r" picks the horizontal edge)."""
+    y = region.y + max(0, (region.h - split.block_h) // 2)
+    rank = split.ranks[side]
+    if rank is not None:
+        frame.place(
+            f"{side}.rank", text_img(rank, team.color),
+            Region(region.x, y, region.w, split.rank_h), anchor=f"{align}b", priority=1,
+        )
+    name_region = Region(region.x, y + split.rank_h + _SPLIT_GAP, region.w, split.name_h)
+    frame.place(
+        f"{side}.name", _name_img(split.names[side], team.color, region.w),
+        name_region, anchor=f"{align}m", priority=1,
+    )
+
+
 def _name_img(spec: TextSpec | NameSpec, color, max_w: int) -> Image.Image:
     if isinstance(spec, NameSpec):
         img = spec.image(color)
@@ -665,6 +741,12 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
         name_font,
     )
     single_specs = {"away": away_spec, "home": home_spec}
+    split = None if two_rows else _split_rank(
+        single_specs,
+        {side: _name_budget(side) for side in ("away", "home")},
+        content.h,
+        name_font,
+    )
 
     for side, team in (("away", view.away), ("home", view.home)):
         region = halves[side]
@@ -705,6 +787,8 @@ def _render_inline(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None
             )
             frame.place(f"{side}.abbr", abbr_img, top, anchor=outer, priority=1)
             frame.place(f"{side}.name", nick_img, bottom, anchor=outer, priority=1)
+        elif split is not None:
+            _place_split(frame, split, side, team, region, outer[0])
         else:
             name_img = _name_img(single_specs[side], team.color, region.w)
             frame.place(f"{side}.name", name_img, region, anchor=outer, priority=1)
@@ -783,6 +867,12 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
         name_font,
     )
     single_specs = {"away": away_spec, "home": home_spec}
+    split = None if two_rows else _split_rank(
+        single_specs,
+        {"away": _name_budget(0, "away"), "home": _name_budget(1, "home")},
+        min(row.h for row in rows),
+        name_font,
+    )
 
     for i, (side, team) in enumerate((("away", view.away), ("home", view.home))):
         region = rows[i]
@@ -816,6 +906,8 @@ def _render_stacked(frame: Frame, view: GameView) -> None:
                 _name_img(TextSpec(_possessed(team.nickname, team, side), sub_font), team.color, region.w),
                 bottom, anchor="lm", priority=1,
             )
+        elif split is not None:
+            _place_split(frame, split, side, team, region, "l")
         else:
             frame.place(
                 f"{side}.name",
@@ -973,6 +1065,7 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
         None,
     )
     three_lines = city_specs is not None
+    wide_split: SplitNames | None = None
     three_line_font = city_specs["away"].size if city_specs else name_font
 
     if not three_lines:
@@ -1002,6 +1095,13 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
             _layout_logos(need)
             away_spec, home_spec = _choose_single()
         single_specs = {"away": away_spec, "home": home_spec}
+        # Lift a compact rank onto its own line when the score keeps room.
+        wide_split = _split_rank(
+            single_specs,
+            {side: text_regions[side].w for side in ("away", "home")},
+            content.h - (score_min_h + _GAP if have_scores else 0),
+            name_font,
+        )
 
     for side in ("away", "home"):
         if logos[side] is not None:
@@ -1028,10 +1128,16 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
         )
         pre_specs = {"away": pre_away, "home": pre_home}
 
-    lines: dict[str, list[tuple[str, Image.Image]]] = {}
+    lines: dict[str, list[tuple[str, Image.Image | None]]] = {}
     for side, team in (("away", view.away), ("home", view.home)):
         region = text_regions[side]
-        if three_lines:
+        if not three_lines and not pre_block and wide_split is not None:
+            rank = wide_split.ranks[side]
+            lines[side] = [
+                (f"{side}.rank", text_img(rank, team.color) if rank is not None else None),
+                (f"{side}.name", _name_img(wide_split.names[side], team.color, region.w)),
+            ]
+        elif three_lines:
             city_img = _name_img(city_specs[side], team.accent, region.w)
             nick_text = _possessed(team.nickname, team, side)
             nick_img = _name_img(TextSpec(nick_text, three_line_font), team.color, region.w)
@@ -1047,7 +1153,11 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
 
     n_lines = max(len(lines["away"]), len(lines["home"]))
     row_heights = [
-        max(side_lines[i][1].height for side_lines in lines.values() if i < len(side_lines))
+        max(
+            (side_lines[i][1].height for side_lines in lines.values()
+             if i < len(side_lines) and side_lines[i][1] is not None),
+            default=0,
+        )
         for i in range(n_lines)
     ]
     name_h = sum(row_heights) + (n_lines - 1) * _GAP
@@ -1074,8 +1184,9 @@ def _render_wide(frame: Frame, view: GameView, wc_reveal: float = 1.0) -> None:
         align = "l" if side == "away" else "r"
         y = y0
         for (box_name, img), row_h in zip(lines[side], row_heights):
-            frame.place(box_name, img, Region(region.x, y, region.w, row_h),
-                        anchor=f"{align}m", priority=1)
+            if img is not None:
+                frame.place(box_name, img, Region(region.x, y, region.w, row_h),
+                            anchor=f"{align}m", priority=1)
             y += row_h + _GAP
         if side in score_imgs:
             score_region = Region(region.x, y, region.w, max(1, region.bottom - y))
